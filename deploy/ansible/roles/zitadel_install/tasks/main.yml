@@ -76,7 +76,7 @@
         executable: /bin/bash   # set -o pipefail: dash (a Linux controller's /bin/sh) refuses it
       register: zi_secrets
       changed_when: "'created' in zi_secrets.stdout"
-      no_log: false # TEMP-DEBUG
+      no_log: true
 
     - name: Postgres (test/lab/postgres.yaml)
       ansible.builtin.command:
@@ -96,7 +96,7 @@
       register: zi_tls
       changed_when: "'unchanged' not in zi_tls.stdout"
       when: zitadel_tls_copy_from != ''
-      no_log: false # TEMP-DEBUG
+      no_log: true
 
     - name: Postgres ready
       ansible.builtin.command:
@@ -178,7 +178,7 @@
       register: zi_pat
       changed_when: "'written' in zi_pat.stdout"
       when: not ansible_check_mode
-      no_log: false # TEMP-DEBUG
+      no_log: true
 
     - name: Later phases use the PAT file
       ansible.builtin.set_fact:
