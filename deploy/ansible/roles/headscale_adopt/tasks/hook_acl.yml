@@ -1,0 +1,110 @@
+# hs_hook_acl (F6-007, architecture §8 step 3): adds `tag:k8s -> tag:vpn-server:<hook>` to the file-mode policy, once.
+# It widens access (k8s -> hook port only), so it needs confirm_hs_hook_acl=yes. The candidate must pass
+# `headscale policy check` before it replaces the file; then Headscale reloads. In database mode (after G-02) the
+# policy is tagcess's: the rule is added in the UI policy editor instead.
+- name: Policy mode
+  ansible.builtin.set_fact:
+    hs_hook_db_mode: "{{ (preflight_hs_cfg | default({})).policy_mode | default('file') == 'database' }}"
+    hs_hook_confirmed: "{{ (confirm_hs_hook_acl | default('') | string) == 'yes' }}"
+    # The candidate lives next to the policy (same file system for the mv) under a name of this run: a file of
+    # someone else at the old fixed name is never overwritten or removed. --check writes no candidate at all.
+    hs_hook_candidate: "{{ headscale_policy_path ~ '.candidate-' ~ now(utc=true).strftime('%Y%m%dT%H%M%S') ~ '-' ~ '%04x' | format(65535 | random) }}"
+
+- name: Rule present? (read-only probe, writes nothing)
+  ansible.builtin.script:
+    cmd: "hujson_acl.py --probe {{ headscale_policy_path }} {{ hs_hook_src }} {{ hs_hook_dst }}"
+    executable: python3
+  register: hs_hook_probe
+  changed_when: false
+  check_mode: false
+  when: not hs_hook_db_mode
+
+- name: Present
+  ansible.builtin.set_fact:
+    hs_hook_present: "{{ hs_hook_db_mode or (hs_hook_probe.stdout | from_json).present }}"
+
+- name: Already there (no change)
+  ansible.builtin.debug:
+    msg: "Hook ACL kuralı ({{ hs_hook_src }} → {{ hs_hook_dst }}) zaten var; değişiklik yok."
+  when: hs_hook_present and not hs_hook_db_mode
+
+- name: Database mode
+  ansible.builtin.debug:
+    msg: "Policy database modunda: hook ACL kuralı tagcess arayüzünün policy editöründen eklenir; dosyaya yazılmadı."
+  when: hs_hook_db_mode
+
+- name: Waiting for confirmation (the policy file is unchanged)
+  ansible.builtin.debug:
+    msg: "hs_hook_acl onay bekliyor (erişim genişletmesi: {{ hs_hook_src }} → {{ hs_hook_dst }}): -e confirm_hs_hook_acl=yes"
+  when: not hs_hook_present and not hs_hook_confirmed
+
+- name: The run in --check stops here (nothing is written, not even a candidate)
+  ansible.builtin.debug:
+    msg: "--check: {{ hs_hook_src }} → {{ hs_hook_dst }} kuralı eklenir: yedek, aday policy, headscale policy check, reload gerçek çalıştırmada yapılır; hedefte hiçbir dosya yazılmadı."
+  when: not hs_hook_present and hs_hook_confirmed and ansible_check_mode
+
+- name: Add the rule
+  when: not hs_hook_present and hs_hook_confirmed and not ansible_check_mode
+  block:
+    - name: Backup before writing (the first thing this phase does)
+      ansible.builtin.include_role:
+        name: backup
+      vars:
+        backup_phase: hs_hook_acl
+
+    - name: The candidate policy (written next to the policy under this run's name)
+      ansible.builtin.script:
+        cmd: "hujson_acl.py {{ headscale_policy_path }} {{ hs_hook_candidate }} {{ hs_hook_src }} {{ hs_hook_dst }}"
+        executable: python3
+      changed_when: false
+
+    - name: The candidate passes headscale policy check
+      ansible.builtin.command: "runuser -u headscale -- headscale -c {{ headscale_config }} policy check -f {{ hs_hook_candidate }}"
+      register: hs_hook_check
+      changed_when: false
+      failed_when: false
+
+    - name: Stop when the candidate fails the check (the policy file stays)
+      ansible.builtin.fail:
+        msg: "Aday policy headscale policy check'ten geçmedi; policy dosyası değişmedi, reload yok: {{ (hs_hook_check.stderr | default('') | trim).splitlines() | last | default('') }}"
+      when: hs_hook_check.rc != 0
+
+    - name: Install the checked policy (owner and mode kept)
+      ansible.builtin.shell: |
+        set -e
+        cp --attributes-only --preserve=mode,ownership {{ headscale_policy_path }} {{ hs_hook_candidate }}
+        mv {{ hs_hook_candidate }} {{ headscale_policy_path }}
+      changed_when: true
+
+    - name: Headscale reloads the policy
+      ansible.builtin.systemd_service:
+        name: headscale
+        state: reloaded
+
+    - name: The running policy carries the rule (policy get)
+      ansible.builtin.command: headscale policy get
+      register: hs_hook_get
+      changed_when: false
+      until: >-
+        (hs_hook_src ~ '"], "dst": ["' ~ hs_hook_dst) in hs_hook_get.stdout
+      retries: 10
+      delay: 1
+
+  always:
+    - name: Remove this run's candidate (that name only)
+      ansible.builtin.file:
+        path: "{{ hs_hook_candidate }}"
+        state: absent
+      changed_when: false
+
+# The policy file was replaced (new inode): the container keeps the old one until it restarts.
+- name: tagcess sees the change (container restart)
+  ansible.builtin.include_tasks: refresh_tagcess.yml
+  when: not hs_hook_present and hs_hook_confirmed and not ansible_check_mode
+
+- name: Guide items of hs_hook_acl
+  ansible.builtin.set_fact:
+    guide_items_hs_hook_acl: >-
+      {{ [] if hs_hook_present or hs_hook_confirmed else [{'id': 'hs-hook-acl-confirm', 'title': 'Hook ACL kuralı onay bekliyor',
+          'steps': ['Zitadel webhook\'u k8s\'ten tagcess hook\'una ulaşsın diye policy\'ye ' ~ hs_hook_src ~ ' → ' ~ hs_hook_dst ~ ' kuralı eklenecek (erişim genişletmesi).',
+                    'Onay: install.sh hs_hook_acl fazında evet (-e confirm_hs_hook_acl=yes).']}] }}

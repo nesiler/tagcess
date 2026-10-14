@@ -1,0 +1,67 @@
+# k8s_access (F6-007): writes the manifest and the commands on the controller; reads the host only through the tagcess
+# image (read-only database). No kubectl, no kubeconfig, no kubernetes.core module (TestK8sAccess_NeverAppliesToCluster).
+- name: Manifest from tagcess (same function the UI serves)
+  ansible.builtin.command: >-
+    {{ k8s_access_manifest_cmd }} -sa-namespace {{ k8s_sa_namespace }} -sa-name {{ k8s_sa_name }}
+    {{ ('-k8s-namespaces ' ~ (k8s_namespaces | join(','))) if k8s_namespaces | length > 0 else '' }}
+  register: k8s_access_manifest
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Controller directory
+  ansible.builtin.file:
+    path: "{{ install_env_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  check_mode: false
+
+- name: Manifest file (controller)
+  ansible.builtin.copy:
+    content: "{{ k8s_access_manifest.stdout }}{{ '\n' if not k8s_access_manifest.stdout.endswith('\n') else '' }}"
+    dest: "{{ install_env_dir }}/k8s-rbac.yaml"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  check_mode: false
+  when: k8s_access_manifest.rc == 0
+
+- name: Commands (controller)
+  ansible.builtin.template:
+    src: commands.txt.j2
+    dest: "{{ install_env_dir }}/k8s-commands.txt"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  check_mode: false
+
+- name: Summary
+  ansible.builtin.debug:
+    msg: >-
+      {{ ('RBAC manifest ' ~ install_env_dir ~ '/k8s-rbac.yaml; komutlar ' ~ install_env_dir ~ '/k8s-commands.txt (kümeye hiçbir şey uygulanmadı).')
+         if k8s_access_manifest.rc == 0 else
+         ('Manifest üretilemedi (' ~ ((k8s_access_manifest.stderr | default('') | trim).splitlines() | last | default('')) ~ '); önce UI /k8s/setup profilini kaydet ya da k8s_namespaces ver.') }}
+
+- name: Guide items of k8s_access
+  ansible.builtin.set_fact:
+    guide_items_k8s_access: >-
+      {%- set ctx = k8s_context or '<k8s-context>' -%}
+      {%- set g = [] -%}
+      {%- if k8s_access_manifest.rc != 0 -%}
+        {%- set _ = g.append({'id': 'k8s-profile', 'title': 'k8s bağlantı profili bekliyor', 'blocking': true,
+            'steps': ['Manifest profildeki namespace\'lerden üretilir: https://' ~ tagcess_host ~ '/k8s/setup sayfasında API (' ~ k8s_api_url ~ ') ve namespace\'leri kaydet, sonra k8s_access fazını yeniden koş (ya da k8s_namespaces ver).']}) -%}
+      {%- endif -%}
+      {%- set _ = g.append({'id': 'k8s-apply-rbac', 'title': 'Salt-okur RBAC manifest\'ini kümeye sen uygula',
+          'steps': ['kubectl --context ' ~ ctx ~ ' apply -f ' ~ install_env_dir ~ '/k8s-rbac.yaml',
+                    'Kurulum aracı kümeye hiçbir şey uygulamaz (ADR 0030); manifest UI\'nın sunduğuyla aynıdır.']}) -%}
+      {%- set _ = g.append({'id': 'k8s-token-ca', 'title': 'Süreli token ve CA\'yı çıkar, arayüzden yükle',
+          'steps': ['kubectl --context ' ~ ctx ~ ' -n ' ~ k8s_sa_namespace ~ ' create token ' ~ k8s_sa_name ~ ' --duration ' ~ k8s_sa_credential_ttl ~ ' > <token-dosyası>',
+                    'kubectl --context ' ~ ctx ~ ' config view --raw --minify -o jsonpath=\'{.clusters[0].cluster.certificate-authority-data}\' | base64 -d > <ca-dosyası>',
+                    'https://' ~ tagcess_host ~ '/k8s/connection: tls_server_name ' ~ k8s_tls_server_name ~ ', CA ve token dosyalarını yükle.',
+                    'Traefik giriş noktası ' ~ traefik_entrypoint ~ ':' ~ traefik_port ~ '; site hedefi ' ~ k8s_target_addr ~ '.']}) -%}
+      {{ g }}

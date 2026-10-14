@@ -1,0 +1,204 @@
+package web
+
+import "github.com/nesiler/tagcess/internal/web/ui"
+
+// The k8s connection screen (F4-030): the F4-002 profile metadata and the F4-003 credential. Every
+// value is escaped by templ; the token/CA are never rendered back, only the safe credential metadata
+// (endpoint, TLS name, CA fingerprints).
+
+templ K8sConnectionPage(v k8sConnectionView, csrfToken string) {
+	@ui.PageHead(ui.H{Title: "k8s bağlantısı", Sub: "Cluster adresi, taranacak namespace'ler ve read-only erişim bilgisi.", Crumbs: []ui.Crumb{{Label: "k8s", Href: "/k8s/discovery"}, {Label: "Bağlantı"}}}) {
+		@ui.Btn(ui.B{Href: "/k8s/setup", Icon: "tool"}) {
+			Kurulum yardımı
+		}
+	}
+	if v.Error != "" {
+		@ui.Callout(ui.N{Tone: ui.Err, Title: "Değişiklik reddedildi; hiçbir şey kaydedilmedi"}) {
+			if len(v.FieldErr) > 0 {
+				{ v.Error }
+			} else {
+				<pre><code>{ v.Error }</code></pre>
+			}
+		}
+	}
+	if v.Notice != "" {
+		@ui.Callout(ui.N{Tone: ui.OK}) {
+			{ v.Notice }
+		}
+	}
+	if !v.ProfileSet && v.ProfileErr == "" {
+		<div data-setup-pending="k8s_profile">
+			@ui.Callout(ui.N{Tone: ui.Info, Title: "Kurulum bekleniyor"}) {
+				<ol>
+					<li><a href="/k8s/setup">Kurulum sayfasında</a> API IP izinlerini kaydedin.</li>
+					<li>Aşağıdan bağlantı ayarlarını kaydedin.</li>
+					<li>Manifesti cluster yöneticisine apply ettirin.</li>
+					<li>Credential'ı yükleyin.</li>
+				</ol>
+			}
+		</div>
+	}
+	if v.ProfileErr != "" {
+		@ui.Callout(ui.N{Tone: ui.Warn}) {
+			{ v.ProfileErr }
+		}
+	}
+	if v.CredentialErr != "" {
+		@ui.Callout(ui.N{Tone: ui.Warn}) {
+			{ v.CredentialErr }
+		}
+	}
+	@k8sProfileCard(v, csrfToken)
+	@k8sCredentialCard(v, csrfToken)
+}
+
+// The patterns the browser checks while the person types; the server validates every value again
+// (k8s.ProfileStore.Save), so these only give earlier, clearer feedback.
+const (
+	k8sHTTPSPattern      = `https://\S+`
+	k8sDNSNamePattern    = `(?![0-9.]+$)[A-Za-z0-9]([A-Za-z0-9.\-]*[A-Za-z0-9])?`
+	k8sControllerPattern = `[a-z0-9]([a-z0-9.\-]*[a-z0-9])?/\S+`
+	k8sListenerPattern   = `\S+\s+\d{1,5}(\s+\S+)?`
+)
+
+templ k8sProfileCard(v k8sConnectionView, csrfToken string) {
+	@ui.Card(ui.C{
+		ID:    "profile",
+		Title: "Bağlantı ayarları",
+		Desc: "Cluster API adresi, taranacak namespace'ler, IngressClass/controller ve listener'lar. " +
+			"API adresinin izinli olması kurulum sayfasındaki IP izinlerine bağlıdır. Hatalı giriş, çalışan ayarı değiştirmez.",
+	}) {
+		<form method="post" action="/k8s/connection/profile" id="profile-form" aria-label="Bağlantı profili">
+			@CSRFField(csrfToken)
+			@ui.Field(ui.F{Label: "API adresi", For: "endpoint", Help: "https:// ile başlar, ör. https://10.0.0.1:6443", Err: v.FieldErr["endpoint"]}) {
+				@ui.Input(ui.In{ID: "endpoint", Name: "endpoint", Type: "url", Value: v.Profile.Endpoint, Placeholder: "https://10.0.0.1:6443", Required: true,
+					Pattern: k8sHTTPSPattern, Msg: "https:// ile başlayan bir API adresi girin (ör. https://10.0.0.1:6443)."})
+			}
+			@ui.Field(ui.F{Label: "TLS sunucu adı", For: "tls_server_name", Help: "İsteğe bağlı; adres IP ise sertifikadaki DNS adı.", Err: v.FieldErr["tls_server_name"]}) {
+				@ui.Input(ui.In{ID: "tls_server_name", Name: "tls_server_name", Value: v.Profile.TLSServerName, Placeholder: "kubernetes.default.svc",
+					Pattern: k8sDNSNamePattern, Msg: "IP değil, bir DNS adı girin."})
+			}
+			@ui.Field(ui.F{Label: "Namespace'ler", For: "namespaces", Help: "Taranacak namespace'ler; ad yazıp Enter'a basın.", Err: v.FieldErr["namespaces"]}) {
+				@ui.MultiSelect(ui.MS{ID: "namespaces", Name: "namespaces", Values: splitList(v.Profile.Namespaces), Sep: ", ", Placeholder: "web", Required: true})
+			}
+			@ui.Field(ui.F{Label: "IngressClass'lar", For: "ingress_classes", Err: v.FieldErr["ingress_classes"]}) {
+				@ui.MultiSelect(ui.MS{ID: "ingress_classes", Name: "ingress_classes", Values: splitList(v.Profile.IngressClasses), Sep: ", ", Options: []string{"traefik", "nginx"}, Placeholder: "traefik", Required: true})
+			}
+			@ui.Field(ui.F{Label: "Controller", For: "controller", Help: "IngressClass'taki controller adı.", Err: v.FieldErr["controller"]}) {
+				@ui.Input(ui.In{ID: "controller", Name: "controller", Value: v.Profile.Controller, Placeholder: "traefik.io/ingress-controller", Required: true,
+					Options: []string{"traefik.io/ingress-controller", "k8s.io/ingress-nginx"},
+					Pattern: k8sControllerPattern, Msg: "alan-adı/ad biçiminde girin (ör. traefik.io/ingress-controller)."})
+			}
+			@ui.Field(ui.F{Label: "Token bitişi", For: "declared_token_expiry", Help: "İsteğe bağlı, UTC. Yalnız hatırlatma içindir.", Err: v.FieldErr["declared_token_expiry"]}) {
+				@ui.Input(ui.In{ID: "declared_token_expiry", Name: "declared_token_expiry", Type: "datetime-local", Value: v.Profile.DeclaredTokenExpiry})
+			}
+			@ui.Field(ui.F{Label: "Internal listener'lar", For: "internal", Help: "Her satır: IP port [entrypoint]", Err: v.FieldErr["internal"]}) {
+				@ui.Textarea(ui.TA{ID: "internal", Name: "internal", Value: v.Profile.Internal, Rows: 3, Code: true, Placeholder: "10.0.0.10 443 websecure-internal", Required: true,
+					LinePattern: k8sListenerPattern, Msg: "her satır \"IP port [entrypoint]\" olmalı (ör. 10.0.0.10 443 websecure)."})
+			}
+			@ui.Field(ui.F{Label: "Public listener'lar", For: "public", Help: "İsteğe bağlı; boşsa internete açıklık kontrolü yapılmaz.", Err: v.FieldErr["public"]}) {
+				@ui.Textarea(ui.TA{ID: "public", Name: "public", Value: v.Profile.Public, Rows: 3, Code: true, Placeholder: "10.0.0.11 443 websecure",
+					LinePattern: k8sListenerPattern, Msg: "her satır \"IP port [entrypoint]\" olmalı (ör. 10.0.0.11 443 websecure)."})
+			}
+			@ui.BtnRow() {
+				@ui.Btn(ui.B{Kind: ui.Primary, Icon: "check"}) {
+					Ayarları kaydet
+				}
+			}
+		</form>
+	}
+}
+
+templ k8sCredentialCard(v k8sConnectionView, csrfToken string) {
+	@ui.Card(ui.C{
+		ID:    "credential",
+		Title: "Credential",
+		Desc: "Read-only service account için CA ve süreli token. Service account'u cluster yöneticisi kurar; tagcess token üretmez. " +
+			"Token yalnız korunan dosyaya yazılır ve hiçbir zaman geri gösterilmez. Yeni credential yalnız bağlantı denemesi başarılı olursa kaydedilir.",
+	}) {
+		if v.Mismatch {
+			@ui.Callout(ui.N{Tone: ui.Warn, Title: "Credential ayarlarla uyuşmuyor"}) {
+				Kayıtlı credential'ın adresi veya TLS adı bağlantı ayarlarından farklı; okuma ayarları kullanır ve token'ı göndermez.
+			}
+		}
+		if v.DeclaredExpired {
+			@ui.Callout(ui.N{Tone: ui.Warn, Title: "Token bitişi geçti"}) {
+				Girilen token bitişi geçmiş (beyan edilen süre geçti); token'ı yenileyin.
+			}
+		}
+		@ui.KV() {
+			<dt>Kayıtlı credential</dt>
+			<dd>
+				if v.CredentialSet {
+					<code>{ v.Credential.Endpoint }</code>
+					if v.Credential.TLSServerName != "" {
+						· TLS adı <code>{ v.Credential.TLSServerName }</code>
+					}
+				} else {
+					@ui.StatusText(ui.Off, "yok", "")
+				}
+			</dd>
+			if v.CredentialSet && len(v.Credential.CAFingerprints) > 0 {
+				<dt>CA parmak izi (SHA-256)</dt>
+				<dd>
+					for _, fp := range v.Credential.CAFingerprints {
+						<div><code>{ fp }</code></div>
+					}
+				</dd>
+			}
+			<dt>Token bitişi</dt>
+			<dd>
+				if v.DeclaredExpiry != "" {
+					if v.DeclaredExpired {
+						@ui.StatusText(ui.Warn, "beyan edilen süre geçti", v.DeclaredExpiry)
+					} else {
+						@ui.StatusText(ui.Neutral, v.DeclaredExpiry, "")
+					}
+				} else {
+					@ui.StatusText(ui.Off, "bilinmiyor", "")
+				}
+			</dd>
+			<dt>Son başarılı bağlantı</dt>
+			<dd>
+				if v.LastCheck != "" {
+					{ v.LastCheck }
+				} else {
+					@ui.StatusText(ui.Off, "yok", "")
+				}
+			</dd>
+		}
+		<form method="post" action="/k8s/connection/credential" id="credential-form" aria-label="Credential yükleme" autocomplete="off">
+			@CSRFField(csrfToken)
+			@ui.Group("Kubeconfig ile") {
+				@ui.Field(ui.F{Label: "Kubeconfig", For: "kubeconfig", Help: "Dosya seçin ya da yapıştırın. exec, auth-provider, dosya yolu ve insecure kabul edilmez."}) {
+					@ui.FileInto("kubeconfig_file", "kubeconfig", "Dosya seç")
+					@ui.Textarea(ui.TA{ID: "kubeconfig", Name: "kubeconfig", Rows: 4, Code: true, Attrs: templ.Attributes{"autocomplete": "off"}})
+				}
+				@ui.Field(ui.F{Label: "Context", For: "context", Help: "İsteğe bağlı; boşsa geçerli context."}) {
+					@ui.Input(ui.In{ID: "context", Name: "context"})
+				}
+			}
+			@ui.Group("Ya da alanlarla") {
+				@ui.Field(ui.F{Label: "API adresi", For: "cred_endpoint"}) {
+					@ui.Input(ui.In{ID: "cred_endpoint", Name: "endpoint", Type: "url", Value: v.CredEndpoint, Placeholder: "https://10.0.0.1:6443",
+						Pattern: k8sHTTPSPattern, Msg: "https:// ile başlayan bir API adresi girin."})
+				}
+				@ui.Field(ui.F{Label: "TLS sunucu adı", For: "cred_tls_server_name", Help: "İsteğe bağlı."}) {
+					@ui.Input(ui.In{ID: "cred_tls_server_name", Name: "tls_server_name", Value: v.CredTLSServer, Pattern: k8sDNSNamePattern, Msg: "IP değil, bir DNS adı girin."})
+				}
+				@ui.Field(ui.F{Label: "CA (PEM)", For: "ca_data"}) {
+					@ui.FileInto("ca_file", "ca_data", "Dosya seç")
+					@ui.Textarea(ui.TA{ID: "ca_data", Name: "ca_data", Rows: 4, Code: true, Placeholder: "PEM biçiminde CA sertifikası", Attrs: templ.Attributes{"autocomplete": "off"}})
+				}
+				@ui.Field(ui.F{Label: "Token", For: "token", Help: "Süreli service account token'ı; geri gösterilmez."}) {
+					@ui.Input(ui.In{ID: "token", Name: "token", Type: "password", Autocomplete: "new-password"})
+				}
+			}
+			@ui.BtnRow() {
+				@ui.Btn(ui.B{Kind: ui.Primary, Icon: "lock"}) {
+					Bağlantıyı dene ve kaydet
+				}
+			}
+		</form>
+	}
+}

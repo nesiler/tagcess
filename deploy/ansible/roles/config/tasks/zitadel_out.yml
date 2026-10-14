@@ -1,0 +1,93 @@
+# Phase outputs of earlier runs (zitadel_seed writes <env>/zitadel.json): ids fill only what the environment file
+# leaves empty. Secret file paths: what the tool wrote is the real source (a signing key Zitadel showed once for a newly
+# created Actions target is valid only with that target), so a path in zitadel.json that exists beats the environment's.
+# A path the environment names that holds a DIFFERENT value is never silently preferred either way: the run stops
+# (H8). Shared by the config role (every call) and zitadel_seed (right after it wrote zitadel.json).
+- name: Earlier zitadel_seed output
+  ansible.builtin.stat:
+    path: "{{ install_env_dir }}/zitadel.json"
+  register: config_zitadel_json
+  delegate_to: localhost
+  become: false
+  check_mode: false
+  when: install_env | string != ''
+
+- name: Use the zitadel_seed ids
+  ansible.builtin.set_fact:
+    zitadel_project_id: "{{ zitadel_project_id | default('', true) or config_zitadel_out.zitadel_project_id | default('') }}"
+    oauth2_proxy_client_id: "{{ oauth2_proxy_client_id | default('', true) or config_zitadel_out.oauth2_proxy_client_id | default('') }}"
+    headscale_oidc_client_id: "{{ headscale_oidc_client_id | default('', true) or config_zitadel_out.headscale_oidc_client_id | default('') }}"
+    config_zitadel_paths: "{{ config_zitadel_out.secret_files | default({}) }}"
+  vars:
+    config_zitadel_out: "{{ lookup('ansible.builtin.file', install_env_dir ~ '/zitadel.json') | from_json }}"
+  when: install_env | string != '' and config_zitadel_json.stat.exists | default(false)
+
+- name: Secret files to look at (zitadel.json's, and the environment's for the same keys)
+  ansible.builtin.set_fact:
+    config_secret_list: >-
+      {%- set l = [] -%}
+      {%- for k, p in (config_zitadel_paths | default({})).items() -%}
+        {%- set _ = l.append(p) -%}
+        {%- if (secret_files[k] | default('')) != '' -%}{%- set _ = l.append(secret_files[k] | expanduser) -%}{%- endif -%}
+      {%- endfor -%}
+      {{ l | unique | list }}
+  when: config_zitadel_paths | default({}) | length > 0
+
+- name: Checksums of those files
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    checksum_algorithm: sha256
+  loop: "{{ config_secret_list }}"
+  register: config_secret_stats
+  delegate_to: localhost
+  become: false
+  check_mode: false
+  no_log: true
+  when: config_zitadel_paths | default({}) | length > 0
+
+- name: Which secret files exist, and which keys disagree
+  ansible.builtin.set_fact:
+    config_secret_sum: >-
+      {%- set d = {} -%}
+      {%- for r in config_secret_stats.results | default([]) -%}
+        {%- if r.stat is defined and r.stat.exists and r.stat.size > 0 -%}{%- set _ = d.update({r.item: r.stat.checksum}) -%}{%- endif -%}
+      {%- endfor -%}
+      {{ d }}
+  when: config_zitadel_paths | default({}) | length > 0
+  no_log: true
+
+- name: Conflicting secret files
+  ansible.builtin.set_fact:
+    config_secret_conflicts: >-
+      {%- set r = [] -%}
+      {%- for k, p in (config_zitadel_paths | default({})).items() -%}
+        {%- set u = (secret_files[k] | default('')) | expanduser -%}
+        {%- if u != '' and u != p and p in config_secret_sum and u in config_secret_sum and config_secret_sum[p] != config_secret_sum[u] -%}
+          {%- set _ = r.append(k) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ r }}
+  when: config_zitadel_paths | default({}) | length > 0
+
+- name: Stop when the environment names a different secret than the one the tool wrote
+  ansible.builtin.fail:
+    msg: >-
+      secret_files altında {{ config_secret_conflicts | join(', ') }} için verilen dosya, kurulum aracının yazdığı dosyadan farklı bir değer taşıyor
+      ({{ config_secret_conflicts | map('extract', config_zitadel_paths) | join(', ') }}). Zitadel imza anahtarını/secret'ı yalnız yaratıldığında bir kez
+      gösterir; hangisinin geçerli olduğu seçilmedi, hiçbir faz bu dosyalarla çalışmayacak. Ortam dosyasındaki eski girişi kaldır
+      (aracın yazdığı dosya kullanılır) ya da ona aracın dosyasını göster.
+  when: config_secret_conflicts | default([]) | length > 0
+
+- name: The tool's secret file paths (an existing file wins; a path whose file is gone only fills what the environment leaves empty)
+  ansible.builtin.set_fact:
+    secret_files: >-
+      {%- set d = {} -%}
+      {%- for k, p in (config_zitadel_paths | default({})).items() -%}
+        {%- if p in config_secret_sum -%}{%- set _ = d.update({k: p}) -%}{%- endif -%}
+      {%- endfor -%}
+      {%- set gone = {} -%}
+      {%- for k, p in (config_zitadel_paths | default({})).items() -%}
+        {%- if p not in config_secret_sum -%}{%- set _ = gone.update({k: p}) -%}{%- endif -%}
+      {%- endfor -%}
+      {{ gone | combine(secret_files) | combine(d) }}
+  when: config_zitadel_paths | default({}) | length > 0

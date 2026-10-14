@@ -1,0 +1,54 @@
+package web
+
+import (
+	"github.com/nesiler/tagcess/internal/change"
+
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// The resync review screen (F2-021): the diff the stored records would re-apply over the live
+// artifacts and the version-bound approval. A resync overwrites a drifted artifact on purpose —
+// its diff shows what is overwritten — so the page names that decision. Every value is escaped
+// by templ.
+
+// SiteResyncReviewView is the resync review page data. Blocked carries the reason the existing
+// state refuses the plan (an unreadable system, records that no longer render); the approval is
+// then not offered.
+type SiteResyncReviewView struct {
+	Order   string
+	Diff    change.SiteDiff
+	Version string
+	Blocked string
+}
+
+// SiteResyncReviewPage renders the resync preview and, unless blocked, the approval bound to the
+// displayed plan version.
+templ SiteResyncReviewPage(v SiteResyncReviewView, csrfToken string) {
+	@ui.PageHead(ui.H{Title: "Kayıtlardan yeniden apply", Sub: resyncSub(v.Order), Crumbs: []ui.Crumb{{Label: "Siteler", Href: "/sites"}, {Label: "Yeniden apply"}}})
+	if v.Blocked != "" {
+		@ui.Callout(ui.N{Tone: ui.Err, Title: "Yeniden apply mevcut durum yüzünden hesaplanamadı; hiçbir şey yazılmadı"}) {
+			<pre><code>{ v.Blocked }</code></pre>
+		}
+		@ui.Btn(ui.B{Href: "/sites"}) {
+			Geri
+		}
+	} else {
+		@ui.Callout(ui.N{Tone: ui.Warn}) {
+			Kayıtlı siteler canlı Caddy, DNS ve redirect URI ayarlarının üzerine yeniden apply edilir; canlıdaki farklar (drift) bilerek ezilir.
+		}
+		@ui.Card(ui.C{Title: "Değişecek dosyalar", Desc: "Fark, üzerine yazılacak durumu gösterir. Apply edilince üretilecek dosyalar ve Zitadel kayıtları."}) {
+			@ui.Diff("Caddy", v.Diff.Caddy)
+			@ui.Diff("DNS", v.Diff.DNS)
+			@ui.Diff("Zitadel", v.Diff.Zitadel)
+		}
+		@ApplyForm("/sites/resync/approve", csrfToken, []ui.Hidden{{Name: "plan_version", Value: v.Version}}, "/sites")
+	}
+}
+
+// resyncSub is the page subtitle; a blocked view carries no order yet.
+func resyncSub(order string) string {
+	if order == "" {
+		return ""
+	}
+	return "Apply edilecek sıra: " + order
+}

@@ -1,0 +1,3 @@
+dashboard.internal.a.example.test {
+	import vpn_site internal.a.example.test devops,developer,standart
+}

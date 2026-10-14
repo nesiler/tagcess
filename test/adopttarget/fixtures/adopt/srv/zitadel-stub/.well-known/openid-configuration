@@ -1,0 +1,1 @@
+{"issuer":"https://auth.c.example.test","authorization_endpoint":"https://auth.c.example.test/oauth/v2/authorize","token_endpoint":"https://auth.c.example.test/oauth/v2/token","jwks_uri":"https://auth.c.example.test/oauth/v2/keys","userinfo_endpoint":"https://auth.c.example.test/oidc/v1/userinfo"}

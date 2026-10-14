@@ -1,0 +1,20 @@
+# Render the config and the initial policy into hs_render_dir on the controller (golden tests; nothing on a host).
+- name: OIDC wanted
+  ansible.builtin.set_fact:
+    hs_install_oidc: "{{ headscale_oidc_client_id | default('') != '' and (secret_files.headscale_oidc_client_secret | default('')) != '' }}"
+
+- name: Config
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: "{{ hs_render_dir }}/config.yaml"
+    mode: "0644"
+  vars:
+    hs_install_policy_ref: "{{ headscale_policy_path }}"
+  delegate_to: localhost
+
+- name: Policy
+  ansible.builtin.template:
+    src: policy.hujson.j2
+    dest: "{{ hs_render_dir }}/policy.hujson"
+    mode: "0644"
+  delegate_to: localhost

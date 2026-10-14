@@ -1,0 +1,3 @@
+blog-admin.internal.a.example.test {
+	import vpn_only internal.a.example.test
+}

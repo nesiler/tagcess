@@ -1,0 +1,243 @@
+package web
+
+import (
+	"strconv"
+
+	"github.com/nesiler/tagcess/internal/site"
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// SiteFormPage renders the site create/edit form (S-02) and the target allowlist editor (AC5).
+// Every value is escaped by templ; state-changing forms carry the CSRF token as a hidden field.
+templ SiteFormPage(f SiteFormView, csrfToken string) {
+	@ui.PageHead(ui.H{Title: siteFormTitle(f), Sub: siteFormSub(f), Crumbs: []ui.Crumb{{Label: "Siteler", Href: "/sites"}, {Label: siteFormTitle(f)}}}) {
+		if !f.IsNew && !f.IsSystem() {
+			@ui.Btn(ui.B{Href: "/sites/" + strconv.FormatInt(f.ID, 10) + "/history", Icon: "history"}) {
+				Geçmiş
+			}
+		}
+	}
+	if f.Error != "" {
+		@ui.Callout(ui.N{Tone: ui.Err, Title: "Kaydedilmedi"}) {
+			{ f.Error }
+		}
+	}
+	if f.IsSystem() {
+		@systemForm(f, csrfToken)
+	} else {
+		@siteForm(f, csrfToken)
+	}
+	if !f.IsSystem() {
+		@targetAllowlistForm(f, csrfToken)
+	}
+}
+
+// siteForm is the role/open site form: every user site field, with the API exemption warning and
+// the header/url-target restriction made visible.
+templ siteForm(f SiteFormView, csrfToken string) {
+	<form method="post" action={ templ.SafeURL(siteAction(f)) }>
+		@CSRFField(csrfToken)
+		@ui.Card(ui.C{Title: "Site", Desc: "Adlar, erişim türü ve sertifika."}) {
+			@ui.Field(ui.F{Label: "Adlar", For: "hosts", Help: "Host adı yazıp Enter'a basın; birden fazla olabilir."}) {
+				@ui.MultiSelect(ui.MS{ID: "hosts", Name: "hosts", Values: splitLines(f.Hosts), Placeholder: "app.example.com", Required: true})
+			}
+			@ui.Field(ui.F{Label: "Tür", For: "kind", Help: "Rol kontrollü site yalnız izinli rollere açılır."}) {
+				@ui.Select(ui.Sel{ID: "kind", Name: "kind", Selected: f.Kind, Options: []ui.Opt{
+					{Value: site.KindRole, Label: "Rol kontrollü"},
+					{Value: site.KindOpen, Label: "Rolsüz (rol yok)"},
+				}})
+			}
+			@ui.Field(ui.F{Label: "Rolsüz nedeni", For: "open_reason", Help: "Yalnız rolsüz sitelerde kullanılır."}) {
+				@ui.Select(ui.Sel{ID: "open_reason", Name: "open_reason", Selected: f.OpenReason, Options: []ui.Opt{
+					{Value: site.OpenReasonIntentional, Label: "Kasıtlı"},
+					{Value: site.OpenReasonTransition, Label: "Geçiş"},
+				}})
+			}
+			@ui.Field(ui.F{Label: "Sertifika", For: "cert", Help: "auto ya da le:<ad>"}) {
+				@ui.Input(ui.In{ID: "cert", Name: "cert", Value: f.Cert, Placeholder: "auto", Options: certOptions(f.Cert)})
+			}
+		}
+		@ui.Card(ui.C{Title: "Erişim", Desc: "Roller Zitadel vpn projesinden okunur; tagcess rol atamaz."}) {
+			@ui.Field(ui.F{Label: "İzinli roller", For: "roles", Help: siteRolesHelp(f)}) {
+				@ui.MultiSelect(ui.MS{ID: "roles", Name: "roles", Values: splitLines(f.Roles), Options: f.KnownRoles, Placeholder: "Rol seçin ya da yazın"})
+			}
+			@ui.Field(ui.F{Label: "Hedef roller", For: "target_roles", Help: "Geçiş sitelerinde varılacak roller."}) {
+				@ui.MultiSelect(ui.MS{ID: "target_roles", Name: "target_roles", Values: splitLines(f.TargetRoles), Options: f.KnownRoles, Placeholder: "Rol seçin ya da yazın"})
+			}
+		}
+		@ui.Card(ui.C{Title: "Hedef"}) {
+			@ui.Field(ui.F{Label: "Hedef türü", For: "target_kind"}) {
+				@ui.Select(ui.Sel{ID: "target_kind", Name: "target_kind", Selected: f.TargetKind, Options: []ui.Opt{
+					{Value: site.TargetK8s, Label: "k8s (varsayılan gate)"},
+					{Value: site.TargetURL, Label: "url (özel hedef)"},
+				}})
+			}
+			@ui.Field(ui.F{Label: "Hedef URL", For: "target_url", Help: "http(s)://host:port; host izinli hedef listesinde olmalı."}) {
+				@ui.Input(ui.In{ID: "target_url", Name: "target_url", Type: "url", Value: f.TargetURL, Placeholder: "http://100.64.0.5:8080", Options: targetURLOptions(f.AllowedTargets)})
+			}
+			@ui.Field(ui.F{Label: "Seçenekler"}) {
+				@ui.Checks() {
+					@ui.Check(ui.Chk{ID: "magicdns", Name: "magicdns", Label: "MagicDNS kaydı", Checked: f.MagicDNS})
+					@ui.Check(ui.Chk{ID: "maintenance", Name: "maintenance", Label: "Bakım modu", Hint: "Yalnız sağlık/TLS uyarılarını susturur.", Checked: f.Maintenance})
+					@ui.Check(ui.Chk{ID: "target_tls_insecure", Name: "target_tls_insecure", Label: "Hedef TLS doğrulamasını atla", Checked: f.TargetTLSInsecure})
+				}
+			}
+		}
+		@ui.Card(ui.C{Title: "Kurallar", Desc: "API bypass'ı, redirect'ler ve ek header'lar."}) {
+			@ui.Group("API bypass kuralları") {
+				@ui.Callout(ui.N{Tone: ui.Warn}) {
+					API bypass'ı her kaynaktan geçer: kurala uyan istek, header <strong>boş</strong> olsa bile rol kontrolünü atlar. Arkadaki uygulamanın kendi kimlik doğrulaması son korumadır.
+				}
+				for i, r := range f.APIRules {
+					@ui.Row() {
+						@ui.Select(ui.Sel{Name: "api_rule_type", Label: "API bypass kuralı " + strconv.Itoa(i+1) + ": tür", Selected: r.Type, Options: []ui.Opt{
+							{Value: site.APIRuleHeaderPresent, Label: "header_present"},
+							{Value: site.APIRulePathRegex, Label: "path_regex"},
+						}})
+						@ui.Input(ui.In{Name: "api_rule_value", Label: "API bypass kuralı " + strconv.Itoa(i+1) + ": değer", Value: r.Value, Placeholder: "Authorization ya da ^/api/…"})
+					}
+				}
+			}
+			@ui.Group("Redirect'ler") {
+				for i, r := range f.Redirects {
+					@ui.Row3() {
+						@ui.Input(ui.In{Name: "redirect_source", Label: "Redirect " + strconv.Itoa(i+1) + ": kaynak path", Value: r.Source, Placeholder: "/kaynak"})
+						@ui.Input(ui.In{Name: "redirect_target", Label: "Redirect " + strconv.Itoa(i+1) + ": hedef", Value: r.Target, Placeholder: "/hedef"})
+						@ui.Select(ui.Sel{Name: "redirect_code", Label: "Redirect " + strconv.Itoa(i+1) + ": HTTP kodu", Selected: strconv.Itoa(r.Code), Options: redirectCodeOptions()})
+					}
+				}
+			}
+			@ui.Group("Ek header'lar") {
+				<p>Yalnız <strong>url</strong> hedefli sitelerde kullanılır.</p>
+				for i, h := range f.Headers {
+					@ui.Row() {
+						@ui.Input(ui.In{Name: "header_name", Label: "Ek header " + strconv.Itoa(i+1) + ": ad", Value: h.Name, Placeholder: "X-Note"})
+						@ui.Input(ui.In{Name: "header_value", Label: "Ek header " + strconv.Itoa(i+1) + ": değer", Value: h.Value})
+					}
+				}
+			}
+		}
+		@siteNoteCard(f)
+		@ui.SaveBar("Kaydet bir preview açar; değişiklik onayınızla apply edilir.") {
+			@ui.Btn(ui.B{Href: "/sites"}) {
+				Vazgeç
+			}
+			@ui.Btn(ui.B{Kind: ui.Primary}) {
+				Kaydet
+			}
+		}
+	</form>
+	if !f.IsNew {
+		@ui.Card(ui.C{Title: "Siteyi sil", Desc: "Silme de preview ile başlar; onaylanmadan hiçbir şey kaldırılmaz."}) {
+			<form method="post" action={ templ.SafeURL("/sites/" + strconv.FormatInt(f.ID, 10) + "/delete") }>
+				@CSRFField(csrfToken)
+				@ui.Btn(ui.B{Kind: ui.DangerOutline, Icon: "delete"}) {
+					Sil
+				}
+			</form>
+		}
+	}
+}
+
+// systemForm edits a locked system site (AC4): only the fields the record's template opens, plus
+// note/owner.
+templ systemForm(f SiteFormView, csrfToken string) {
+	<form method="post" action={ templ.SafeURL("/sites/" + strconv.FormatInt(f.ID, 10)) }>
+		@CSRFField(csrfToken)
+		@ui.Callout(ui.N{Tone: ui.Info, Icon: "lock"}) {
+			Sistem sitesi ({ f.SystemTemplate }) şablondan üretilir. Yalnız şablonun açtığı alanlar ve not/sorumlu değişir.
+		}
+		@ui.Card(ui.C{Title: "Şablon alanları"}) {
+			if f.SystemTemplate == site.TemplateWireGuardUI {
+				@ui.Check(ui.Chk{ID: "system_enabled", Name: "system_enabled", Label: "WireGuard arayüzü açık", Checked: f.SystemEnabled})
+			} else if f.SystemTemplate == site.TemplateHeadscale {
+				@ui.Check(ui.Chk{ID: "system_headplane", Name: "system_headplane", Label: "Headplane /admin yolu açık", Checked: f.SystemHeadplane})
+			} else if f.SystemTemplate == site.TemplateZitadel {
+				@ui.Field(ui.F{Label: "İç kaynak IP/CIDR", For: "internal_sources", Help: "Her satıra bir IP/CIDR; /16 (IPv4) ve /48 (IPv6) en geniş sınırdır. Boş liste erişimi kapatır."}) {
+					@ui.Textarea(ui.TA{ID: "internal_sources", Name: "internal_sources", Value: f.InternalSources, Rows: 4, Code: true})
+				}
+				@ui.Field(ui.F{Label: "Giriş path listesi", For: "login_paths", Help: "\"/\" ile başlar; sonunda tek bir \"*\" olabilir (ör. /ui/v2/login/*)."}) {
+					@ui.Textarea(ui.TA{ID: "login_paths", Name: "login_paths", Value: f.LoginPaths, Rows: 4, Code: true})
+				}
+			} else {
+				<p>Bu şablon için düzenlenecek alan yok; yalnız not/sorumlu değişir.</p>
+			}
+		}
+		@siteNoteCard(f)
+		@ui.SaveBar("") {
+			@ui.Btn(ui.B{Href: "/sites"}) {
+				Vazgeç
+			}
+			@ui.Btn(ui.B{Kind: ui.Primary}) {
+				Kaydet
+			}
+		}
+	</form>
+}
+
+// siteNoteCard holds the free note and the owner, the two fields every site has.
+templ siteNoteCard(f SiteFormView) {
+	@ui.Card(ui.C{Title: "Not ve sorumlu"}) {
+		@ui.Field(ui.F{Label: "Not", For: "note"}) {
+			@ui.Input(ui.In{ID: "note", Name: "note", Value: f.Note})
+		}
+		@ui.Field(ui.F{Label: "Sorumlu", For: "owner"}) {
+			@ui.Input(ui.In{ID: "owner", Name: "owner", Value: f.Owner})
+		}
+	}
+}
+
+// targetAllowlistForm edits the custom target host allowlist (AC5).
+templ targetAllowlistForm(f SiteFormView, csrfToken string) {
+	@ui.Card(ui.C{Title: "İzinli hedef host'lar", Desc: "url hedefli sitelerin bağlanabileceği host'lar; tüm siteler için ortaktır. Kullanımdaki bir host çıkarılamaz."}) {
+		<form method="post" action="/sites/targets">
+			@CSRFField(csrfToken)
+			@ui.Field(ui.F{Label: "Host'lar", For: "allowed_targets", Help: "Hostname ya da IP; şema, port ve joker olmadan."}) {
+				@ui.MultiSelect(ui.MS{ID: "allowed_targets", Name: "allowed_targets", Values: f.AllowedTargets, Placeholder: "100.64.0.5"})
+			}
+			@ui.BtnRow() {
+				@ui.Btn(ui.B{}) {
+					İzin listesini kaydet
+				}
+			}
+		</form>
+	}
+}
+
+// siteAction is the create or update endpoint.
+func siteAction(f SiteFormView) string {
+	if f.IsNew {
+		return "/sites"
+	}
+	return "/sites/" + strconv.FormatInt(f.ID, 10)
+}
+
+// certOptions are the suggested certificate values: auto, plus the site's current value.
+func certOptions(current string) []string {
+	out := []string{"auto"}
+	if current != "" && current != "auto" {
+		out = append(out, current)
+	}
+	return out
+}
+
+// targetURLOptions suggest a URL for every allowed target host; the person completes the port.
+func targetURLOptions(hosts []string) []string {
+	out := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		out = append(out, "http://"+h+":")
+	}
+	return out
+}
+
+// joinList joins values with newlines for a textarea.
+func joinList(values []string) string {
+	out := ""
+	for i, v := range values {
+		if i > 0 {
+			out += "\n"
+		}
+		out += v
+	}
+	return out
+}

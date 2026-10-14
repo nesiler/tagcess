@@ -1,0 +1,7 @@
+{
+  "sites": [
+    {"hosts": ["auth.lab.example.com"], "kind": "system", "system_template": "zitadel", "system_config": {}, "cert": "auto", "target": "k8s", "magicdns": false, "note": "Zitadel gate: login flow public, console internal only"},
+    {"hosts": ["hs.lab.example.com"], "kind": "system", "system_template": "headscale", "system_config": {"headplane": false}, "cert": "auto", "target": "k8s", "magicdns": false, "note": "Headscale"},
+    {"hosts": ["wg.lab.example.com"], "kind": "system", "system_template": "wireguard_ui", "system_config": {"enabled": false}, "cert": "auto", "target": "k8s", "magicdns": false, "note": "no WireGuard UI in the F5 lab; record required by S-05, block not rendered"}
+  ]
+}

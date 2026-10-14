@@ -1,0 +1,168 @@
+# Shared by headscale_install and headscale_oidc: the config (with the OIDC block once its client exists) and, only
+# when there is none, the initial policy. The caller took the phase's backup before its first change. Candidates first
+# (under names of this run next to the live files; --check writes none); nothing replaces the running files unless
+# configtest passes; Headscale restarts only when a file changed, and must answer /health.
+- name: OIDC block wanted
+  ansible.builtin.set_fact:
+    hs_install_oidc: "{{ headscale_oidc_client_id | default('') != '' and (secret_files.headscale_oidc_client_secret | default('')) != '' }}"
+    hs_install_run: "{{ now(utc=true).strftime('%Y%m%dT%H%M%S') ~ '-' ~ '%04x' | format(65535 | random) }}"
+
+- name: Candidate names of this run (never a fixed name, so a file of someone else at the old name stays untouched)
+  ansible.builtin.set_fact:
+    hs_install_cand_cfg: "/etc/headscale/config.candidate-{{ hs_install_run }}.yaml"
+    hs_install_cand_pol: "/etc/headscale/policy.candidate-{{ hs_install_run }}.hujson"
+
+- name: State directory belongs to the service user before the first start
+  ansible.builtin.file:
+    path: /var/lib/headscale
+    state: directory
+    owner: headscale
+    group: headscale
+    mode: "0750"
+
+- name: tagcess DNS directories (the config points Headscale at the records file; the host phase keeps them)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ tagcess_dns_records_path | dirname | dirname }}", owner: "{{ tagcess_uid }}", group: "{{ tagcess_uid }}", mode: "0711"}
+    - {path: "{{ tagcess_dns_records_path | dirname }}", owner: "{{ tagcess_uid }}", group: headscale, mode: "2750"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: tagcess DNS records file (empty until tagcess writes it; never overwritten)
+  ansible.builtin.copy:
+    content: "[]\n"
+    dest: "{{ tagcess_dns_records_path }}"
+    owner: "{{ tagcess_uid }}"
+    group: headscale
+    mode: "0640"
+    force: false
+
+- name: OIDC client secret file (byte for byte, never shown)
+  ansible.builtin.copy:
+    src: "{{ secret_files.headscale_oidc_client_secret | expanduser }}"
+    dest: "{{ headscale_oidc_secret_path }}"
+    owner: root
+    group: headscale
+    mode: "0640"
+  when: hs_install_oidc
+  no_log: true
+
+- name: Policy file present?
+  ansible.builtin.stat:
+    path: "{{ headscale_policy_path }}"
+  register: hs_install_policy
+
+- name: Candidates, configtest, install
+  when: not ansible_check_mode
+  block:
+    - name: Policy candidate (only when there is no policy)
+      ansible.builtin.template:
+        src: policy.hujson.j2
+        dest: "{{ hs_install_cand_pol }}"
+        owner: root
+        group: headscale
+        mode: "0644"
+      changed_when: false
+      when: not hs_install_policy.stat.exists
+
+    - name: Config candidate
+      ansible.builtin.template:
+        src: config.yaml.j2
+        dest: "{{ hs_install_cand_cfg }}"
+        owner: root
+        group: headscale
+        mode: "0644"
+      vars:
+        hs_install_policy_ref: "{{ headscale_policy_path if hs_install_policy.stat.exists else hs_install_cand_pol }}"
+      changed_when: false
+
+    - name: The candidate passes headscale configtest (config and policy)
+      ansible.builtin.command: "runuser -u headscale -- headscale -c {{ hs_install_cand_cfg }} configtest"
+      register: hs_install_configtest
+      changed_when: false
+      failed_when: false
+
+    - name: Stop when the candidate fails (nothing replaced, no restart)
+      ansible.builtin.fail:
+        msg: "Aday Headscale config'i configtest'ten geçmedi; config ve policy değişmedi, yeniden başlatılmadı: {{ (hs_install_configtest.stderr | default('') | trim).splitlines() | last | default('') }}"
+      when: hs_install_configtest.rc != 0
+
+    - name: Initial policy
+      ansible.builtin.copy:
+        src: "{{ hs_install_cand_pol }}"
+        remote_src: true
+        dest: "{{ headscale_policy_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+      register: hs_install_policy_written
+      when: not hs_install_policy.stat.exists
+
+    - name: Config
+      ansible.builtin.template:
+        src: config.yaml.j2
+        dest: "{{ headscale_config }}"
+        owner: root
+        group: root
+        mode: "0644"
+      vars:
+        hs_install_policy_ref: "{{ headscale_policy_path }}"
+      register: hs_install_cfg_written
+  always:
+    - name: Remove this run's candidates (those names only)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ hs_install_cand_cfg }}"
+        - "{{ hs_install_cand_pol }}"
+      changed_when: false
+      when: not ansible_check_mode
+
+- name: Plan (--check writes no candidate, runs no configtest)
+  when: ansible_check_mode
+  block:
+    - name: The initial policy would be written
+      ansible.builtin.debug:
+        msg: "--check: {{ headscale_policy_path }} yok; başlangıç policy'si gerçek çalıştırmada aday olarak yazılıp configtest'ten geçirilir."
+      when: not hs_install_policy.stat.exists
+
+    - name: Would the config change?
+      ansible.builtin.template:
+        src: config.yaml.j2
+        dest: "{{ headscale_config }}"
+        owner: root
+        group: root
+        mode: "0644"
+      vars:
+        hs_install_policy_ref: "{{ headscale_policy_path }}"
+      register: hs_install_cfg_plan
+
+- name: Headscale restarts on a changed file
+  ansible.builtin.systemd_service:
+    name: headscale
+    state: restarted
+    enabled: true
+  when: not ansible_check_mode and (hs_install_cfg_written is changed or hs_install_policy_written is changed)
+
+- name: Headscale enabled and running
+  ansible.builtin.systemd_service:
+    name: headscale
+    state: started
+    enabled: true
+
+- name: Headscale answers /health
+  ansible.builtin.uri:
+    url: "{{ headscale_health_url }}"
+    status_code: 200
+  register: hs_install_health
+  until: hs_install_health.status == 200
+  retries: 30
+  delay: 1
+  check_mode: false
+  when: not ansible_check_mode

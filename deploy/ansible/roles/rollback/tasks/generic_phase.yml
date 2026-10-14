@@ -1,0 +1,5 @@
+# A phase rolled back by restoring its own paths (rollback_phase_paths[rollback_phase]).
+- name: "Rollback: restore the phase's files ({{ rollback_phase }})"
+  ansible.builtin.import_tasks: generic.yml
+  vars:
+    rollback_paths: "{{ rollback_phase_paths[rollback_phase] }}"

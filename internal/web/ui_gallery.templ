@@ -1,0 +1,314 @@
+package web
+
+import "github.com/nesiler/tagcess/internal/web/ui"
+
+// UIGalleryPage shows every ui component in each of its states, on fixed sample data. It is the
+// living reference of docs/ui-guide.md and is served only by the preview server (cmd/tagcess-ui).
+templ UIGalleryPage() {
+	@ui.PageHead(ui.H{Title: "Bileşen galerisi", Sub: "internal/web/ui bileşenlerinin tüm durumları.", Crumbs: []ui.Crumb{{Label: "Preview", Href: "/"}, {Label: "Galeri"}}}) {
+		@ui.Btn(ui.B{Icon: "plus"}) {
+			İkincil
+		}
+		@ui.Btn(ui.B{Kind: ui.Primary, Icon: "plus"}) {
+			Birincil
+		}
+	}
+	@ui.Card(ui.C{Title: "Butonlar", Desc: "ui.Btn: tür, boyut, ikon, link ve devre dışı."}) {
+		@ui.BtnRow() {
+			@ui.Btn(ui.B{Kind: ui.Primary}) {
+				Primary
+			}
+			@ui.Btn(ui.B{}) {
+				Default
+			}
+			@ui.Btn(ui.B{Kind: ui.WarnOutline, Icon: "sync"}) {
+				Warn
+			}
+			@ui.Btn(ui.B{Kind: ui.DangerOutline, Icon: "delete"}) {
+				Danger outline
+			}
+			@ui.Btn(ui.B{Kind: ui.OKOutline, Icon: "check"}) {
+				OK outline
+			}
+			@ui.Btn(ui.B{Kind: ui.Danger}) {
+				Danger
+			}
+			@ui.Btn(ui.B{Kind: ui.Ghost}) {
+				Ghost
+			}
+			@ui.Btn(ui.B{Small: true}) {
+				Küçük
+			}
+			@ui.Btn(ui.B{Href: "/x", Disabled: true, Title: "bakım sürüyor"}) {
+				Devre dışı link
+			}
+			@ui.Btn(ui.B{Type: "button", Disabled: true}) {
+				Devre dışı
+			}
+		}
+	}
+	@ui.Grid(4) {
+		@ui.TileCard(ui.Tile{Icon: "device", Label: "Cihazlar", Value: "11", Sub: "2 çevrimdışı", Href: "/headscale/devices"})
+		@ui.TileCard(ui.Tile{Icon: "sites", Label: "Siteler", Value: "13", Sub: "4 sistem sitesi"})
+		@ui.TileCard(ui.Tile{Icon: "bell", Label: "Açık uyarı", Value: "3"})
+		@ui.TileCard(ui.Tile{Icon: "sync", Label: "Son sync", Value: "2 dk önce"})
+	}
+	@ui.Grid(2) {
+		@ui.Card(ui.C{Title: "Pill ve durum", Right: galleryRight()}) {
+			<p>
+				@ui.Pill(ui.Neutral) {
+					nötr
+				}
+				@ui.Pill(ui.OK) {
+					güncel
+				}
+				@ui.Pill(ui.Warn) {
+					güncel değil
+				}
+				@ui.Pill(ui.Err) {
+					hiç iyi olmadı
+				}
+				@ui.Pill(ui.Stale) {
+					bayat
+				}
+				@ui.Pill(ui.Info) {
+					ekle
+				}
+				@ui.Tag("tag:server")
+				@ui.Tag("devops")
+			</p>
+			<p>
+				@ui.Status(ui.OK, "sağlıklı")
+			</p>
+			<p>
+				@ui.Status(ui.Warn, "yavaş")
+			</p>
+			<p>
+				@ui.Status(ui.Err, "erişilemiyor")
+			</p>
+			<p>
+				@ui.Status(ui.Stale, "veri eski")
+			</p>
+			<p>
+				@ui.Status(ui.Off, "bilinmiyor")
+			</p>
+			<p>
+				@ui.StatusText(ui.OK, "güncel", "2026-10-05 14:02")
+			</p>
+			<p>
+				@ui.StatusText(ui.Stale, "güncel değil", "2026-10-05 11:40")
+			</p>
+		}
+		@ui.Card(ui.C{Title: "Sekmeler ve KV", Desc: "ui.Card Desc başlık yanında ui.Tip olarak görünür."}) {
+			@ui.Tabs([]ui.Tab{{Key: "ed", Label: "Editör", Href: "#"}, {Key: "hist", Label: "Geçmiş", Href: "#", Count: "6"}, {Key: "rec", Label: "Kontrollü recovery", Href: "#"}}, "hist")
+			@ui.KV() {
+				<dt>Ad</dt>
+				<dd><code>vpn-gw</code></dd>
+				<dt>Kullanıcı</dt>
+				<dd>tag'li</dd>
+				<dt>Son görülme</dt>
+				<dd><time>2026-10-05 21:14</time></dd>
+			}
+		}
+	}
+	@ui.Callout(ui.N{Tone: ui.Info, Title: "Bilgi"}) {
+		Kalıcı bir not; <a href="/sync">bağlantı</a> içerebilir.
+	}
+	@ui.Callout(ui.N{Tone: ui.OK, Title: "Apply edildi"}) {
+		Değişiklik apply edildi.
+	}
+	@ui.Callout(ui.N{Tone: ui.Warn, Title: "Uyarı"}) {
+		API bypass'ı değere bakmaz.
+	}
+	@ui.Callout(ui.N{Tone: ui.Err, Title: "Hata"}) {
+		<pre><code>zitadel: list grants: unavailable</code></pre>
+	}
+	@ui.Callout(ui.N{Tone: ui.Stale, Title: "Bayat veri"}) {
+		k8s taraması 3 saattir yenilenmedi.
+	}
+	@ui.ListTable(ui.L{Label: "ui.ListTable örneği", Search: true}) {
+		<thead>
+			<tr><th scope="col">Ad</th><th scope="col">Son değişiklik</th><th scope="col">Değer</th><th scope="col" aria-label="İşlemler"></th></tr>
+		</thead>
+		<tbody>
+			<tr>
+				<td><strong>wiki.example.com</strong></td>
+				<td data-sort="2026-10-01T09:00:00Z">2026-10-01 09:00</td>
+				<td>
+					<code>100.64.0.7</code>
+					@ui.InlineEdit("Düzenle") {
+						<form action="#">
+							@ui.Input(ui.In{Name: "value", Value: "100.64.0.7", Label: "Yeni değer: wiki.example.com"})
+							@ui.Btn(ui.B{Small: true, Type: "button"}) {
+								Güncelle
+							}
+						</form>
+					}
+				</td>
+				@ui.Actions() {
+					@ui.Btn(ui.B{Small: true, Type: "button"}) {
+						Sil
+					}
+				}
+			</tr>
+			<tr>
+				<td><strong>auth.example.com</strong></td>
+				<td data-sort="2026-10-05T14:02:00Z">2026-10-05 14:02</td>
+				<td><code>100.64.0.2</code></td>
+				@ui.Actions() {
+					@ui.Btn(ui.B{Small: true, Type: "button"}) {
+						Sil
+					}
+				}
+			</tr>
+			<tr>
+				<td><strong>git.example.com</strong></td>
+				<td data-sort="2026-09-20T08:30:00Z">2026-09-20 08:30</td>
+				<td><code>100.64.0.5</code></td>
+				@ui.Actions() {
+					@ui.Btn(ui.B{Small: true, Type: "button"}) {
+						Sil
+					}
+				}
+			</tr>
+		</tbody>
+	}
+	@ui.TableFoot(ui.Pager(ui.P{Info: "1–3 / 24", Next: "#"})) {
+		<thead>
+			<tr><th>Ad</th><th>Durum</th><th>Rol</th><th aria-label="İşlemler"></th></tr>
+		</thead>
+		<tbody>
+			<tr>
+				<td><a href="#"><strong>git.example.com</strong></a></td>
+				<td>
+					@ui.Status(ui.OK, "sağlıklı")
+				</td>
+				<td>
+					@ui.Tag("devops")
+				</td>
+				@ui.Actions() {
+					@ui.Btn(ui.B{Small: true, Type: "button", Attrs: templ.Attributes{"data-dialog-open": "gallery-dlg"}}) {
+						Sil…
+					}
+					@ui.Menu("işlemler") {
+						@ui.MenuLink("#", false) {
+							Düzenle
+						}
+						@ui.MenuDialog("gallery-dlg", true) {
+							Sil
+						}
+					}
+				}
+			</tr>
+			<tr>
+				<td><a href="#"><strong>wiki.example.com</strong></a></td>
+				<td>
+					@ui.Status(ui.Off, "bilinmiyor")
+				</td>
+				<td>
+					@ui.Tag("yazilim")
+					@ui.Tag("devops")
+				</td>
+				@ui.Actions() {
+					@ui.Menu("işlemler") {
+						@ui.MenuLink("#", false) {
+							Düzenle
+						}
+					}
+				}
+			</tr>
+		</tbody>
+	}
+	@ConfirmDialog("gallery-dlg", "Cihaz silinsin mi?", "Bu işlem geri alınamaz.", "#", "", nil, "Sil") {
+		@ui.Callout(ui.N{Tone: ui.Err}) {
+			Cihazın kayıtlı key'leri da silinir.
+		}
+	}
+	@ui.Card(ui.C{Title: "Form", Desc: "ui.Field, Input, Textarea, Select, Check, Row, Group, SaveBar."}) {
+		@ui.Field(ui.F{Label: "Adlar", For: "g-hosts", Help: "Her satıra bir tane."}) {
+			@ui.Textarea(ui.TA{ID: "g-hosts", Name: "hosts", Value: "git.example.com\ngit2.example.com", Code: true})
+		}
+		@ui.Field(ui.F{Label: "Tür", For: "g-kind"}) {
+			@ui.Select(ui.Sel{ID: "g-kind", Name: "kind", Selected: "role", Options: []ui.Opt{{Value: "role", Label: "Rol kontrollü"}, {Value: "open", Label: "Rolsüz"}}})
+		}
+		@ui.Field(ui.F{Label: "Sertifika", For: "g-cert", Help: "auto ya da le:<ad>"}) {
+			@ui.Input(ui.In{ID: "g-cert", Name: "cert", Placeholder: "auto", Options: []string{"auto", "le:example"}})
+		}
+		@ui.Field(ui.F{Label: "Roller", For: "g-roles", Help: "ui.MultiSelect: listeden seçin ya da yazıp Enter'a basın."}) {
+			@ui.MultiSelect(ui.MS{ID: "g-roles", Name: "roles", Values: []string{"devops"}, Options: []string{"devops", "yazilim", "muhasebe"}})
+		}
+		@ui.Field(ui.F{Label: "API adresi", For: "g-endpoint", Help: "ui.In{Pattern, Msg} ve ui.F{Err}: alan hatası.", Err: "https:// ile başlamalı"}) {
+			@ui.Input(ui.In{ID: "g-endpoint", Name: "endpoint", Type: "url", Value: "http://10.0.0.1:6443", Pattern: `https://\S+`, Msg: "https:// ile başlayan bir adres girin."})
+		}
+		@ui.Field(ui.F{Label: "Kubeconfig", For: "g-kubeconfig", Help: "ui.FileInto: dosyayı textarea'ya okur."}) {
+			@ui.FileInto("g-kubeconfig-file", "g-kubeconfig", "Dosya seç")
+			@ui.Textarea(ui.TA{ID: "g-kubeconfig", Name: "kubeconfig", Rows: 3, Code: true})
+		}
+		@ui.Field(ui.F{Label: "Tailnet dışı erişim", Help: "ui.Switch: formu gönderen açık/kapalı switch."}) {
+			@ui.Switch(ui.SW{Name: "g-switch", Value: "closed", On: true, Label: "Tailnet dışı erişim"})
+		}
+		@ui.Field(ui.F{Label: "Seçenekler"}) {
+			@ui.Checks() {
+				@ui.Check(ui.Chk{Name: "magicdns", Label: "MagicDNS kaydı", Checked: true})
+				@ui.Check(ui.Chk{Name: "maintenance", Label: "Bakım modu", Hint: "Yalnız uyarıları susturur."})
+			}
+		}
+		@ui.Field(ui.F{Label: "Erişim", Help: "ui.RadioGroup: her seçeneğin açıklaması görünür."}) {
+			@ui.RadioGroup(ui.RG{Name: "g-access", Selected: "role", Options: []ui.Radio{
+				{ID: "g-ac-open", Value: "open", Label: "Tüm VPN kullanıcıları", Hint: "Roller temizlenir."},
+				{ID: "g-ac-role", Value: "role", Label: "Seçili roller", Hint: "En az bir rol gerekir."},
+			}})
+		}
+		@ui.Group("Redirect'ler") {
+			@ui.Row3() {
+				@ui.Input(ui.In{Name: "src", Label: "Redirect kaynağı", Placeholder: "/kaynak"})
+				@ui.Input(ui.In{Name: "dst", Label: "Redirect hedefi", Placeholder: "/hedef"})
+				@ui.Select(ui.Sel{Name: "code", Label: "HTTP kodu", Selected: "301", Options: []ui.Opt{{Value: "301", Label: "301"}, {Value: "302", Label: "302"}}})
+			}
+		}
+		@ui.SaveBar("Kaydet bir preview açar.") {
+			@ui.Btn(ui.B{Type: "button"}) {
+				Vazgeç
+			}
+			@ui.Btn(ui.B{Kind: ui.Primary, Type: "button"}) {
+				Kaydet
+			}
+		}
+	}
+	@ui.Card(ui.C{Title: "Fark ve kod"}) {
+		@ui.Diff("Caddy", "--- a\n+++ b\n@@ -1,3 +1,4 @@\n git.example.com {\n-\treverse_proxy 10.0.0.1:80\n+\treverse_proxy https://100.64.0.5\n+\theader_up Host {host}\n }\n")
+		@ui.Diff("DNS", "")
+		@ui.Code("manifest.yaml", "apiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: tagcess-reader\n")
+		@ui.Secret("hskey-auth-3f9c1d2e7a")
+	}
+	@ui.Card(ui.C{Flush: true}) {
+		@ui.LinkList([]ui.Link{
+			{Href: "#", Icon: "sites", Title: "Site ayarları", Desc: "ui.LinkList: başka ekranlara giden satırlar."},
+			{Href: "#", Icon: "settings", Title: "Headscale ayarları", Desc: "Korumalı tag'ler"},
+		})
+	}
+	@ui.Fold("Süresi dolmuş key'ler (2) · ui.Fold", nil) {
+		@ui.Table() {
+			<thead>
+				<tr><th>Key</th><th>Bitiş</th></tr>
+			</thead>
+			<tbody>
+				<tr><td><code>hskey-auth-1a2b</code></td><td>2026-09-01</td></tr>
+			</tbody>
+		}
+	}
+	@ui.Card(ui.C{Flush: true}) {
+		@ui.Empty("inbox", "Kayıt yok", "Henüz bir şey eklenmedi.") {
+			@ui.Btn(ui.B{Kind: ui.Primary, Icon: "plus", Type: "button"}) {
+				Ekle
+			}
+		}
+	}
+	@ApplyForm("#", "", []ui.Hidden{{Name: "plan_version", Value: "v1"}}, "#")
+}
+
+templ galleryRight() {
+	@ui.Pill(ui.OK) {
+		sağ yuva
+	}
+}

@@ -1,0 +1,2 @@
+Placeholder for the existing installation's WireGuard (F6 adopt test target). No interface config and no key is stored
+here; the installer must detect the directory and never touch it.

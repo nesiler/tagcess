@@ -1,0 +1,23 @@
+# app: the container stops, the config/compose files go back to before the phase (a first install: removed); the data
+# directory stays (it goes only with the host phase and confirm_remove_data=yes). A previous image is tagged back.
+- name: "Rollback app: which backup, what metadata, backup of today's state first"
+  ansible.builtin.import_tasks: prepare.yml
+
+- name: "Rollback app: stop tagcess"
+  ansible.builtin.shell: "docker rm -f tagcess >/dev/null 2>&1 || true"
+  changed_when: true
+  when: install_state.phases.app is defined and not (install_state.phases.app.rolled_back | default(false)) and not ansible_check_mode
+
+- name: "Rollback app: files"
+  ansible.builtin.import_tasks: generic_phase.yml
+
+- name: "Rollback app: previous image"
+  ansible.builtin.command: "docker tag {{ rollback_details.previous_image | default('') }} {{ tagcess_image }}"
+  changed_when: true
+  failed_when: false
+  when: (rollback_details.previous_image | default('')) != '' and not ansible_check_mode
+
+- name: "Rollback app: the previous installation starts again"
+  ansible.builtin.shell: "test ! -f /etc/tagcess/compose.yaml || docker compose -f /etc/tagcess/compose.yaml up -d"
+  changed_when: true
+  when: install_state.phases.app is defined and not ansible_check_mode

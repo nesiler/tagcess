@@ -1,0 +1,59 @@
+# Preflight raporu ({{ install_env }})
+
+Salt okur inceleme: host'ta hiçbir şey değiştirilmedi. Secret dosyalarının yalnız varlığı ve modu okundu.
+
+## Önerilen kip: `{{ preflight_proposed_mode }}`
+{% if preflight_core_present %}
+Çekirdek bileşenlerden var olan: {{ preflight_core_present | join(', ') }}; bu yüzden `adopt` (devral, yalnız eksiği ekle).
+{% else %}
+Çekirdek bileşen (Headscale, Caddy) yok; bu yüzden `fresh` (sıfırdan kur).
+{% endif %}
+Seçili kip: `{{ install_mode or '-' }}`.
+
+## Bileşenler
+| Bileşen | Durum |
+|---|---|
+{% for k, v in preflight_components.items() %}
+| {{ k }} | {{ ('yönetiliyor (bu kurulum aracı kurdu)' if k in (install_state.installed | default([])) else 'var, devralınacak') if v else ('eksik, kurulacak' if install_mode != 'adopt' or k not in ['headscale', 'caddy'] else 'eksik, adopt\'ta eklenecek') }} |
+{% endfor %}
+
+## Dokunulmayacaklar (yalnız rapor)
+{% for k, v in preflight_probe.untouched.items() %}
+- {{ k }}: {{ ('var' ~ (' (' ~ v.detail ~ ')' if v.detail else '')) if v.present else 'yok' }}
+{% endfor %}
+
+## Ayrıntılar
+- Headscale: {{ preflight_probe.headscale.version | default('yok') }}{% if preflight_probe.headscale.present %}, policy modu `{{ preflight_hs_cfg.policy_mode | default('?') }}`, DNS kayıt dosyası `{{ preflight_hs_cfg.extra_records_path | default('') }}`, policy sha256 `{{ preflight_probe.headscale.policy_sha256 | default('') }}`{% endif %}
+
+- Caddy: {{ preflight_probe.caddy.version | default('yok') }}{% if preflight_probe.caddy.present %}, disk = çalışan: {{ preflight_probe.caddy.disk_equals_running }}, site dizini `{{ caddy_sites_dir or '-' }}`{% endif %}
+
+- oauth2-proxy: {{ 'var' if preflight_probe.oauth2_proxy.present else 'yok' }}{% if preflight_probe.oauth2_proxy.present %}, {{ 'çalışıyor' if preflight_probe.oauth2_proxy.running else 'durdurulmuş' }}{% if preflight_probe.oauth2_proxy.settings %}, çerez `{{ preflight_probe.oauth2_proxy.settings.cookie_name | default('') }}` {{ preflight_probe.oauth2_proxy.settings.cookie_expire | default('') }}{% endif %}{% endif %}
+
+- Tailscale: {{ (preflight_probe.tailscale.ip4 | default('') or 'katılmamış') if preflight_probe.tailscale.present else 'yok' }}
+- Zitadel discovery: {{ preflight_probe.zitadel.status }}
+- Boş alan (/var/lib): {{ preflight_probe.disk_free_mb }} MB
+{% for c in preflight_probe.certs %}
+- Sertifika {{ c.name }}: {{ ('bitiş ' ~ c.not_after | default('?')) if c.fullchain else 'yok' }}
+{% endfor %}
+
+## Secret dosyaları (yalnız varlık/mod)
+{% for f in preflight_probe.host_secret_files | selectattr('exists') %}
+- host {{ f.path }}: {{ f.mode }} {{ f.owner }}:{{ f.group }}
+{% endfor %}
+{% for s in preflight_controller_secrets.results | default([]) %}
+- denetim makinesi {{ s.item.key }}: {{ (s.stat.mode | default('') ~ ' var') if s.stat.exists else 'YOK' }}
+{% endfor %}
+
+## Engeller ({{ preflight_checks.blockers | length }})
+{% for b in preflight_checks.blockers %}
+- {{ b }}
+{% else %}
+- yok
+{% endfor %}
+
+## Uyarılar ({{ preflight_checks.warnings | length }})
+{% for w in preflight_checks.warnings %}
+- {{ w }}
+{% else %}
+- yok
+{% endfor %}

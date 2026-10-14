@@ -1,0 +1,105 @@
+package web
+
+import (
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// SitesPage renders the site list (S-01): one row per site with its name, kind, roles, target,
+// health (state and the time of the latest check) and last change. Every value is escaped by templ.
+// Health without data is shown as "bilinmiyor" and never styled as healthy.
+templ SitesPage(sites []SiteView, csrfToken string) {
+	@ui.PageHead(ui.H{Title: "Siteler", Sub: "VPN arkasındaki iç siteler, erişim kuralları ve hedefleri."}) {
+		<form method="post" action="/sites/resync/preview">
+			@CSRFField(csrfToken)
+			@ui.Btn(ui.B{Kind: ui.WarnOutline, Icon: "sync"}) {
+				Kayıtlardan yeniden apply et
+			}
+		</form>
+		@ui.Btn(ui.B{Href: "/sites/settings", Icon: "settings"}) {
+			Site ayarları
+		}
+		@ui.Btn(ui.B{Href: "/sites/first-import", Icon: "download"}) {
+			İlk import
+		}
+		@ui.Btn(ui.B{Kind: ui.Primary, Href: "/sites/new", Icon: "plus"}) {
+			Yeni site
+		}
+	}
+	if len(sites) == 0 {
+		@ui.Card(ui.C{}) {
+			@ui.Empty("sites", "Kayıtlı site yok.", "İlk siteyi ekleyin ya da bugünkü Caddyfile'ı import edin.") {
+				@ui.Btn(ui.B{Kind: ui.Primary, Href: "/sites/new", Icon: "plus"}) {
+					Yeni site
+				}
+			}
+		}
+	} else {
+		@ui.ListTable(ui.L{Label: "Siteler", Search: true}) {
+			<thead>
+				<tr>
+					<th scope="col">Ad</th>
+					<th scope="col">Tür</th>
+					<th scope="col">Rol</th>
+					<th scope="col">Hedef</th>
+					<th scope="col">Sağlık</th>
+					<th scope="col">Son değişiklik (UTC)</th>
+					<th scope="col" aria-label="İşlemler"></th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, s := range sites {
+					<tr>
+						<td>
+							<a href={ templ.SafeURL("/sites/" + strconv.FormatInt(s.ID, 10) + "/edit") }><strong>{ firstHost(s.Hosts) }</strong></a>
+							if len(s.Hosts) > 1 {
+								+{ strconv.Itoa(len(s.Hosts) - 1) }
+								@ui.Tip(strings.Join(s.Hosts[1:], ", "))
+							}
+						</td>
+						<td>{ systemLabel(s) }</td>
+						<td>
+							for _, r := range s.Roles {
+								@ui.Tag(r)
+							}
+						</td>
+						<td><code>{ targetLabel(s) }</code></td>
+						<td data-sort={ s.Health } data-health={ s.Health }>
+							@ui.StatusText(healthTone(s.Health), s.Health, checkedAt(s.CheckedAt))
+						</td>
+						<td data-sort={ s.UpdatedAt.Format(time.RFC3339) }><time datetime={ s.UpdatedAt.Format(time.RFC3339) }>{ s.UpdatedAt.Format("2006-01-02 15:04") }</time></td>
+						@ui.Actions() {
+							@ui.Menu("site işlemleri") {
+								@ui.MenuLink("/sites/"+strconv.FormatInt(s.ID, 10)+"/edit", false) {
+									Düzenle
+								}
+								@ui.MenuLink("/sites/"+strconv.FormatInt(s.ID, 10)+"/history", false) {
+									Geçmiş
+								}
+							}
+						}
+					</tr>
+				}
+			</tbody>
+		}
+	}
+}
+
+// firstHost is the name a site is listed by.
+func firstHost(hosts []string) string {
+	if len(hosts) == 0 {
+		return "–"
+	}
+	return hosts[0]
+}
+
+// checkedAt is the latest health check time in the list, or nothing when unknown.
+func checkedAt(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format("2006-01-02 15:04")
+}

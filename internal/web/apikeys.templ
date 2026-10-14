@@ -1,0 +1,119 @@
+package web
+
+import (
+	"strconv"
+
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// The API keys screen (F3-018, H-03): the list with id, prefix, creation, expiration, last seen
+// and state; expire and delete actions. There is no create form or route (R2 karar 7): these keys
+// carry Headscale's full admin rights, and the page says so.
+
+templ APIKeysPage(view APIKeysView, csrfToken string) {
+	@ui.PageHead(ui.H{Title: "API key'ler", Sub: "Headscale'in tam yönetici API key'leri."})
+	@HeadscaleTabs("keys", view.DryRun)
+	@KeysSubNav("api")
+	if view.Err != nil {
+		@ui.Callout(ui.N{Tone: ui.Err, Title: "API key'ler okunamadı"}) {
+			liste gösterilmiyor. Neden: { view.Err.Error() }
+		}
+	} else {
+		@ui.Callout(ui.N{Tone: ui.Warn}) {
+			Bu key'ler Headscale'e <strong>tam yönetici</strong> erişimi verir; yetkileri daraltılamaz.
+			Buradan oluşturulamaz; süresi geçen key geri açılamaz, silme geri alınamaz.
+		}
+		if len(view.Rows) == 0 {
+			@ui.Card(ui.C{}) {
+				@ui.Empty("key", "Kayıtlı API key yok.", "")
+			}
+		} else {
+			@ui.ListTable(ui.L{Label: "API key'ler", Search: true}) {
+				<thead>
+					<tr>
+						<th scope="col">ID</th>
+						<th scope="col">Prefix</th>
+						<th scope="col">Oluşturma</th>
+						<th scope="col">Bitiş</th>
+						<th scope="col">Son görülme</th>
+						<th scope="col">Durum</th>
+						<th scope="col" data-nosort>İşlem</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, row := range view.Rows {
+						<tr>
+							<td>{ strconv.FormatUint(row.ID, 10) }</td>
+							<td><code>{ row.Prefix }</code></td>
+							<td>{ row.CreatedAt }</td>
+							<td>{ row.Expiration }</td>
+							<td>{ row.LastSeen }</td>
+							<td>
+								@apiKeyState(row)
+							</td>
+							@ui.Actions() {
+								<form method="post" action={ "/headscale/keys/api/" + strconv.FormatUint(row.ID, 10) + "/expire" }>
+									@CSRFField(csrfToken)
+									@ui.HiddenFields([]ui.Hidden{{Name: "version", Value: row.Version}})
+									@ui.Btn(ui.B{Kind: ui.WarnOutline, Small: true}) {
+										Expire
+									}
+								</form>
+								@ui.Btn(ui.B{Kind: ui.DangerOutline, Small: true, Href: "/headscale/keys/api/" + strconv.FormatUint(row.ID, 10) + "/delete"}) {
+									Sil
+								}
+							}
+						</tr>
+					}
+				</tbody>
+			}
+		}
+	}
+}
+
+// apiKeyState renders the key state as coloured text: expired, never used, no expiry (several can
+// apply), otherwise in use.
+templ apiKeyState(row APIKeyRowView) {
+	if row.Expired {
+		@ui.StatusText(ui.Err, "süresi dolmuş", "")
+	}
+	if row.NeverUsed {
+		@ui.StatusText(ui.Off, "hiç kullanılmamış", "")
+	}
+	if row.NoExpiry {
+		@ui.StatusText(ui.Warn, "süresiz", "")
+	}
+	if !row.Expired && !row.NeverUsed && !row.NoExpiry {
+		@ui.StatusText(ui.OK, "kullanımda", "")
+	}
+}
+
+// APIKeyDeleteConfirmPage asks for the irreversible delete confirmation (R2 karar 7).
+templ APIKeyDeleteConfirmPage(view APIKeyConfirmView, csrfToken string) {
+	@ui.PageHead(ui.H{Title: "API key sil"})
+	@HeadscaleTabs("keys", view.DryRun)
+	@KeysSubNav("api")
+	if view.Err != nil {
+		@ui.Callout(ui.N{Tone: ui.Err}) {
+			<strong>Key okunamadı.</strong> Neden: { view.Err.Error() }
+		}
+	} else {
+		@ui.Callout(ui.N{Tone: ui.Err}) {
+			<strong>Bu işlem geri alınamaz.</strong> Key <code>{ view.Key.Prefix }</code> (ID { strconv.FormatUint(view.Key.ID, 10) })
+			Headscale'e tam yönetici erişimi veriyordu; silindikten sonra eski değeri kullanacak hiçbir bağlantı
+			ayrıca kapanır ve key listeden düşer.
+		}
+		<form method="post" action={ "/headscale/keys/api/" + strconv.FormatUint(view.Key.ID, 10) + "/delete" }>
+			@CSRFField(csrfToken)
+			@ui.HiddenFields([]ui.Hidden{{Name: "version", Value: view.Version}, {Name: "confirm", Value: "1"}})
+			@ui.BtnRow() {
+				@ui.Btn(ui.B{Kind: ui.Danger, Small: true}) {
+					Silmeyi onayla
+				}
+				@ui.Btn(ui.B{Href: "/headscale/keys/api", Small: true}) {
+					Vazgeç
+				}
+			}
+		</form>
+	}
+}

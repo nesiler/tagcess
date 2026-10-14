@@ -1,0 +1,77 @@
+# Records one finished writing phase: result, the backup id taken before it (backup_id: the latest; first_backup_id:
+# the one before the installer first changed anything here, which a rollback returns to), and the components it installed
+# (state_installed, set by *_install roles). Bookkeeping, not managed state: changed_when false, and nothing
+# is written in --check.
+# Rollback metadata (details) belongs to the first_backup_id period: it describes what the installer changed since that
+# backup, which is what `rollback` returns to. A later run (also a no-op one) must not overwrite it: keys that are
+# already there stay as they were, lists (added tags) are extended, and only a new period (the phase was rolled back
+# or never took a backup) starts again. latest_details are the last run's own, for -e rollback_to=latest.
+- name: "State: this phase's earlier entry ({{ state_phase }})"
+  ansible.builtin.set_fact:
+    state_prev: "{{ install_state.phases[state_phase] | default({}) }}"
+
+- name: "State: rollback metadata of the period ({{ state_phase }})"
+  ansible.builtin.set_fact:
+    state_period_details: >-
+      {%- set new_period = (state_prev.first_backup_id | default('') == '') or (state_prev.rolled_back | default('') != '') -%}
+      {%- set out = {} -%}
+      {%- if not new_period -%}{%- for k, v in (state_prev.details | default({})).items() -%}{%- set _ = out.update({k: v}) -%}{%- endfor -%}{%- endif -%}
+      {%- for k, v in (state_details | default({})).items() -%}
+        {%- if k not in out -%}{%- set _ = out.update({k: v}) -%}
+        {%- elif v is sequence and v is not string and v is not mapping and out[k] is sequence and out[k] is not string and out[k] is not mapping -%}
+          {%- set merged = [] -%}
+          {%- for x in out[k] + v -%}{%- if x not in merged -%}{%- set _ = merged.append(x) -%}{%- endif -%}{%- endfor -%}
+          {%- set _ = out.update({k: merged}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+    state_new_period: "{{ (state_prev.first_backup_id | default('') == '') or (state_prev.rolled_back | default('') != '') }}"
+
+- name: "State: entry ({{ state_phase }})"
+  ansible.builtin.set_fact:
+    install_state: >-
+      {{ install_state | combine({
+           'phases': install_state.phases | combine({state_phase: {
+             'result': 'ok',
+             'backup_id': backup_ids[state_phase] | default('') or (state_prev.backup_id | default('') if not state_new_period | bool else ''),
+             'first_backup_id': (state_prev.first_backup_id | default('') if not state_new_period | bool else '')
+                                or backup_ids[state_phase] | default(''),
+             'details': state_period_details,
+             'latest_details': state_details | default({}),
+             'finished_at': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ')}}),
+           'installed': (install_state.installed + (state_installed | default([]))) | unique,
+           'install_mode': install_mode}) }}
+
+- name: "State: directory ({{ state_phase }})"
+  ansible.builtin.file:
+    path: "{{ install_state_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: "State: host file ({{ state_phase }})"
+  ansible.builtin.copy:
+    content: "{{ install_state | to_nice_json(indent=2) }}\n"
+    dest: "{{ install_state_dir }}/state.json"
+    owner: root
+    group: root
+    mode: "0600"
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: "State: controller copy ({{ state_phase }})"
+  ansible.builtin.copy:
+    content: "{{ install_state | to_nice_json(indent=2) }}\n"
+    dest: "{{ install_env_dir }}/host-state.json"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: "State: details consumed ({{ state_phase }})"
+  ansible.builtin.set_fact:
+    state_details: {}

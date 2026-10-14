@@ -1,0 +1,5 @@
+package genfixture
+
+templ Hello(name string) {
+	<p>Hello, { name }</p>
+}

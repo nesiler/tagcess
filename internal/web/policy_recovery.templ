@@ -1,0 +1,54 @@
+package web
+
+import "github.com/nesiler/tagcess/internal/web/ui"
+
+// PolicyRecoveryPage is the controlled recovery of an uncertain policy state (F3-029): the state, the
+// target, the candidate, the fresh difference and — only when everything validated — the approval.
+templ PolicyRecoveryPage(v policyRecoveryView, csrfToken string) {
+	@ui.PageHead(ui.H{Title: "ACL / policy", Sub: "Kontrollü recovery"})
+	@HeadscaleTabs("policy", v.DryRun)
+	@PolicySubNav("recovery")
+	if v.Inactive {
+		@ui.Callout(ui.N{Tone: ui.Off}) {
+			{ recoveryInactive }
+		}
+	} else {
+		if v.Uncertain != "" {
+			@ui.Callout(ui.N{Tone: ui.Err}) {
+				<strong>Önceki apply belirsiz:</strong> { v.Uncertain }.
+			}
+		}
+		@ui.Callout(ui.N{Tone: ui.Info}) {
+			Otomatik geri yükleme yoktur. Aday, son apply edilen revision'ın metninden, bugünkü Zitadel gruplarıyla ve yeniden kurulan kilitli testlerle oluşturulur ve doğrulanır; onayınız doğrulamayı atlatmaz.
+		}
+		if v.Blocked != "" {
+			@ui.Callout(ui.N{Tone: ui.Err}) {
+				<strong>Recovery bloke:</strong> { v.Blocked }
+				if v.SyncPending {
+					<a href="/sync">Sync sayfası</a>
+				}
+			}
+		}
+		if v.Target != nil {
+			@ui.Card(ui.C{Title: "Hedef"}) {
+				<p>
+					Hedef: <a href={ templ.SafeURL("/headscale/policy/history/" + revID(v.Target.ID)) }>revision #{ revID(v.Target.ID) }</a>
+					(<code>{ v.Target.Source }</code>, { v.Target.Actor }, { revStamp(*v.Target) } UTC)
+				</p>
+			}
+		}
+		if v.Preview != nil {
+			@PolicyPreviewPanel(*v.Preview, v.BaseHash, csrfToken)
+			if !v.Preview.Confirm {
+				@ui.Callout(ui.N{Tone: ui.Err}) {
+					Aday doğrulamayı geçmedi: apply sunulmuyor.
+				}
+			}
+			@ui.Card(ui.C{Title: "Aday"}) {
+				@ui.Field(ui.F{Label: "Aday (read-only)", For: "recovery-text"}) {
+					@ui.Textarea(ui.TA{ID: "recovery-text", Value: "\n" + v.Candidate, Rows: 24, Code: true, ReadOnly: true})
+				}
+			}
+		}
+	}
+}

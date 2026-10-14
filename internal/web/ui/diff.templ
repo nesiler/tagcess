@@ -1,0 +1,29 @@
+package ui
+
+// Diff shows one artifact's unified diff (Caddyfile, DNS, Zitadel, policy) with added and removed
+// lines coloured. An empty diff says "değişmiyor" instead of drawing an empty box.
+templ Diff(title, text string) {
+	<div class="codebox">
+		if text == "" {
+			<div class="codehead"><b class="mono">{ title }</b><span class="pill pill-flat">değişmiyor</span></div>
+		} else {
+			{{ d := parseDiff(text) }}
+			<div class="codehead"><b class="mono">{ title }</b><span class="pill pill-flat">{ d.summary() }</span></div>
+			<div class="codebody">
+				for _, l := range d.lines {
+					<div class={ l.class }>{ l.text }</div>
+				}
+			</div>
+		}
+	</div>
+}
+
+// Code shows a block of text that is not a diff (a config, a manifest, an error) under a title.
+templ Code(title, text string) {
+	<div class="codebox">
+		if title != "" {
+			<div class="codehead"><b class="mono">{ title }</b></div>
+		}
+		<pre class="codebody"><code>{ text }</code></pre>
+	</div>
+}

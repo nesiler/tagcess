@@ -1,0 +1,22 @@
+# caddy_ui (F6-005): the tagcess UI site before the first import (architecture §8 step 4). The block is
+# deploy/caddy/tagcess.caddy (the reference of the S-05.2 template) with tagcess_host; it lives in its own file
+# under the sites directory, which the main Caddyfile imports with `import sites/*.caddy` [Ö].
+caddy_ui_sites_dir: "{{ caddy_sites_dir or (caddy_dir ~ '/sites') }}"
+caddy_ui_file: "{{ caddy_ui_sites_dir }}/tagcess.caddy"
+caddy_ui_reference_host: tagcess.example.com
+# The certbot certificate that covers tagcess_host, by the renderer's cert:auto rule (internal/render caddyCert: the
+# longest name in cert_names that is the host or its direct parent, as a wildcard covers one label only; ties go to
+# the smaller name). The block gets that
+# `tls` line right after the host line, as tagcess renders it after the first import, so the parity gate sees the
+# same block. Empty (no covering certificate): no tls line, Caddy gets its own certificate.
+caddy_ui_cert_name: >-
+  {%- set ns = namespace(best='') -%}
+  {%- for c in cert_names | default([]) -%}
+  {%- if (tagcess_host == c or (tagcess_host.endswith('.' ~ c) and '.' not in tagcess_host[:-(c | length + 1)]))
+         and (c | length > ns.best | length or (c | length == ns.best | length and (ns.best == '' or c < ns.best))) -%}
+  {%- set ns.best = c -%}
+  {%- endif -%}
+  {%- endfor -%}
+  {{ ns.best }}
+caddy_ui_nl: "\n"
+caddy_ui_tab: "\t"

@@ -1,0 +1,345 @@
+{
+  "sites": [
+    {
+      "hosts": [
+        "issues.internal.a.example.test"
+      ],
+      "kind": "open",
+      "open_reason": "transition",
+      "target_roles": [
+        "devops",
+        "developer",
+        "standart"
+      ],
+      "cert": "le:internal.a.example.test",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Rol kontrolü askıda (2026-09-30); hedef roller target_roles'ta"
+    },
+    {
+      "hosts": [
+        "blog.internal.a.example.test"
+      ],
+      "kind": "open",
+      "open_reason": "transition",
+      "target_roles": [
+        "devops",
+        "developer",
+        "standart"
+      ],
+      "cert": "le:internal.a.example.test",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Rol kontrolü askıda (2026-09-30); hedef roller target_roles'ta"
+    },
+    {
+      "hosts": [
+        "blog-staging.internal.a.example.test"
+      ],
+      "kind": "open",
+      "open_reason": "transition",
+      "target_roles": [
+        "devops",
+        "developer",
+        "standart"
+      ],
+      "cert": "le:internal.a.example.test",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Rol kontrolü askıda (2026-09-30); hedef roller target_roles'ta"
+    },
+    {
+      "hosts": [
+        "dashboard.internal.a.example.test"
+      ],
+      "kind": "open",
+      "open_reason": "transition",
+      "target_roles": [
+        "devops",
+        "developer",
+        "standart"
+      ],
+      "cert": "le:internal.a.example.test",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Rol kontrolü askıda (2026-09-30); hedef roller target_roles'ta"
+    },
+    {
+      "hosts": [
+        "dashboard-staging.internal.a.example.test"
+      ],
+      "kind": "open",
+      "open_reason": "transition",
+      "target_roles": [
+        "devops",
+        "developer",
+        "standart"
+      ],
+      "cert": "le:internal.a.example.test",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Rol kontrolü askıda (2026-09-30); hedef roller target_roles'ta"
+    },
+    {
+      "hosts": [
+        "store.internal.a.example.test"
+      ],
+      "kind": "open",
+      "open_reason": "transition",
+      "target_roles": [
+        "devops",
+        "developer",
+        "standart"
+      ],
+      "cert": "le:internal.a.example.test",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Rol kontrolü askıda (2026-09-30); hedef roller target_roles'ta"
+    },
+    {
+      "hosts": [
+        "sandbox.b.example.test"
+      ],
+      "kind": "open",
+      "open_reason": "transition",
+      "target_roles": [
+        "devops",
+        "developer",
+        "standart"
+      ],
+      "cert": "le:b.example.test",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Rol kontrolü askıda (2026-09-30); hedef roller target_roles'ta"
+    },
+    {
+      "hosts": [
+        "monitor.c.example.test"
+      ],
+      "kind": "open",
+      "open_reason": "transition",
+      "target_roles": [
+        "devops",
+        "developer"
+      ],
+      "cert": "le:c.example.test",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Rol kontrolü askıda (2026-09-30); hedef roller target_roles'ta"
+    },
+    {
+      "hosts": [
+        "dbmetrics.c.example.test"
+      ],
+      "kind": "open",
+      "open_reason": "transition",
+      "target_roles": [
+        "devops",
+        "developer"
+      ],
+      "cert": "le:c.example.test",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Rol kontrolü askıda (2026-09-30); hedef roller target_roles'ta"
+    },
+    {
+      "hosts": [
+        "dbadmin.c.example.test"
+      ],
+      "kind": "open",
+      "open_reason": "transition",
+      "target_roles": [
+        "devops",
+        "developer"
+      ],
+      "cert": "le:c.example.test",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Rol kontrolü askıda (2026-09-30); hedef roller target_roles'ta"
+    },
+    {
+      "hosts": [
+        "partner-api.c.example.test"
+      ],
+      "kind": "open",
+      "open_reason": "transition",
+      "target_roles": [
+        "devops",
+        "developer"
+      ],
+      "cert": "le:c.example.test",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Rol kontrolü askıda (2026-09-30); hedef roller target_roles'ta"
+    },
+    {
+      "hosts": [
+        "docs.c.example.test"
+      ],
+      "kind": "open",
+      "open_reason": "transition",
+      "target_roles": [
+        "devops",
+        "developer",
+        "standart"
+      ],
+      "cert": "le:c.example.test",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Rol kontrolü askıda; bugün @api: Authorization başlığı"
+    },
+    {
+      "hosts": [
+        "k8s-api.c.example.test"
+      ],
+      "kind": "open",
+      "open_reason": "transition",
+      "target_roles": [
+        "devops",
+        "developer"
+      ],
+      "cert": "le:c.example.test",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Rol kontrolü askıda; bugün @api: Authorization başlığı"
+    },
+    {
+      "hosts": [
+        "projects.c.example.test"
+      ],
+      "kind": "open",
+      "open_reason": "transition",
+      "target_roles": [
+        "devops",
+        "developer",
+        "standart"
+      ],
+      "cert": "le:c.example.test",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Rol kontrolü askıda; bugün @api: Authorization veya X-Api-Key",
+      "redirects": [
+        {
+          "source": "/setup",
+          "target": "https://projects.c.example.test/setup/",
+          "code": 308
+        }
+      ]
+    },
+    {
+      "hosts": [
+        "errors.c.example.test"
+      ],
+      "kind": "open",
+      "open_reason": "transition",
+      "target_roles": [
+        "devops",
+        "developer"
+      ],
+      "cert": "le:c.example.test",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Rol kontrolü askıda; bugün @api: Authorization veya SDK yolları"
+    },
+    {
+      "hosts": [
+        "tickets.c.example.test"
+      ],
+      "kind": "open",
+      "open_reason": "transition",
+      "target_roles": [
+        "devops",
+        "developer",
+        "standart"
+      ],
+      "cert": "le:c.example.test",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Rol kontrolü askıda; bugün @api: Authorization veya X-Tracker-Api-Key"
+    },
+    {
+      "hosts": [
+        "projects-auth.c.example.test"
+      ],
+      "kind": "open",
+      "open_reason": "intentional",
+      "cert": "le:c.example.test",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Kasıtlı rolsüz (00 §9 Kapanan-8)"
+    },
+    {
+      "hosts": [
+        "storage-api.c.example.test"
+      ],
+      "kind": "open",
+      "open_reason": "intentional",
+      "cert": "le:c.example.test",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Kasıtlı rolsüz (00 §9 Kapanan-8)"
+    },
+    {
+      "hosts": [
+        "store-staging.internal.a.example.test"
+      ],
+      "kind": "open",
+      "open_reason": "transition",
+      "cert": "le:internal.a.example.test",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Geçiş sitesi (00 §9 Kapanan-8); k8s'te Ingress yok"
+    },
+    {
+      "hosts": [
+        "blog-admin.internal.a.example.test"
+      ],
+      "kind": "open",
+      "open_reason": "transition",
+      "cert": "le:internal.a.example.test",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Geçiş sitesi (00 §9 Kapanan-8)"
+    },
+    {
+      "hosts": [
+        "auth.c.example.test"
+      ],
+      "kind": "system",
+      "system_template": "zitadel",
+      "system_config": {},
+      "cert": "le:c.example.test",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Zitadel: login flow public, console internal only"
+    },
+    {
+      "hosts": [
+        "hs.c.example.test"
+      ],
+      "kind": "system",
+      "system_template": "headscale",
+      "system_config": {
+        "headplane": true
+      },
+      "cert": "auto",
+      "target": "k8s",
+      "magicdns": false,
+      "note": "Headscale and Headplane (/admin)"
+    },
+    {
+      "hosts": [
+        "vpn.c.example.test"
+      ],
+      "kind": "system",
+      "system_template": "wireguard_ui",
+      "system_config": {
+        "enabled": true
+      },
+      "cert": "auto",
+      "target": "k8s",
+      "magicdns": false,
+      "note": "wireguard-ui"
+    }
+  ]
+}

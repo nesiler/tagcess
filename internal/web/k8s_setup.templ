@@ -1,0 +1,246 @@
+package web
+
+import (
+	"time"
+
+	"github.com/nesiler/tagcess/internal/k8s"
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// The k8s setup help screen (F4-041): the read-only bootstrap manifest, the selected
+// effective-permission evidence and the shared API/probe IP policy. Every value is escaped by
+// templ.
+
+// K8sSetupPage renders the setup help screen. Error is a refusal, Notice a result.
+templ K8sSetupPage(v k8sSetupView, csrfToken string) {
+	@ui.PageHead(ui.H{Title: "k8s kurulum yardımı", Sub: "Read-only erişim manifesti, izin testi ve IP izinleri.", Crumbs: []ui.Crumb{{Label: "k8s", Href: "/k8s/discovery"}, {Label: "Kurulum"}}}) {
+		@ui.Btn(ui.B{Href: "/k8s/connection", Icon: "link"}) {
+			Bağlantı
+		}
+	}
+	if v.Error != "" {
+		@ui.Callout(ui.N{Tone: ui.Err, Title: "Değişiklik reddedildi; hiçbir şey kaydedilmedi:"}) {
+			<pre><code>{ v.Error }</code></pre>
+		}
+	}
+	if v.Notice != "" {
+		@ui.Callout(ui.N{Tone: ui.OK}) {
+			{ v.Notice }
+		}
+	}
+	if v.NextStep != "" {
+		<div data-next-step="true">
+			@ui.Callout(ui.N{Tone: ui.Info, Title: "Sıradaki adım"}) {
+				<a href={ templ.SafeURL(v.NextStepHref) }>{ v.NextStep }</a>
+			}
+		</div>
+	}
+	@k8sManifestCard(v)
+	@k8sReviewCard(v, csrfToken)
+	@k8sPolicyCard("API IP policy'si", "tagcess'in k8s API'sine bağlanabileceği adresler.", v.API, csrfToken)
+	@k8sPolicyCard("Probe IP policy'si", "Site sağlık kontrollerinin bağlanabileceği adresler.", v.Probe, csrfToken)
+}
+
+templ k8sManifestCard(v k8sSetupView) {
+	@ui.Card(ui.C{
+		ID:    "manifest",
+		Title: "Read-only erişim manifesti",
+		Desc: "ServiceAccount ve RBAC: yalnız seçili namespace'lerde Ingress/Service, cluster genelinde IngressClass okuma (get/list). " +
+			"Secret, token veya wildcard yetki yok. Manifesti cluster yöneticisi apply eder; tagcess cluster'a yazmaz. " +
+			"Listeden çıkarılan bir namespace'in RoleBinding'i kendiliğinden silinmez; cluster yöneticisi onu elle silmelidir.",
+	}) {
+		if v.ProfileErr != "" {
+			@ui.Callout(ui.N{Tone: ui.Err}) {
+				Bağlantı profili okunamadı veya bozuk: { v.ProfileErr }
+			}
+		}
+		if !v.ProfileSet {
+			<p>
+				Manifest için önce <a href="/k8s/connection">bağlantı ayarlarını</a> kaydedin; namespace ve IngressClass listesi oradan gelir.
+			</p>
+		} else {
+			@ui.KV() {
+				<dt>Namespace'ler</dt>
+				<dd>
+					for _, ns := range v.Namespaces {
+						@ui.Tag(ns)
+					}
+				</dd>
+				<dt>IngressClass'lar</dt>
+				<dd>
+					for _, c := range v.IngressClasses {
+						@ui.Tag(c)
+					}
+				</dd>
+				<dt>Controller</dt>
+				<dd><code>{ v.Controller }</code></dd>
+			}
+		}
+		<form method="get" action="/k8s/setup/manifest">
+			@ui.Field(ui.F{Label: "ServiceAccount namespace'i", For: "sa_namespace"}) {
+				@ui.Input(ui.In{ID: "sa_namespace", Name: "sa_namespace", Value: v.SA.Namespace, Pattern: k8sLabelPattern, Msg: k8sLabelMsg})
+			}
+			@ui.Field(ui.F{Label: "ServiceAccount adı", For: "sa_name"}) {
+				@ui.Input(ui.In{ID: "sa_name", Name: "sa_name", Value: v.SA.Name, Pattern: k8sLabelPattern, Msg: k8sLabelMsg})
+			}
+			@ui.BtnRow() {
+				if v.ProfileSet {
+					@ui.Btn(ui.B{Kind: ui.Primary, Icon: "download"}) {
+						Manifesti indir
+					}
+				} else {
+					@ui.Btn(ui.B{Kind: ui.Primary, Icon: "download", Disabled: true, Title: "Önce bağlantı ayarlarını kaydedin"}) {
+						Manifesti indir (önce bağlantı ayarları)
+					}
+				}
+			}
+		</form>
+	}
+}
+
+templ k8sReviewCard(v k8sSetupView, csrfToken string) {
+	@ui.Card(ui.C{
+		ID:    "review",
+		Title: "İzin testi",
+		Desc:  "Credential'ın izinleri seçili işlemlerle sınanır. Yalnız bu işlemler sınandı; diğer bağlar ve authorizer'lar incelenmedi. RBAC izinleri toplamsaldır, sonuç yalnız sorgulanan kaynak ve fiillere aittir.",
+	}) {
+		if !v.ProfileSet {
+			<p>İzin testi için önce bağlantı ayarları gerekir.</p>
+		} else {
+			<form method="post" action="/k8s/setup/review">
+				@CSRFField(csrfToken)
+				@ui.BtnRow() {
+					@ui.Btn(ui.B{Icon: "shield"}) {
+						İzinleri sına
+					}
+				}
+			</form>
+			if v.ReviewErr != "" {
+				@ui.Callout(ui.N{Tone: ui.Warn}) {
+					{ v.ReviewErr }
+				}
+			}
+			if v.Review != nil {
+				@k8sReviewEvidence(*v.Review)
+			}
+		}
+	}
+}
+
+templ k8sReviewEvidence(r k8s.Review) {
+	@ui.KV() {
+		<dt>Principal</dt>
+		<dd>
+			if r.Principal == "" {
+				@ui.StatusText(ui.Err, "okunamadı", "")
+			} else {
+				<code>{ r.Principal }</code>
+				@ui.Tip("Token'ın beyan ettiği principal; doğrulanmamış.")
+			}
+		</dd>
+		<dt>Namespace'ler</dt>
+		<dd>
+			for _, ns := range r.Namespaces {
+				@ui.Tag(ns)
+			}
+		</dd>
+		<dt>Zaman</dt>
+		<dd>{ r.At.UTC().Format(time.RFC3339) }</dd>
+		<dt>Sonuç</dt>
+		<dd>
+			if r.Passed() {
+				@ui.StatusText(ui.OK, "seçili işlemler geçti", "")
+			} else {
+				@ui.StatusText(ui.Err, "seçili işlemler geçmedi", "")
+			}
+		</dd>
+	}
+	@ui.Group("İzinli olması gereken işlemler") {
+		@k8sCheckList(r.Required)
+	}
+	@ui.Group("Reddedilmesi gereken işlemler") {
+		@k8sCheckList(r.Forbidden)
+	}
+	if problems := r.Problems(); len(problems) > 0 {
+		@ui.Callout(ui.N{Tone: ui.Err, Title: "Sınamayı geçmeyen noktalar"}) {
+			<ul>
+				for _, p := range problems {
+					<li>{ p }</li>
+				}
+			</ul>
+		}
+	}
+}
+
+templ k8sCheckList(checks []k8s.Check) {
+	@ui.TableIn() {
+		<thead><tr><th>Durum</th><th>İşlem</th></tr></thead>
+		<tbody>
+			for _, c := range checks {
+				<tr>
+					<td>
+						if !c.Answered {
+							@ui.Status(ui.Off, "çalıştırılmadı")
+						} else if c.Met() {
+							@ui.Status(ui.OK, "beklendiği gibi")
+						} else {
+							@ui.Status(ui.Err, "beklenmeyen")
+						}
+					</td>
+					<td><code>{ c.String() }</code></td>
+				</tr>
+			}
+		</tbody>
+	}
+}
+
+templ k8sPolicyState(f k8sPolicyForm) {
+	if f.ReadErr != "" {
+		@ui.StatusText(ui.Err, "okunamadı", "")
+	} else if f.Stored {
+		@ui.StatusText(ui.OK, "kayıtlı", "")
+	} else {
+		@ui.StatusText(ui.Off, "kayıtlı policy yok", "")
+	}
+}
+
+templ k8sPolicyCard(title, purpose string, f k8sPolicyForm, csrfToken string) {
+	@ui.Card(ui.C{
+		ID:    "policy-" + string(f.Scope),
+		Title: title,
+		Desc: purpose + " API ve probe izinleri ayrıdır. Boş ya da okunamayan policy hiçbir hedefe izin vermez; " +
+			"loopback, link-local, metadata ve multicast adresleri her durumda reddedilir.",
+		Right: k8sPolicyState(f),
+	}) {
+		if f.ReadErr != "" {
+			@ui.Callout(ui.N{Tone: ui.Warn}) {
+				{ f.ReadErr }
+			}
+		}
+		<form method="post" action="/k8s/setup/policy">
+			@CSRFField(csrfToken)
+			@ui.HiddenFields([]ui.Hidden{{Name: "scope", Value: string(f.Scope)}})
+			@ui.Field(ui.F{Label: "Adresler", For: "addresses-" + string(f.Scope), Help: "Her satıra bir IP veya CIDR."}) {
+				@ui.Textarea(ui.TA{ID: "addresses-" + string(f.Scope), Name: "addresses", Value: f.Addresses, Rows: 3, Code: true, Placeholder: "10.0.0.0/24",
+					LinePattern: k8sCIDRLinePattern, Msg: "her satır bir IP veya CIDR olmalı (ör. 10.0.0.5 ya da 10.0.0.0/24)."})
+			}
+			@ui.Field(ui.F{Label: "Portlar", For: "ports-" + string(f.Scope), Help: "Virgülle ayrılır, 1–65535."}) {
+				@ui.Input(ui.In{ID: "ports-" + string(f.Scope), Name: "ports", Value: f.Ports, Placeholder: "443, 6443",
+					Pattern: k8sPortsPattern, Msg: "Portları virgülle yazın (ör. 443, 6443)."})
+			}
+			@ui.BtnRow() {
+				@ui.Btn(ui.B{Kind: ui.Primary, Icon: "check"}) {
+					Kaydet
+				}
+			}
+		</form>
+	}
+}
+
+// Browser-side shapes of the setup inputs; the server validates every value again.
+const (
+	k8sLabelPattern    = `[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?`
+	k8sLabelMsg        = "Küçük harf, rakam ve - kullanın (en fazla 63 karakter)."
+	k8sCIDRLinePattern = `[0-9A-Fa-f:.]+(/[0-9]{1,3})?`
+	k8sPortsPattern    = `\s*[0-9]{1,5}([\s,]+[0-9]{1,5})*\s*`
+)

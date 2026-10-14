@@ -1,0 +1,17 @@
+# oauth2_proxy: config and secret files back, then the service state it had before the installer (adopt: stopped).
+- name: "Rollback oauth2_proxy: files"
+  ansible.builtin.import_tasks: generic_phase.yml
+
+- name: "Rollback oauth2_proxy: previous state (systemd)"
+  ansible.builtin.systemd_service:
+    name: oauth2-proxy
+    state: "{{ 'started' if rollback_details.was_running | default(false) | bool else 'stopped' }}"
+    enabled: "{{ rollback_details.was_enabled | default(false) | bool }}"
+  when: oauth2_proxy_runtime == 'systemd' and install_state.phases.oauth2_proxy is defined and not ansible_check_mode
+
+- name: "Rollback oauth2_proxy: previous state (container)"
+  ansible.builtin.shell: "docker rm -f oauth2-proxy >/dev/null 2>&1 || true"
+  changed_when: true
+  when: >-
+    oauth2_proxy_runtime == 'container' and install_state.phases.oauth2_proxy is defined and not ansible_check_mode
+    and not (rollback_details.was_running | default(false) | bool)

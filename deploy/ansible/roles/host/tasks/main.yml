@@ -1,0 +1,180 @@
+# host (F6-005): idempotent version of prep-host.sh's tagcess part. A missing secret file stops the phase
+# before anything on the host changes; secrets are copied byte for byte from controller paths (no_log; a
+# trailing newline would break HMAC). Docker is added only when missing (adopt: only with confirm_add_missing).
+- name: Secret files exist on the controller (checked before any change)
+  ansible.builtin.stat:
+    path: "{{ (secret_files[item.key] | default('')) | expanduser }}"
+    get_checksum: false
+  loop: "{{ host_secret_files }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: host_secret_stat
+  delegate_to: localhost
+  become: false
+  check_mode: false
+
+- name: Stop when a required secret file is missing
+  ansible.builtin.fail:
+    msg: >-
+      Secret dosyası yok: {{ host_missing_secrets | join(', ') }}. Host'ta hiçbir şey değiştirilmedi.
+      Yolları secret_files altında ver (zitadel_key: ADR 0009 servis kullanıcısının konsoldan indirilen anahtarı).
+  vars:
+    host_missing_secrets: >-
+      {{ host_secret_stat.results | selectattr('item.required') | rejectattr('stat.exists') | map(attribute='item.key') | list }}
+  when: host_missing_secrets | length > 0
+
+- name: Backup before writing
+  ansible.builtin.include_role:
+    name: backup
+  vars:
+    backup_phase: host
+
+- name: Docker present?
+  ansible.builtin.command: docker info --format '{{ '{{' }}.ServerVersion{{ '}}' }}'
+  register: host_docker
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Docker may be added
+  ansible.builtin.set_fact:
+    host_docker_missing: "{{ host_docker.rc != 0 }}"
+    host_docker_allowed: "{{ install_mode == 'fresh' or 'docker' in (confirm_add_missing | default('') | string).split(',') }}"
+
+- name: Install Docker (missing)
+  ansible.builtin.apt:
+    name: "{{ host_docker_packages }}"
+    state: present
+    update_cache: true
+  when: host_docker_missing and host_docker_allowed
+
+- name: Docker running
+  ansible.builtin.systemd_service:
+    name: docker
+    state: started
+    enabled: true
+  when: host_docker_missing and host_docker_allowed and not ansible_check_mode
+
+- name: Docker answers
+  ansible.builtin.command: docker info --format '{{ '{{' }}.ServerVersion{{ '}}' }}'
+  changed_when: false
+  when: host_docker_missing and host_docker_allowed and not ansible_check_mode
+
+- name: Docker not added in adopt without confirmation
+  ansible.builtin.debug:
+    msg: "Docker yok ve adopt kipinde onaysız kurulmaz (confirm_add_missing=docker). app fazı Docker ister."
+  when: host_docker_missing and not host_docker_allowed
+
+- name: The groups tagcess shares exist (caddy, headscale)
+  ansible.builtin.command: "getent group {{ item }}"
+  loop: [caddy, headscale]
+  changed_when: false
+  check_mode: false
+
+- name: Directories (mount table)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop: "{{ host_dirs }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: tmpfiles entry for /run/tagcess
+  ansible.builtin.template:
+    src: tmpfiles.conf.j2
+    dest: /etc/tmpfiles.d/tagcess.conf
+    owner: root
+    group: root
+    mode: "0644"
+  register: host_tmpfiles
+
+- name: Apply the tmpfiles entry
+  ansible.builtin.command: systemd-tmpfiles --create /etc/tmpfiles.d/tagcess.conf
+  when: host_tmpfiles is changed and not ansible_check_mode
+  changed_when: true
+
+- name: Secret files (byte for byte, never shown)
+  ansible.builtin.copy:
+    src: "{{ secret_files[item.key] | expanduser }}"
+    dest: "{{ item.dest }}"
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop: "{{ host_secret_files }}"
+  when: (secret_files[item.key] | default('')) != ''
+  no_log: true
+
+- name: tagcess DNS file present?
+  ansible.builtin.stat:
+    path: "{{ tagcess_dns_records_path }}"
+  register: host_dns_stat
+
+# In --check the directory above is only planned: the seed copy is reported, not tried against a missing directory.
+- name: tagcess DNS directory present?
+  ansible.builtin.stat:
+    path: "{{ tagcess_dns_records_path | dirname }}"
+  register: host_dns_dir_stat
+
+- name: Today's Headscale records file
+  ansible.builtin.stat:
+    path: "{{ headscale_dns_records_path }}"
+  register: host_dns_source
+
+- name: Seed the tagcess DNS file from today's records (kept as they are)
+  ansible.builtin.copy:
+    src: "{{ headscale_dns_records_path }}"
+    remote_src: true
+    dest: "{{ tagcess_dns_records_path }}"
+    owner: "{{ tagcess_uid }}"
+    group: headscale
+    mode: "0640"
+  when: not host_dns_stat.stat.exists and host_dns_source.stat.exists and headscale_dns_records_path != tagcess_dns_records_path
+        and (host_dns_dir_stat.stat.exists or not ansible_check_mode)
+
+- name: Seed an empty tagcess DNS file (no records yet)
+  ansible.builtin.copy:
+    content: "[]\n"
+    dest: "{{ tagcess_dns_records_path }}"
+    owner: "{{ tagcess_uid }}"
+    group: headscale
+    mode: "0640"
+  when: not host_dns_stat.stat.exists and (not host_dns_source.stat.exists or headscale_dns_records_path == tagcess_dns_records_path)
+        and (host_dns_dir_stat.stat.exists or not ansible_check_mode)
+
+- name: tagcess DNS file (plan only, its directory is created by this phase)
+  ansible.builtin.debug:
+    msg: "--check: {{ tagcess_dns_records_path }} bu fazda {{ headscale_dns_records_path if host_dns_source.stat.exists else 'boş liste' }} ile oluşturulur"
+  when: ansible_check_mode and not host_dns_dir_stat.stat.exists
+
+- name: tagcess DNS file owner and mode
+  ansible.builtin.file:
+    path: "{{ tagcess_dns_records_path }}"
+    owner: "{{ tagcess_uid }}"
+    group: headscale
+    mode: "0640"
+  when: not ansible_check_mode
+
+- name: Headscale can read the DNS file
+  ansible.builtin.command: "runuser -u headscale -- cat {{ tagcess_dns_records_path }}"
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Guide items of host
+  ansible.builtin.set_fact:
+    guide_items_host: >-
+      {%- set g = [] -%}
+      {%- set opt = host_secret_stat.results | rejectattr('item.required') | rejectattr('stat.exists') | map(attribute='item.key') | list -%}
+      {%- if opt -%}
+        {%- set _ = g.append({'id': 'host-optional-secrets', 'title': 'İsteğe bağlı secret dosyaları yok',
+            'steps': ['Şunlar verilmedi: ' ~ (opt | join(', ')) ~ '. groups_signing_key yoksa tagcess groups claim ucunu kapalı başlatır (Actions v2 groups target oluşunca dosyayı ver ve host fazını yeniden koş).']}) -%}
+      {%- endif -%}
+      {%- if host_docker_missing and not host_docker_allowed -%}
+        {%- set _ = g.append({'id': 'host-docker-missing', 'title': 'Docker eksik (adopt)', 'blocking': true,
+            'steps': ['Host\'ta Docker yok; adopt kipinde yalnız onayla eklenir: install.sh host fazında Docker\'ı ayrıca sorar (confirm_add_missing=docker).']}) -%}
+      {%- endif -%}
+      {{ g }}

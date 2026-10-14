@@ -1,0 +1,17 @@
+# Test helper (F6-008): the verify role alone on the controller with fake probes.
+- name: Verify alone
+  hosts: vpn
+  gather_facts: false
+  roles:
+    - role: config
+      tags: [always]
+  tasks:
+    - name: Verify
+      ansible.builtin.import_role:
+        name: verify
+    - name: Verify guide
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: verify
+        guide_items: "{{ guide_items_verify | default([]) }}"

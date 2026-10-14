@@ -1,0 +1,103 @@
+# tagcess installer settings (F6 öneri 5 [Ö]). Every environment-specific value is a variable; the same roles
+# serve the lab (fresh) and an existing installation (adopt). These are role defaults (the lowest precedence), so the
+# environment file install.sh writes OUTSIDE the repo (~/.config/tagcess-install/<env>/inventory.yml, group
+# `all` vars) overrides them, and phase outputs (zitadel.json) override both.
+#
+# Secrets: only PATHS, never values (öneri 4). Keys that name a secret end in _file / live under
+# secret_files; TestInstaller_NoInlineSecrets fails on anything else.
+
+# --- Required: empty stops the run before its first task (TestInstaller_RequiredVarsAssert) ------------
+install_mode: ""        # fresh | adopt: preflight proposes, the developer confirms (decision 8 [K])
+config_require_mode: true   # restore.yml/rollback.yml do not need install_mode
+install_env: ""         # environment name; selects ~/.config/tagcess-install/<install_env>/
+tagcess_domain: ""      # e.g. lab.example.com (lab) / example.com (adopt)
+
+# --- Controller-side state (install.sh, guide, reports; never on the host) -----------------------------
+# The repository this installer runs from (every role lives in deploy/ansible/roles/<role>).
+tagcess_repo_root: "{{ (role_path ~ '/../../../..') | realpath }}"
+install_config_home: "{{ lookup('ansible.builtin.env', 'XDG_CONFIG_HOME') | default(lookup('ansible.builtin.env', 'HOME') ~ '/.config', true) }}"
+install_env_dir: "{{ install_config_home }}/tagcess-install/{{ install_env }}"
+
+# --- Names and addresses ------------------------------------------------------------------------------
+hs_host: "hs.{{ tagcess_domain }}"
+auth_host: "auth.{{ tagcess_domain }}"
+tagcess_host: "tagcess.{{ tagcess_domain }}"
+zitadel_issuer: "https://{{ auth_host }}"
+acme_email: "admin@{{ tagcess_domain }}"
+vpn_host: "{{ inventory_hostname }}"   # the VPN host's name in the inventory (ssh target)
+k8s_host: ""                           # fresh only, and only with a `k8s` inventory group (Ansible never reaches k8s-host)
+vpn_tailnet_ip: ""                     # empty: preflight reads it from `tailscale ip -4`
+k8s_tailnet_ip: "100.64.0.5"
+vpn_private_cidr: ""                   # fresh: the subnet route vpn_host advertises (lab 10.0.0.0/16)
+k8s_target_addr: "https://{{ k8s_tailnet_ip }}"
+traefik_entrypoint: websecure          # adopt: internal
+traefik_port: 443                      # adopt: 8443
+k8s_api_url: "https://{{ k8s_tailnet_ip }}:6443"
+k8s_tls_server_name: kubernetes
+k8s_context: ""                        # the developer's own kubectl context (k8s_access prints it, never uses it)
+
+# --- Caddy --------------------------------------------------------------------------------------------
+caddy_dir: /etc/caddy
+caddyfile_path: "{{ caddy_dir }}/Caddyfile"
+caddy_sites_dir: ""                    # adopt: /etc/caddy/sites (import sites/*.caddy); lab: "" (own import line)
+caddy_admin_url: http://127.0.0.1:2019
+caddy_version: "2.8"                   # the major.minor line preflight expects (adopt target 2.8.4)
+cert_names: []                         # /etc/letsencrypt/live/<name>/ certificate groups
+app_allowed_domains: "{{ cert_names if cert_names | length > 0 else [tagcess_domain] }}"   # tagcess sites.allowed_domains, cookie domains
+cert_min_days: 14                      # preflight blocks when a certificate expires sooner
+
+# --- Headscale ----------------------------------------------------------------------------------------
+headscale_version: "0.29.4"
+headscale_config: /etc/headscale/config.yaml
+headscale_policy_path: /etc/headscale/policy.hujson
+headscale_db_path: /var/lib/headscale/db.sqlite
+headscale_socket: /var/run/headscale/headscale.sock
+headscale_health_url: http://127.0.0.1:8080/health
+headscale_dns_records_path: /etc/headscale/extra-records.json   # today's records file (adopt); moved by hs_dns_path
+tagcess_dns_records_path: /var/lib/tagcess/dns/extra-records.json
+headscale_hook_port: 9443
+hs_vpn_tag: tag:vpn-server      # the VPN host's node tag (tailscale_join, hs_tags, initial policy)
+hs_k8s_tag: tag:k8s             # the k8s node's tag
+
+# --- oauth2-proxy -------------------------------------------------------------------------------------
+oauth2_proxy_runtime: container        # container (lab/fresh) | systemd (existing binary)
+oauth2_proxy_dir: /etc/oauth2-proxy
+oauth2_proxy_ping_url: http://127.0.0.1:4180/ping
+
+# --- Zitadel ------------------------------------------------------------------------------------------
+zitadel_install_enabled: false         # fresh/lab only (F6-012); never in an existing installation
+zitadel_discovery_url: "{{ zitadel_issuer }}/.well-known/openid-configuration"
+zitadel_validate_certs: true
+zitadel_kube_context: ""
+zitadel_project_name: vpn
+zitadel_seed_tool: ""            # the adopt tool; empty: built from this repo into <env>/bin (zitadel_seed, verify)
+zitadel_admin_key_file: ""       # administrator JWT profile key JSON (path; existing installation)
+zitadel_admin_pat_file: ""       # administrator PAT file (path; fresh lab: zitadel_install extracts it)
+zitadel_project_id: ""          # filled from <env>/zitadel.json (zitadel_seed) unless set here
+oauth2_proxy_client_id: ""      # oauth2-proxy app client id (zitadel_seed); tagcess gate.client_id
+headscale_oidc_client_id: ""    # headscale app client id (zitadel_seed); headscale_oidc phase
+
+# --- tagcess ------------------------------------------------------------------------------------------
+tagcess_uid: 10001
+tagcess_image: tagcess:latest
+site_seed_file: ""                     # controller path of the site seed JSON (adopt: outside the repo)
+app_zitadel_internal_sources: []        # the zitadel template's internal sources (app config, caddy_install bootstrap)
+
+# --- Backups (F6-003) ---------------------------------------------------------------------------------
+backup_root: /var/backups/tagcess-install
+backup_keep: 10
+install_state_dir: /var/lib/tagcess-install
+disk_min_free_mb: 500
+
+# --- Secret files: name -> controller path (öneri 4) ----------------------------------------------------
+secret_files: {}
+#   webhook_signing_key: ~/.config/tagcess-install/lab/secrets/webhook-signing-key
+#   groups_signing_key:  ...
+#   zitadel_key:         ...  (ADR 0009 service user JWT key, created in the console: a guide step)
+#   oauth2_proxy_client_secret, oauth2_proxy_cookie_secret, headscale_oidc_client_secret, cloudflare_token
+
+# --- Untouchables: detected and reported, never changed (öneri 10) ------------------------------------
+untouched_components: [headplane, wireguard, wireguard-ui, dnsmasq, nftables]
+
+# --- Filled while running (do not set) -------------------------------------------------------------------
+backup_ids: {}            # phase -> backup id taken before it (backup role)

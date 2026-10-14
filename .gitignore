@@ -1,0 +1,27 @@
+/bin/
+/dist/
+*.db
+*.sqlite
+*.sqlite-*
+.env
+*.env
+/tmp/
+.claude/settings.local.json
+coverage.out
+.serena/
+/test/compose/.secrets
+/test/compose/.ui/
+/test/compose/.hostlab-ui/
+/test/compose/dns/
+
+# local design experiments
+.archive/
+.playwright-mcp/
+.DS_Store
+
+# Python bytecode (the installer roles ship small python helpers)
+__pycache__/
+*.pyc
+
+# agent worktrees
+.claude/worktrees/

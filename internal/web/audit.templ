@@ -1,0 +1,113 @@
+package web
+
+import (
+	"strconv"
+	"time"
+
+	"github.com/nesiler/tagcess/internal/audit"
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// AuditPage renders the read-only audit log: a filter form, the records newest first and pagination
+// links. Every value is escaped by templ, so an actor, event or diff value can never inject markup.
+templ AuditPage(events []audit.Event, actor string, event string, page int, hasNext bool) {
+	@ui.PageHead(ui.H{Title: "Audit", Sub: "Kim neyi ne zaman değiştirdi; kayıtlar silinemez."})
+	@ui.Card(ui.C{}) {
+		<form method="get" action="/audit" aria-label="Audit filtresi">
+			@ui.Inline() {
+				@ui.Input(ui.In{ID: "actor", Name: "actor", Value: actor, Label: "Actor", Placeholder: "Actor", Options: auditDistinct(events, func(e audit.Event) string { return e.Actor })})
+				@ui.Input(ui.In{ID: "event", Name: "event", Value: event, Label: "Olay türü", Placeholder: "Olay türü", Options: auditDistinct(events, func(e audit.Event) string { return e.Event })})
+				@ui.Btn(ui.B{Kind: ui.Primary, Icon: "search"}) {
+					Filtrele
+				}
+			}
+		</form>
+	}
+	if len(events) == 0 {
+		@ui.Card(ui.C{}) {
+			@ui.Empty("inbox", "Kayıt yok.", "Filtreyi değiştirin ya da yeni bir olay bekleyin.")
+		}
+	} else {
+		@ui.TableFoot(ui.Pager(ui.P{Info: "Sayfa " + strconv.Itoa(page), Prev: auditPrevURL(actor, event, page), Next: auditNextURL(actor, event, page, hasNext)})) {
+			<thead>
+				<tr>
+					<th scope="col">Zaman (UTC)</th>
+					<th scope="col">Actor</th>
+					<th scope="col">Olay</th>
+					<th scope="col">Hedef</th>
+					<th scope="col">Sonuç</th>
+					<th scope="col">Değişiklik</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, e := range events {
+					<tr>
+						<td><time datetime={ e.At.Format(time.RFC3339) }>{ e.At.Format("2006-01-02 15:04:05") }</time></td>
+						<td>{ e.Actor }</td>
+						<td><code>{ e.Event }</code></td>
+						<td>{ e.Target }</td>
+						<td data-result={ e.Result }>
+							@ui.StatusText(auditResultTone(e.Result), auditResultLabel(e.Result), "")
+						</td>
+						<td>
+							if len(e.Diff) > 0 {
+								<details>
+									<summary>{ strconv.Itoa(len(e.Diff)) } alan</summary>
+									<ul>
+										for _, c := range e.Diff {
+											<li>{ c.Field }: { c.Before } → { c.After }</li>
+										}
+									</ul>
+								</details>
+							}
+						</td>
+					</tr>
+				}
+			</tbody>
+		}
+	}
+}
+
+// auditPrevURL is the page link once step back, empty on the first page so the pager disables it.
+func auditPrevURL(actor, event string, page int) string {
+	if page <= 1 {
+		return ""
+	}
+	return auditPageURL(actor, event, page-1)
+}
+
+// auditNextURL is the page link one step forward, empty when there is no next page.
+func auditNextURL(actor, event string, page int, hasNext bool) string {
+	if !hasNext {
+		return ""
+	}
+	return auditPageURL(actor, event, page+1)
+}
+
+// auditDistinct are the distinct values of one column on this page, offered as filter suggestions.
+func auditDistinct(events []audit.Event, field func(audit.Event) string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, e := range events {
+		if v := field(e); v != "" && !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// auditResultTone colours an audit result: done is good, a failure is an error, everything else
+// (requested, started, dry-run ...) stays neutral.
+func auditResultTone(result string) ui.Tone {
+	switch result {
+	case "applied", "ok", "succeeded", "approved":
+		return ui.OK
+	case "failed", "error", "rolled_back", "interrupted", "restore_failed":
+		return ui.Err
+	case "blocked", "rejected", "denied", "dry_run", "held", "needs_reapproval", "stale", "unknown", "quarantined", "warning":
+		return ui.Warn
+	default:
+		return ui.Neutral
+	}
+}

@@ -1,0 +1,504 @@
+# tagcess installer: every phase of the selected install_mode, in the order of group_vars/all/phases.yml
+# (F6 öneri 8 [Ö]; TestSiteYml_PhaseOrderMatchesPhasesYml keeps the two equal). Each phase is a tag, so
+# install.sh runs one phase per call (--tags <phase>). config, the host state and preflight run on every call
+# (tags: always): a missing setting, a preflight blocker or a mode conflict stops the run before any phase
+# writes (F6-002). Every phase ends with its guide file (F6-001) and, for a writing phase, a host state
+# record with the backup id it took first (F6-008). The whole playbook supports --check --diff.
+- name: Tagcess installer
+  hosts: vpn
+  gather_facts: false
+  any_errors_fatal: true
+  pre_tasks:
+    - name: Settings
+      ansible.builtin.import_role:
+        name: config
+      tags: [always]
+    - name: Installer state on the host
+      ansible.builtin.import_role:
+        name: state
+        tasks_from: load
+      tags: [always]
+    - name: Preflight (read-only) and install_mode gate
+      ansible.builtin.import_role:
+        name: preflight
+      tags: [always]
+    - name: "Phase preflight: guide"
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: preflight
+        guide_items: "{{ guide_items_preflight | default([]) }}"
+      tags: [always]
+  tasks:
+    - name: "Phase certbot"
+      ansible.builtin.import_role:
+        name: certbot
+      vars:
+        phase_name: certbot
+      tags: [certbot]
+      when: install_mode in tagcess_phase_modes['certbot']
+    - name: "Phase certbot: guide"
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: certbot
+        guide_items: "{{ guide_items_certbot | default([]) }}"
+      tags: [certbot]
+      when: install_mode in tagcess_phase_modes['certbot']
+    - name: "Phase certbot: state"
+      ansible.builtin.import_role:
+        name: state
+        tasks_from: record
+      vars:
+        state_phase: certbot
+      tags: [certbot]
+      when: install_mode in tagcess_phase_modes['certbot']
+    - name: "Phase headscale_install"
+      ansible.builtin.import_role:
+        name: headscale_install
+      vars:
+        phase_name: headscale_install
+      tags: [headscale_install]
+      when: install_mode in tagcess_phase_modes['headscale_install']
+    - name: "Phase headscale_install: guide"
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: headscale_install
+        guide_items: "{{ guide_items_headscale_install | default([]) }}"
+      tags: [headscale_install]
+      when: install_mode in tagcess_phase_modes['headscale_install']
+    - name: "Phase headscale_install: state"
+      ansible.builtin.import_role:
+        name: state
+        tasks_from: record
+      vars:
+        state_phase: headscale_install
+      tags: [headscale_install]
+      when: install_mode in tagcess_phase_modes['headscale_install']
+    - name: "Phase caddy_install"
+      ansible.builtin.import_role:
+        name: caddy_install
+      vars:
+        phase_name: caddy_install
+      tags: [caddy_install]
+      when: install_mode in tagcess_phase_modes['caddy_install']
+    - name: "Phase caddy_install: guide"
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: caddy_install
+        guide_items: "{{ guide_items_caddy_install | default([]) }}"
+      tags: [caddy_install]
+      when: install_mode in tagcess_phase_modes['caddy_install']
+    - name: "Phase caddy_install: state"
+      ansible.builtin.import_role:
+        name: state
+        tasks_from: record
+      vars:
+        state_phase: caddy_install
+      tags: [caddy_install]
+      when: install_mode in tagcess_phase_modes['caddy_install']
+    - name: "Phase tailscale_join"
+      ansible.builtin.import_role:
+        name: tailscale_join
+      vars:
+        phase_name: tailscale_join
+      tags: [tailscale_join]
+      when: install_mode in tagcess_phase_modes['tailscale_join']
+    - name: "Phase tailscale_join: guide"
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: tailscale_join
+        guide_items: "{{ guide_items_tailscale_join | default([]) }}"
+      tags: [tailscale_join]
+      when: install_mode in tagcess_phase_modes['tailscale_join']
+    - name: "Phase tailscale_join: state"
+      ansible.builtin.import_role:
+        name: state
+        tasks_from: record
+      vars:
+        state_phase: tailscale_join
+      tags: [tailscale_join]
+      when: install_mode in tagcess_phase_modes['tailscale_join']
+    - name: "Phase zitadel_install"
+      ansible.builtin.import_role:
+        name: zitadel_install
+      vars:
+        phase_name: zitadel_install
+      tags: [zitadel_install]
+      when: install_mode in tagcess_phase_modes['zitadel_install']
+    - name: "Phase zitadel_install: guide"
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: zitadel_install
+        guide_items: "{{ guide_items_zitadel_install | default([]) }}"
+      tags: [zitadel_install]
+      when: install_mode in tagcess_phase_modes['zitadel_install']
+    - name: "Phase zitadel_install: state"
+      ansible.builtin.import_role:
+        name: state
+        tasks_from: record
+      vars:
+        state_phase: zitadel_install
+      tags: [zitadel_install]
+      when: install_mode in tagcess_phase_modes['zitadel_install']
+    - name: "Phase zitadel_seed"
+      ansible.builtin.import_role:
+        name: zitadel_seed
+      vars:
+        phase_name: zitadel_seed
+      tags: [zitadel_seed]
+      when: install_mode in tagcess_phase_modes['zitadel_seed']
+    - name: "Phase zitadel_seed: guide"
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: zitadel_seed
+        guide_items: "{{ guide_items_zitadel_seed | default([]) }}"
+      tags: [zitadel_seed]
+      when: install_mode in tagcess_phase_modes['zitadel_seed']
+    - name: "Phase zitadel_seed: state"
+      ansible.builtin.import_role:
+        name: state
+        tasks_from: record
+      vars:
+        state_phase: zitadel_seed
+      tags: [zitadel_seed]
+      when: install_mode in tagcess_phase_modes['zitadel_seed']
+    - name: "Phase headscale_oidc"
+      ansible.builtin.import_role:
+        name: headscale_install
+        tasks_from: oidc
+      vars:
+        phase_name: headscale_oidc
+      tags: [headscale_oidc]
+      when: install_mode in tagcess_phase_modes['headscale_oidc']
+    - name: "Phase headscale_oidc: guide"
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: headscale_oidc
+        guide_items: "{{ guide_items_headscale_oidc | default([]) }}"
+      tags: [headscale_oidc]
+      when: install_mode in tagcess_phase_modes['headscale_oidc']
+    - name: "Phase headscale_oidc: state"
+      ansible.builtin.import_role:
+        name: state
+        tasks_from: record
+      vars:
+        state_phase: headscale_oidc
+      tags: [headscale_oidc]
+      when: install_mode in tagcess_phase_modes['headscale_oidc']
+    - name: "Phase backup"
+      ansible.builtin.import_role:
+        name: backup
+      vars:
+        phase_name: backup
+      tags: [backup]
+      when: install_mode in tagcess_phase_modes['backup']
+    - name: "Phase backup: guide"
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: backup
+        guide_items: "{{ guide_items_backup | default([]) }}"
+      tags: [backup]
+      when: install_mode in tagcess_phase_modes['backup']
+    - name: "Phase backup: state"
+      ansible.builtin.import_role:
+        name: state
+        tasks_from: record
+      vars:
+        state_phase: backup
+      tags: [backup]
+      when: install_mode in tagcess_phase_modes['backup']
+    - name: "Phase host"
+      ansible.builtin.import_role:
+        name: host
+      vars:
+        phase_name: host
+      tags: [host]
+      when: install_mode in tagcess_phase_modes['host']
+    - name: "Phase host: guide"
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: host
+        guide_items: "{{ guide_items_host | default([]) }}"
+      tags: [host]
+      when: install_mode in tagcess_phase_modes['host']
+    - name: "Phase host: state"
+      ansible.builtin.import_role:
+        name: state
+        tasks_from: record
+      vars:
+        state_phase: host
+      tags: [host]
+      when: install_mode in tagcess_phase_modes['host']
+    - name: "Phase host_system"
+      ansible.builtin.import_role:
+        name: host_system
+      vars:
+        phase_name: host_system
+      tags: [host_system]
+      when: install_mode in tagcess_phase_modes['host_system']
+    - name: "Phase host_system: guide"
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: host_system
+        guide_items: "{{ guide_items_host_system | default([]) }}"
+      tags: [host_system]
+      when: install_mode in tagcess_phase_modes['host_system']
+    - name: "Phase host_system: state"
+      ansible.builtin.import_role:
+        name: state
+        tasks_from: record
+      vars:
+        state_phase: host_system
+      tags: [host_system]
+      when: install_mode in tagcess_phase_modes['host_system'] and (confirm_host_system | default('') | string) == 'yes'
+    - name: "Phase hshelper"
+      ansible.builtin.import_role:
+        name: hshelper
+      vars:
+        phase_name: hshelper
+      tags: [hshelper]
+      when: install_mode in tagcess_phase_modes['hshelper']
+    - name: "Phase hshelper: guide"
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: hshelper
+        guide_items: "{{ guide_items_hshelper | default([]) }}"
+      tags: [hshelper]
+      when: install_mode in tagcess_phase_modes['hshelper']
+    - name: "Phase hshelper: state"
+      ansible.builtin.import_role:
+        name: state
+        tasks_from: record
+      vars:
+        state_phase: hshelper
+      tags: [hshelper]
+      when: install_mode in tagcess_phase_modes['hshelper']
+    - name: "Phase oauth2_proxy"
+      ansible.builtin.import_role:
+        name: oauth2_proxy
+      vars:
+        phase_name: oauth2_proxy
+      tags: [oauth2_proxy]
+      when: install_mode in tagcess_phase_modes['oauth2_proxy']
+    - name: "Phase oauth2_proxy: guide"
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: oauth2_proxy
+        guide_items: "{{ guide_items_oauth2_proxy | default([]) }}"
+      tags: [oauth2_proxy]
+      when: install_mode in tagcess_phase_modes['oauth2_proxy']
+    - name: "Phase oauth2_proxy: state"
+      ansible.builtin.import_role:
+        name: state
+        tasks_from: record
+      vars:
+        state_phase: oauth2_proxy
+      tags: [oauth2_proxy]
+      when: install_mode in tagcess_phase_modes['oauth2_proxy']
+    - name: "Phase caddy_ui"
+      ansible.builtin.import_role:
+        name: caddy_ui
+      vars:
+        phase_name: caddy_ui
+      tags: [caddy_ui]
+      when: install_mode in tagcess_phase_modes['caddy_ui']
+    - name: "Phase caddy_ui: guide"
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: caddy_ui
+        guide_items: "{{ guide_items_caddy_ui | default([]) }}"
+      tags: [caddy_ui]
+      when: install_mode in tagcess_phase_modes['caddy_ui']
+    - name: "Phase caddy_ui: state"
+      ansible.builtin.import_role:
+        name: state
+        tasks_from: record
+      vars:
+        state_phase: caddy_ui
+      tags: [caddy_ui]
+      when: install_mode in tagcess_phase_modes['caddy_ui']
+    - name: "Phase app"
+      ansible.builtin.import_role:
+        name: app
+      vars:
+        phase_name: app
+      tags: [app]
+      when: install_mode in tagcess_phase_modes['app']
+    - name: "Phase app: guide"
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: app
+        guide_items: "{{ guide_items_app | default([]) }}"
+      tags: [app]
+      when: install_mode in tagcess_phase_modes['app']
+    - name: "Phase app: state"
+      ansible.builtin.import_role:
+        name: state
+        tasks_from: record
+      vars:
+        state_phase: app
+      tags: [app]
+      when: install_mode in tagcess_phase_modes['app']
+    - name: "Phase verify"
+      ansible.builtin.import_role:
+        name: verify
+      vars:
+        phase_name: verify
+      tags: [verify]
+      when: install_mode in tagcess_phase_modes['verify']
+    - name: "Phase verify: guide"
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: verify
+        guide_items: "{{ guide_items_verify | default([]) }}"
+      tags: [verify]
+      when: install_mode in tagcess_phase_modes['verify']
+    - name: "Phase hs_tags"
+      ansible.builtin.import_role:
+        name: headscale_adopt
+        tasks_from: tags
+      vars:
+        phase_name: hs_tags
+      tags: [hs_tags]
+      when: install_mode in tagcess_phase_modes['hs_tags']
+    - name: "Phase hs_tags: guide"
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: hs_tags
+        guide_items: "{{ guide_items_hs_tags | default([]) }}"
+      tags: [hs_tags]
+      when: install_mode in tagcess_phase_modes['hs_tags']
+    - name: "Phase hs_tags: state"
+      ansible.builtin.import_role:
+        name: state
+        tasks_from: record
+      vars:
+        state_phase: hs_tags
+      tags: [hs_tags]
+      when: install_mode in tagcess_phase_modes['hs_tags'] and (confirm_hs_tags | default('') | string) == 'yes'
+    - name: "Phase hs_hook_acl"
+      ansible.builtin.import_role:
+        name: headscale_adopt
+        tasks_from: hook_acl
+      vars:
+        phase_name: hs_hook_acl
+      tags: [hs_hook_acl]
+      when: install_mode in tagcess_phase_modes['hs_hook_acl']
+    - name: "Phase hs_hook_acl: guide"
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: hs_hook_acl
+        guide_items: "{{ guide_items_hs_hook_acl | default([]) }}"
+      tags: [hs_hook_acl]
+      when: install_mode in tagcess_phase_modes['hs_hook_acl']
+    - name: "Phase hs_hook_acl: state"
+      ansible.builtin.import_role:
+        name: state
+        tasks_from: record
+      vars:
+        state_phase: hs_hook_acl
+      tags: [hs_hook_acl]
+      when: install_mode in tagcess_phase_modes['hs_hook_acl'] and (confirm_hs_hook_acl | default('') | string) == 'yes'
+    - name: "Phase hs_dns_path"
+      ansible.builtin.import_role:
+        name: headscale_adopt
+        tasks_from: dns_path
+      vars:
+        phase_name: hs_dns_path
+      tags: [hs_dns_path]
+      when: install_mode in tagcess_phase_modes['hs_dns_path']
+    - name: "Phase hs_dns_path: guide"
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: hs_dns_path
+        guide_items: "{{ guide_items_hs_dns_path | default([]) }}"
+      tags: [hs_dns_path]
+      when: install_mode in tagcess_phase_modes['hs_dns_path']
+    - name: "Phase hs_dns_path: state"
+      ansible.builtin.import_role:
+        name: state
+        tasks_from: record
+      vars:
+        state_phase: hs_dns_path
+      tags: [hs_dns_path]
+      when: install_mode in tagcess_phase_modes['hs_dns_path'] and (confirm_hs_dns_path | default('') | string) == 'yes'
+    - name: "Phase g02"
+      ansible.builtin.import_role:
+        name: headscale_adopt
+        tasks_from: g02
+      vars:
+        phase_name: g02
+      tags: [g02]
+      when: install_mode in tagcess_phase_modes['g02']
+    - name: "Phase g02: guide"
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: g02
+        guide_items: "{{ guide_items_g02 | default([]) }}"
+      tags: [g02]
+      when: install_mode in tagcess_phase_modes['g02']
+    - name: "Phase g02: state"
+      ansible.builtin.import_role:
+        name: state
+        tasks_from: record
+      vars:
+        state_phase: g02
+      tags: [g02]
+      when: install_mode in tagcess_phase_modes['g02'] and (confirm_g02 | default('') | string) == 'yes'
+    - name: "Phase k8s_access"
+      ansible.builtin.import_role:
+        name: k8s_access
+      vars:
+        phase_name: k8s_access
+      tags: [k8s_access]
+      when: install_mode in tagcess_phase_modes['k8s_access']
+    - name: "Phase k8s_access: guide"
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: k8s_access
+        guide_items: "{{ guide_items_k8s_access | default([]) }}"
+      tags: [k8s_access]
+      when: install_mode in tagcess_phase_modes['k8s_access']
+    - name: "Phase k8s_access: state"
+      ansible.builtin.import_role:
+        name: state
+        tasks_from: record
+      vars:
+        state_phase: k8s_access
+      tags: [k8s_access]
+      when: install_mode in tagcess_phase_modes['k8s_access']
+    - name: "Phase verify_final"
+      ansible.builtin.import_role:
+        name: verify
+      vars:
+        phase_name: verify_final
+      tags: [verify_final]
+      when: install_mode in tagcess_phase_modes['verify_final']
+    - name: "Phase verify_final: guide"
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: verify_final
+        guide_items: "{{ guide_items_verify_final | default([]) }}"
+      tags: [verify_final]
+      when: install_mode in tagcess_phase_modes['verify_final']

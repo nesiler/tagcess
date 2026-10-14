@@ -1,0 +1,5 @@
+docs.c.example.test {
+	# Docs API
+	@api header Authorization *
+	import vpn_site_api c.example.test devops,developer,standart
+}

@@ -1,0 +1,150 @@
+# Adopt-shaped Caddyfile for the F6 adopt test target (example.test names; no real host, IP or secret).
+# A synthetic file with the layout of a typical existing installation: snippet names, branch order and a
+# suspended role check. It is not a copy of any real file. Role control is suspended in this shape: (rol_kontrolu)
+# only imports k8s, the original flow is kept in (rol_kontrolu_acik).
+{
+	email admin@c.example.test
+}
+
+# --- Ortak parçalar ---------------------------------------------------------
+
+# k8s Traefik'in iç kapısına (internal:8443) Tailscale üzerinden
+(k8s) {
+	reverse_proxy https://100.64.0.5:8443 {
+		header_up Host {http.request.host}
+		header_up X-Forwarded-Host {http.request.host}
+		header_up X-Forwarded-Proto https
+		header_up X-Forwarded-Port 443
+
+		transport http {
+			tls_insecure_skip_verify
+		}
+	}
+}
+
+# Kaynaklar: Tailscale, ve serbest geçen WireGuard ağı + sunucuların kendi adresleri
+(kaynaklar) {
+	@tailnet remote_ip 100.64.0.0/10
+	@serbest remote_ip 10.8.0.0/24 127.0.0.1/32 ::1/128 192.0.2.10/32 2001:db8:10::/64 192.0.2.20/32 2001:db8:20::/64
+}
+
+# Rol kontrolü (açık hali). Kullanım: import rol_kontrolu_acik <rol1,rol2,...>
+(rol_kontrolu_acik) {
+	handle /oauth2/* {
+		reverse_proxy 127.0.0.1:4180
+	}
+	handle {
+		forward_auth 127.0.0.1:4180 {
+			uri /oauth2/auth?allowed_groups={args[0]}
+			@giris_yok status 401
+			handle_response @giris_yok {
+				redir * /oauth2/start?rd={scheme}://{host}{uri}
+			}
+		}
+		import k8s
+	}
+}
+
+# 2026-09-30: rol kontrolü ASKIDA. Geri açmak için gövde: import rol_kontrolu_acik {args[0]}
+(rol_kontrolu) {
+	import k8s
+}
+
+# Rol kontrollü iç site. Kullanım: import vpn_site <sertifika-adı> <rol1,rol2,...>
+(vpn_site) {
+	tls /etc/letsencrypt/live/{args[0]}/fullchain.pem /etc/letsencrypt/live/{args[0]}/privkey.pem
+	import kaynaklar
+
+	handle @tailnet {
+		import rol_kontrolu {args[1]}
+	}
+	handle @serbest {
+		import k8s
+	}
+	handle {
+		respond 403
+	}
+}
+
+# vpn_site + Tailscale'den gelen @api istekleri (token'lı) rol kontrolüne girmez.
+# Kullanım: sitede @api tanımla, sonra import vpn_site_api <sertifika-adı> <rol1,rol2,...>
+(vpn_site_api) {
+	tls /etc/letsencrypt/live/{args[0]}/fullchain.pem /etc/letsencrypt/live/{args[0]}/privkey.pem
+	import kaynaklar
+
+	handle @tailnet {
+		handle @api {
+			import k8s
+		}
+		handle {
+			import rol_kontrolu {args[1]}
+		}
+	}
+	handle @serbest {
+		import k8s
+	}
+	handle {
+		respond 403
+	}
+}
+
+# Rol kontrolsüz iç site: Tailscale ve serbest kaynaklar geçer, diğerleri 403.
+# Kullanım: import vpn_only <sertifika-adı>
+(vpn_only) {
+	tls /etc/letsencrypt/live/{args[0]}/fullchain.pem /etc/letsencrypt/live/{args[0]}/privkey.pem
+	import kaynaklar
+
+	handle @tailnet {
+		import k8s
+	}
+	handle @serbest {
+		import k8s
+	}
+	handle {
+		respond 403
+	}
+}
+
+# --- Sistem siteleri ---------------------------------------------------------
+
+# Zitadel: internete yalnız giriş akışı açık; konsol ve API yalnız VPN'den ve kendi sunucularımızdan.
+auth.c.example.test {
+	tls /etc/letsencrypt/live/c.example.test/fullchain.pem /etc/letsencrypt/live/c.example.test/privkey.pem
+
+	import kaynaklar
+
+	@giris path /.well-known/* /oauth/v2/* /oidc/v1/* /ui/v2/login /ui/v2/login/* /ui/login /ui/login/* /assets/v1/*
+
+	handle @tailnet {
+		import k8s
+	}
+	handle @serbest {
+		import k8s
+	}
+	handle @giris {
+		import k8s
+	}
+
+	handle {
+		respond "Forbidden" 403
+	}
+}
+
+hs.c.example.test {
+	# Headplane is intentionally exposed at Headscale's supported /admin prefix.
+	handle /admin* {
+		reverse_proxy 127.0.0.1:3000
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8080
+	}
+}
+
+# wireguard-ui
+vpn.c.example.test {
+	reverse_proxy [::1]:5000
+}
+
+# --- İç siteler: bir dosyada bir site --------------------------------------
+import sites/*.caddy

@@ -1,0 +1,18 @@
+# headscale_install (F6-012): fresh mode installs the pinned Headscale .deb (sha256 checked), its config and the
+# initial file-mode policy. An existing Headscale this installer did not install is adopted untouched. The
+# headscale_oidc phase (tasks/oidc.yml) adds the OIDC block once zitadel_seed has made the client.
+headscale_deb_sha256:   # GitHub release v0.29.4 (same pins as test/adopttarget/Dockerfile)
+  amd64: 1f65364716ae1fcc3845b1a65a47583469022e9c6f194dfdfeb25403f89f0841
+  arm64: 021a4aeb2106d09c0e6fb5f936acffcbcdea213ef8882b19ea91b03783e1f816
+headscale_deb_url: "https://github.com/juanfont/headscale/releases/download/v{{ headscale_version }}/headscale_{{ headscale_version }}_linux_{{ hs_install_arch }}.deb"
+headscale_download_dir: /var/cache/tagcess-install
+headscale_server_url: "https://{{ hs_host }}"
+headscale_base_domain: "ts.{{ tagcess_domain }}"   # MagicDNS base domain (must differ from server_url's domain)
+headscale_nameservers: [1.1.1.1, 9.9.9.9]
+headscale_prefix_v4: 100.64.0.0/10
+headscale_prefix_v6: fd7a:115c:a1e0::/48
+headscale_derp_ipv4: ""          # the VPN host's public IPv4 for the embedded DERP (empty: Headscale detects)
+headscale_policy_devops: []      # members of group:devops in the initial policy (Zitadel e-mails, "user@")
+headscale_oidc_only_start_if_available: false   # [Ö] Headscale keeps running when Zitadel is down (adopt setting)
+headscale_oidc_scope: [openid, profile, email]
+headscale_oidc_secret_path: /etc/headscale/oidc_client_secret

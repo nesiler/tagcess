@@ -1,0 +1,8 @@
+# Placeholder for the existing installation's Headplane (F6 adopt test target): the installer must detect it and never
+# touch it. No API key is stored here.
+server:
+  host: 127.0.0.1
+  port: 3000
+headscale:
+  url: http://127.0.0.1:8080
+  config_path: /etc/headscale/config.yaml

@@ -1,0 +1,164 @@
+# zitadel_seed (F6-006): find-or-create the vpn project, roles and the headscale/oauth2-proxy apps; report the
+# service user, Actions v1/v2 and the users without a role. Never creates people or grants (rule 3). The ids go to
+# <env>/zitadel.json and to the variables later phases read; secrets the tool creates stay 0600 files whose PATHS
+# are mapped into secret_files. Nothing here touches the host.
+- name: Admin credential is a file
+  ansible.builtin.assert:
+    that:
+      - (zitadel_admin_key_file != '') != (zitadel_admin_pat_file != '')
+    fail_msg: "zitadel_seed için zitadel_admin_key_file ya da zitadel_admin_pat_file (yalnız biri) ver"
+    quiet: true
+
+- name: Controller bin directory
+  ansible.builtin.file:
+    path: "{{ install_env_dir }}/bin"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  changed_when: false
+  check_mode: false
+
+- name: Build the adopt tool on the controller
+  ansible.builtin.command:
+    cmd: "go build -trimpath -o {{ install_env_dir }}/bin/tagcess-zitadel-adopt ./cmd/tagcess-zitadel-adopt"
+    chdir: "{{ tagcess_repo_root }}"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  changed_when: false
+  check_mode: false
+  when: zitadel_seed_tool == ''
+
+- name: Plan or apply
+  ansible.builtin.set_fact:
+    zitadel_seed_dry: "{{ ansible_check_mode or not (zitadel_seed_apply | bool) }}"
+
+- name: Arguments
+  ansible.builtin.set_fact:
+    zitadel_seed_argv: >-
+      {{ [zitadel_seed_tool or (install_env_dir ~ '/bin/tagcess-zitadel-adopt'),
+          '--issuer', zitadel_issuer, '--project', zitadel_project_name, '--roles', zitadel_seed_roles | join(','),
+          '--service-user', zitadel_seed_service_user,
+          '--headscale-redirect', zitadel_seed_headscale_redirect,
+          '--oauth2-proxy-redirect', zitadel_seed_oauth2_proxy_redirect,
+          '--oauth2-proxy-post-logout', zitadel_seed_oauth2_proxy_post_logout,
+          '--webhook-url', 'http://' ~ (vpn_tailnet_ip_effective | default(vpn_tailnet_ip, true)) ~ ':' ~ headscale_hook_port ~ '/hook',
+          '--groups-url', 'http://' ~ (vpn_tailnet_ip_effective | default(vpn_tailnet_ip, true)) ~ ':' ~ headscale_hook_port ~ '/groups',
+          '--secret-out-dir', install_env_dir ~ '/secrets', '--report-unroled']
+         + (['--admin-key-file', zitadel_admin_key_file | expanduser] if zitadel_admin_key_file else ['--admin-pat-file', zitadel_admin_pat_file | expanduser])
+         + (['--insecure'] if zitadel_seed_insecure | bool else [])
+         + (['--create-actions'] if zitadel_seed_create_actions | bool else [])
+         + (['--groups-execution'] if zitadel_groups_execution | bool else [])
+         + (['--dry-run'] if zitadel_seed_dry | bool else []) }}
+
+- name: Run the Zitadel adopt tool
+  ansible.builtin.command:
+    argv: "{{ zitadel_seed_argv }}"
+  register: zitadel_seed_run
+  delegate_to: localhost
+  become: false
+  run_once: true
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Stop when the tool failed (no later phase runs)
+  ansible.builtin.fail:
+    msg: "Zitadel adopt aracı durdu: {{ (zitadel_seed_run.stderr | default('') | trim).splitlines() | last | default('çıktı yok') }}"
+  when: zitadel_seed_run.rc != 0
+
+- name: Tool result
+  ansible.builtin.set_fact:
+    zitadel_seed_result: "{{ zitadel_seed_run.stdout | from_json }}"
+
+- name: Plan
+  ansible.builtin.debug:
+    msg: "{{ ['Zitadel ' ~ ('planı (yazma yok)' if zitadel_seed_dry | bool else 'uygulandı') ~ ':']
+             + (zitadel_seed_result.plan | map(attribute='action') | zip(zitadel_seed_result.plan | map(attribute='object'),
+                zitadel_seed_result.plan | map(attribute='detail', default=''))
+                | map('join', ' ') | list) }}"
+
+- name: Ids and secret paths for the later phases (apply only)
+  when: not (zitadel_seed_dry | bool)
+  block:
+    # What an earlier run left in zitadel.json is merged, never overwritten by a run that reports fewer paths (a rerun, an
+    # interrupted run): the tool's paths win for the same key, then every path must name an existing, non-empty file.
+    - name: Earlier zitadel.json
+      ansible.builtin.stat:
+        path: "{{ install_env_dir }}/zitadel.json"
+      register: zitadel_seed_prev_stat
+      delegate_to: localhost
+      become: false
+      run_once: true
+      check_mode: false
+
+    - name: Secret paths of the earlier run and of this one
+      ansible.builtin.set_fact:
+        zitadel_seed_paths: >-
+          {{ ((lookup('ansible.builtin.file', install_env_dir ~ '/zitadel.json') | from_json).secret_files | default({})
+              if zitadel_seed_prev_stat.stat.exists else {}) | combine(zitadel_seed_result.secrets | default({})) }}
+
+    - name: Which of those files exist
+      ansible.builtin.stat:
+        path: "{{ item.value | expanduser }}"
+      loop: "{{ zitadel_seed_paths | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      register: zitadel_seed_path_stats
+      delegate_to: localhost
+      become: false
+      run_once: true
+      check_mode: false
+
+    - name: Outputs
+      ansible.builtin.set_fact:
+        zitadel_seed_outputs:
+          zitadel_project_id: "{{ zitadel_seed_result.project_id }}"
+          oauth2_proxy_client_id: "{{ (zitadel_seed_result.apps['oauth2-proxy'] | default({})).client_id | default('') }}"
+          headscale_oidc_client_id: "{{ (zitadel_seed_result.apps['headscale'] | default({})).client_id | default('') }}"
+          secret_files: >-
+            {%- set d = {} -%}
+            {%- for r in zitadel_seed_path_stats.results -%}
+              {%- if r.stat.exists and r.stat.size > 0 -%}{%- set _ = d.update({r.item.key: r.item.value}) -%}{%- endif -%}
+            {%- endfor -%}
+            {{ d }}
+
+    - name: zitadel.json (ids and paths, no secret)
+      ansible.builtin.copy:
+        content: "{{ zitadel_seed_outputs | to_nice_json(indent=2) }}\n"
+        dest: "{{ install_env_dir }}/zitadel.json"
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      changed_when: false
+
+    - name: Variables for the later phases of this run
+      ansible.builtin.set_fact:
+        zitadel_project_id: "{{ zitadel_seed_outputs.zitadel_project_id }}"
+        oauth2_proxy_client_id: "{{ zitadel_seed_outputs.oauth2_proxy_client_id }}"
+        headscale_oidc_client_id: "{{ zitadel_seed_outputs.headscale_oidc_client_id }}"
+
+    # The same merge every later call does (config role): the tool's files are the effective secrets, and a different
+    # value the settings name for the same key stops the run (H8).
+    - name: Effective secret files (the tool's, conflicts stop)
+      ansible.builtin.import_role:
+        name: config
+        tasks_from: zitadel_out
+
+    - name: Created by an earlier run but the secret file is gone
+      ansible.builtin.fail:
+        msg: >-
+          Zitadel'de açılmış ama secret dosyası eksik: {{ zitadel_seed_lost | join(', ') }}. Zitadel değeri yalnız yaratıldığında bir kez gösterir;
+          dosyayı geri koy ya da secret_files altında ver (ids zitadel.json'a yazıldı).
+      vars:
+        zitadel_seed_lost: >-
+          {{ zitadel_seed_result.missing_secrets | default([]) | map(attribute='key') | reject('in', secret_files | default({})) | list }}
+      when: zitadel_seed_lost | length > 0
+
+- name: Guide items of zitadel_seed
+  ansible.builtin.set_fact:
+    guide_items_zitadel_seed: "{{ zitadel_seed_result.guide }}"

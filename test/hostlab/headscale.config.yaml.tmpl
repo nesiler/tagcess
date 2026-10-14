@@ -1,0 +1,82 @@
+# F3b-002: Headscale v0.29.4 config for the host lab container (systemd, OrbStack). Derived from
+# test/compose/headscale/config.yaml; hostlab.sh fills the @...@ placeholders and installs the result as
+# /etc/headscale/config.yaml. Same lab Zitadel issuer and OIDC client as the compose stack (its callback
+# is already registered; no new client is opened). The client secret is never in this file: hostlab.sh
+# copies it into /etc/headscale/oidc_client_secret at runtime.
+#
+# The compose Headscale uses the same ports, so the two do not run at the same time (override the
+# HOSTLAB_*_PORT variables of hostlab.sh to run both).
+server_url: http://localhost:@HTTP_PORT@
+listen_addr: 127.0.0.1:@HTTP_PORT@
+metrics_listen_addr: 127.0.0.1:@METRICS_PORT@
+grpc_listen_addr: 127.0.0.1:@GRPC_PORT@
+grpc_allow_insecure: false
+
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+  allocation: sequential
+
+derp:
+  server:
+    enabled: false
+  urls:
+    - https://controlplane.tailscale.com/derpmap/default
+  paths: []
+  auto_update_enabled: false
+
+disable_check_updates: true
+
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+    write_ahead_log: true
+
+# Production runs the policy in database mode (F3); the helper never touches this block.
+policy:
+  mode: database
+
+dns:
+  magic_dns: true
+  base_domain: ts.tagcess.test
+  override_local_dns: true
+  nameservers:
+    global:
+      - 1.1.1.1
+  search_domains: []
+
+# The admin unix socket the host tooling talks to; hostlab.sh relays it to a loopback TCP port.
+unix_socket: /var/run/headscale/headscale.sock
+unix_socket_permission: "0770"
+
+oidc:
+  only_start_if_oidc_is_available: true
+  issuer: "https://@LAB_ZITADEL_HOST@"
+  client_id: "@OIDC_CLIENT_ID@"
+  client_secret_path: /etc/headscale/oidc_client_secret
+  scope: ["openid", "profile", "email"]
+  # F3b-023: the same shape as the production OIDC filter (production has allowed_domains; its
+  # inventory is pending F3b-001). All lab accounts share the tagcess.test domain, so the AND with
+  # allowed_groups is exercised; allowed_users stays empty because production's is unknown.
+  allowed_domains:
+    - tagcess.test
+  pkce:
+    enabled: true
+    method: S256
+
+logtail:
+  enabled: false
+
+taildrop:
+  enabled: true
+
+auto_update:
+  enabled: false
+
+log:
+  level: info
+  format: text

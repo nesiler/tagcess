@@ -1,0 +1,12 @@
+# TEST ONLY (not part of the adopt shape): stands in for the existing Zitadel's OIDC discovery, which in
+# production lives on the k8s host. Tests point zitadel_discovery_url at http://127.0.0.1:18080/... so the
+# preflight "Zitadel reachable" check has something to answer; stopping it simulates an unreachable Zitadel.
+[Unit]
+Description=Zitadel discovery stand-in (F6 adopt target, tests only)
+
+[Service]
+ExecStart=/usr/bin/python3 -m http.server 18080 --bind 127.0.0.1 --directory /srv/zitadel-stub
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

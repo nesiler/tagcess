@@ -1,0 +1,54 @@
+# Runs first in every play (tags: always). Stops before anything else when a required setting is missing
+# or install_mode is not fresh/adopt (TestInstaller_RequiredVarsAssert). A preflight-only run may leave
+# install_mode empty: preflight is what proposes it (F6-002).
+- name: Required settings are set
+  ansible.builtin.assert:
+    that:
+      - (lookup('ansible.builtin.vars', item) | string | trim) != ""
+    fail_msg: "Zorunlu değişken boş: {{ item }} (kurulum ortam dosyasında ayarla)"
+    quiet: true
+  loop: "{{ ['install_env', 'tagcess_domain'] + ([] if config_preflight_only or not config_require_mode | bool else ['install_mode']) }}"
+  vars:
+    config_preflight_only: >-
+      {{ ansible_run_tags | default([]) | difference(['preflight']) | length == 0
+         and 'all' not in (ansible_run_tags | default(['all'])) }}
+
+- name: The domain is a host name (it goes into configs and paths unquoted)
+  ansible.builtin.assert:
+    that:
+      - "tagcess_domain is match('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?([.][a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$')"
+    fail_msg: "tagcess_domain '{{ tagcess_domain }}' geçerli bir alan adı değil"
+    quiet: true
+  when: tagcess_domain | string != ''
+
+- name: The install_mode is fresh or adopt
+  ansible.builtin.assert:
+    that:
+      - install_mode in ['', 'fresh', 'adopt']
+    fail_msg: "install_mode '{{ install_mode }}' geçersiz: fresh ya da adopt olmalı"
+    quiet: true
+
+- name: Phase table of this mode
+  ansible.builtin.set_fact:
+    tagcess_phase_modes: "{{ dict(tagcess_phases | map(attribute='name') | zip(tagcess_phases | map(attribute='modes'))) }}"
+    tagcess_phase_confirm: "{{ dict(tagcess_phases | map(attribute='name') | zip(tagcess_phases | map(attribute='confirm'))) }}"
+
+# Phase outputs of earlier runs (zitadel_seed writes <env>/zitadel.json): see zitadel_out.yml.
+- name: The zitadel_seed output
+  ansible.builtin.import_tasks: zitadel_out.yml
+
+# zitadel_install (fresh lab) leaves the administrator PAT at <env>/secrets/zitadel-admin.pat; later calls use it when
+# the environment names no administrator credential.
+- name: Earlier zitadel_install PAT
+  ansible.builtin.stat:
+    path: "{{ install_env_dir }}/secrets/zitadel-admin.pat"
+  register: config_zitadel_pat
+  delegate_to: localhost
+  become: false
+  check_mode: false
+  when: install_env | string != '' and zitadel_admin_key_file == '' and zitadel_admin_pat_file == ''
+
+- name: Use the zitadel_install PAT
+  ansible.builtin.set_fact:
+    zitadel_admin_pat_file: "{{ install_env_dir }}/secrets/zitadel-admin.pat"
+  when: config_zitadel_pat.stat.exists | default(false)

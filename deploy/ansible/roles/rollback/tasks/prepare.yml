@@ -1,0 +1,27 @@
+# Before anything of a phase is rolled back (rollback_phase): which backup it returns to, its rollback metadata, and a
+# fresh backup of today's state (the restore itself overwrites files: it must be undoable too). Imported first by every
+# phase file that changes something before generic.yml (app stops the container, hshelper stops its units).
+- name: "Rollback: the phase's backup ({{ rollback_phase }})"
+  ansible.builtin.set_fact:
+    # first_backup_id: before the installer first changed this phase's files (-e rollback_to=latest: the last run's).
+    rollback_backup_id: >-
+      {{ (install_state.phases[rollback_phase] | default({})).backup_id | default('') if (rollback_to | default('first')) == 'latest'
+         else (install_state.phases[rollback_phase] | default({})).first_backup_id | default('') }}
+    rollback_done: "{{ (install_state.phases[rollback_phase] | default({})).rolled_back | default(false) }}"
+    # The metadata that belongs to that backup: details are kept per first_backup_id period (state/record.yml),
+    # latest_details are the last run's.
+    rollback_details: >-
+      {{ (install_state.phases[rollback_phase] | default({})).latest_details | default((install_state.phases[rollback_phase] | default({})).details | default({}))
+         if (rollback_to | default('first')) == 'latest'
+         else (install_state.phases[rollback_phase] | default({})).details | default({}) }}
+
+- name: "Rollback: backup of today's state first ({{ rollback_phase }})"
+  ansible.builtin.include_role:
+    name: backup
+  vars:
+    backup_phase: "rollback-{{ rollback_phase }}"
+  when: rollback_backup_id != '' and not rollback_done
+
+- name: "Rollback: prepared ({{ rollback_phase }})"
+  ansible.builtin.set_fact:
+    rollback_prepared: "{{ rollback_phase }}"

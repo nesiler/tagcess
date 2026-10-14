@@ -1,0 +1,37 @@
+# The node also runs live sites and litellm; nothing in this namespace may grow past these bounds.
+# Requests/limits sum: zitadel 768Mi + login 256Mi + postgres 256Mi = 1280Mi; the rest is head room for
+# the chart's short-lived init/setup jobs.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: tagcess-lab
+  namespace: tagcess-lab
+spec:
+  hard:
+    pods: "12"
+    requests.cpu: "1"
+    requests.memory: 1536Mi
+    limits.cpu: "3"
+    limits.memory: 2Gi
+    persistentvolumeclaims: "2"
+    requests.storage: 4Gi
+    services.loadbalancers: "0"
+    services.nodeports: "0"
+---
+# Defaults so a pod that forgets its resources is still bounded (and admitted by the quota).
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: tagcess-lab
+  namespace: tagcess-lab
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: 250m
+        memory: 128Mi
+      defaultRequest:
+        cpu: 20m
+        memory: 64Mi
+      max:
+        memory: 1Gi

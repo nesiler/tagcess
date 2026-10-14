@@ -1,0 +1,307 @@
+# app (F6-005): image, seed, config.yaml and compose rendered from the settings, the `tagcess -check` gate (a
+# config that fails it never replaces the running one: rule 7), then start. A new database starts in dry-run
+# (Y-06.2); an existing installation's dry-run setting is never touched (it lives in the database, not here).
+- name: Settings the config needs
+  ansible.builtin.assert:
+    that:
+      - vpn_tailnet_ip_effective | default('') != ''
+      - zitadel_project_id | string != ''
+      - site_seed_file != ''
+    fail_msg: >-
+      app fazı için eksik: {{ 'vpn_tailnet_ip (tailscale katılımı)' if not vpn_tailnet_ip_effective | default('') else '' }}
+      {{ 'zitadel_project_id (önce zitadel_seed)' if not zitadel_project_id | string else '' }}
+      {{ 'site_seed_file' if not site_seed_file else '' }}
+    quiet: true
+
+- name: Seed schema
+  ansible.builtin.import_tasks: seed.yml
+
+- name: Docker answers (host phase installs it)
+  ansible.builtin.command: docker info --format '{{ '{{' }}.ServerVersion{{ '}}' }}'
+  changed_when: false
+  check_mode: false
+
+- name: Host group ids the image must carry
+  ansible.builtin.command: "getent group {{ item }}"
+  loop: [caddy, headscale]
+  register: app_gids
+  changed_when: false
+  check_mode: false
+
+- name: Backup before writing
+  ansible.builtin.include_role:
+    name: backup
+  vars:
+    backup_phase: app
+
+- name: Image before
+  ansible.builtin.command: "docker image inspect -f '{{ '{{' }}.Id{{ '}}' }}' {{ tagcess_image }}"
+  register: app_image_before
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: The image before this run (state, for rollback)
+  ansible.builtin.set_fact:
+    state_details:
+      previous_image: "{{ app_image_before.stdout if app_image_before.rc == 0 else '' }}"
+
+- name: Image from a controller archive
+  when: app_image_source == 'archive'
+  block:
+    - name: Image archive directory
+      ansible.builtin.file:
+        path: /var/lib/tagcess-install/images
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Copy the image archive
+      ansible.builtin.copy:
+        src: "{{ app_image_archive }}"
+        dest: /var/lib/tagcess-install/images/tagcess-image.tar.gz
+        owner: root
+        group: root
+        mode: "0600"
+      register: app_archive
+
+    - name: Load the image  # noqa: risky-shell-pipe
+      ansible.builtin.shell: "gunzip -c /var/lib/tagcess-install/images/tagcess-image.tar.gz | docker load"
+      when: (app_archive is changed or app_image_before.rc != 0) and not ansible_check_mode
+      changed_when: true
+
+- name: Image built on the host
+  when: app_image_source == 'host_build'
+  block:
+    - name: Source directory is a dedicated .../src path
+      ansible.builtin.assert:
+        that:
+          - app_src_dir is match('^/[A-Za-z0-9._/-]+/src$')
+          - "'..' not in app_src_dir"
+        fail_msg: "app_src_dir {{ app_src_dir }} reddedildi: mutlak, '..' içermeyen ve /src ile biten bir yol olmalı"
+        quiet: true
+
+    - name: Source archive of the working tree (tracked and new files, no ignored ones)
+      ansible.builtin.shell: |
+        set -eo pipefail
+        cd "{{ tagcess_repo_root }}"
+        # COPYFILE_DISABLE: macOS tar would add an AppleDouble `._name` entry for every file with extended attributes,
+        # and the image build would embed ._0001_init.sql as a migration. Other tars ignore the variable.
+        git ls-files -co --exclude-standard -z | COPYFILE_DISABLE=1 tar --null -czf "{{ install_env_dir }}/tagcess-src.tar.gz" -T -
+      args:
+        executable: /bin/bash
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      check_mode: false
+
+    - name: Copy the source archive
+      ansible.builtin.copy:
+        src: "{{ install_env_dir }}/tagcess-src.tar.gz"
+        dest: /var/lib/tagcess-install/tagcess-src.tar.gz
+        owner: root
+        group: root
+        mode: "0600"
+      register: app_src_archive
+
+    - name: Unpack into a clean source directory
+      ansible.builtin.shell: |
+        set -e
+        rm -rf "{{ app_src_dir }}"
+        install -d -m 0700 "{{ app_src_dir }}"
+        tar -xzf /var/lib/tagcess-install/tagcess-src.tar.gz -C "{{ app_src_dir }}"
+      when: app_src_archive is changed and not ansible_check_mode
+      changed_when: true
+
+    - name: Build the image with the host's caddy/headscale GIDs
+      ansible.builtin.command:
+        cmd: >-
+          docker build -q -f deploy/Dockerfile
+          {{ ('--network ' ~ app_build_network) if app_build_network | length > 0 else '' }}
+          --build-arg CADDY_GID={{ app_gids.results[0].stdout.split(':')[2] }}
+          --build-arg HEADSCALE_GID={{ app_gids.results[1].stdout.split(':')[2] }}
+          -t {{ tagcess_image }} .
+        chdir: "{{ app_src_dir }}"
+      when: (app_src_archive is changed or app_image_before.rc != 0) and not ansible_check_mode
+      changed_when: true
+
+- name: Image after
+  ansible.builtin.command: "docker image inspect -f '{{ '{{' }}.Id{{ '}}' }}' {{ tagcess_image }}"
+  register: app_image_after
+  changed_when: false
+  check_mode: false
+  failed_when: app_image_after.rc != 0 and not ansible_check_mode
+
+- name: The image carries the host's caddy and headscale GIDs (ui.sock group, NFR-02)
+  ansible.builtin.command: "docker run --rm --entrypoint cat {{ tagcess_image }} /etc/group"
+  register: app_image_groups
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: GIDs match
+  ansible.builtin.assert:
+    that:
+      - (app_gids.results[0].stdout.split(':')[0] ~ ':x:' ~ app_gids.results[0].stdout.split(':')[2] ~ ':') in app_image_groups.stdout
+      - (app_gids.results[1].stdout.split(':')[0] ~ ':x:' ~ app_gids.results[1].stdout.split(':')[2] ~ ':') in app_image_groups.stdout
+    fail_msg: "İmajdaki caddy/headscale GID'leri host'unkilerle aynı değil; imajı host GID'leriyle yeniden derle"
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Seed file
+  ansible.builtin.copy:
+    src: "{{ site_seed_file | expanduser }}"
+    dest: "{{ app_seed_dest }}"
+    owner: "{{ tagcess_uid }}"
+    group: "{{ tagcess_uid }}"
+    mode: "0644"
+  register: app_seed_copy
+
+- name: Optional /etc/hosts entries
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: "\\s{{ item.name | regex_escape }}$"
+    line: "{{ item.ip }} {{ item.name }}"
+  loop: "{{ app_hosts_entries }}"
+
+- name: Candidate name of this run (never a fixed name, so a file of someone else at the old name stays untouched)
+  ansible.builtin.set_fact:
+    app_config_cand: "{{ app_config_path }}.candidate-{{ now(utc=true).strftime('%Y%m%dT%H%M%S') }}-{{ '%04x' | format(65535 | random) }}"
+
+- name: Candidate config (scratch)
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: "{{ app_config_cand }}"
+    owner: root
+    group: "{{ tagcess_uid }}"
+    mode: "0644"
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: The candidate passes tagcess -check (in the image)
+  ansible.builtin.command: >-
+    docker run --rm -v {{ app_config_cand }}:/c.yaml:ro -v /etc/tagcess/secrets:/etc/tagcess/secrets:ro
+    {{ tagcess_image }} -config /c.yaml -check
+  register: app_check
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Remove a candidate that failed the check
+  ansible.builtin.file:
+    path: "{{ app_config_cand }}"
+    state: absent
+  changed_when: false
+  when: not ansible_check_mode and app_check.rc != 0
+
+- name: Stop when the candidate fails the check (the running config and container stay)
+  ansible.builtin.fail:
+    msg: "Yeni config tagcess -check'ten geçmedi; {{ app_config_path }} ve çalışan container değişmedi: {{ (app_check.stderr | default('') | trim).splitlines() | last | default('') }}"
+  when: not ansible_check_mode and app_check.rc != 0
+
+- name: Install the checked config
+  ansible.builtin.copy:
+    src: "{{ app_config_cand }}"
+    remote_src: true
+    dest: "{{ app_config_path }}"
+    owner: root
+    group: "{{ tagcess_uid }}"
+    mode: "0644"
+  register: app_config
+  when: not ansible_check_mode
+
+- name: Planned config (--check)
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: "{{ app_config_path }}"
+    owner: root
+    group: "{{ tagcess_uid }}"
+    mode: "0644"
+  when: ansible_check_mode
+
+- name: Remove the candidate
+  ansible.builtin.file:
+    path: "{{ app_config_cand }}"
+    state: absent
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Compose file
+  ansible.builtin.template:
+    src: compose.yaml.j2
+    dest: "{{ app_compose_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: app_compose
+
+- name: Container state
+  ansible.builtin.command: "docker inspect -f '{{ '{{' }}.State.Running{{ '}}' }} {{ '{{' }}.Image{{ '}}' }}' tagcess"
+  register: app_container
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Start or recreate tagcess
+  ansible.builtin.command: >-
+    docker compose -f {{ app_compose_path }} up -d
+    {{ '--force-recreate' if (app_config is changed or app_compose is changed or app_seed_copy is changed or
+       app_image_before.stdout != app_image_after.stdout) else '' }}
+  when: >-
+    not ansible_check_mode and (app_config is changed or app_compose is changed or app_seed_copy is changed
+    or app_container.rc != 0 or not app_container.stdout.startswith('true')
+    or app_container.stdout.split(' ')[1] | default('') != app_image_after.stdout)
+  register: app_up
+  changed_when: true
+
+- name: tagcess started  # noqa: risky-shell-pipe
+  ansible.builtin.shell: "docker logs tagcess 2>&1 | grep -c 'tagcess started'"
+  register: app_started
+  until: app_started.rc == 0
+  retries: "{{ (app_start_timeout | int / 2) | int }}"
+  delay: 2
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Stop when tagcess did not start  # noqa: risky-shell-pipe
+  ansible.builtin.shell: "docker logs tagcess 2>&1 | grep -E 'level=ERROR|tagcess:' | tail -5"
+  register: app_errors
+  changed_when: false
+  failed_when: true
+  when: not ansible_check_mode and app_started.rc | default(1) != 0
+
+- name: ui.sock mode
+  ansible.builtin.stat:
+    path: /run/tagcess/ui.sock
+  register: app_sock
+  when: not ansible_check_mode
+
+- name: ui.sock is srw-rw---- 10001 caddy
+  ansible.builtin.assert:
+    that:
+      - app_sock.stat.exists and app_sock.stat.issock
+      - app_sock.stat.mode == '0660'
+      - app_sock.stat.uid | int == tagcess_uid | int
+      - app_sock.stat.gr_name == 'caddy'
+    fail_msg: "ui.sock modu/sahibi beklenen değil: {{ app_sock.stat.mode | default('-') }} {{ app_sock.stat.uid | default('-') }}:{{ app_sock.stat.gr_name | default('-') }}"
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Guide items of app
+  ansible.builtin.set_fact:
+    guide_items_app:
+      - id: app-first-import
+        title: İlk içe aktarma ve kuru çalıştırma (arayüz)
+        blocking: true
+        steps:
+          - "Önce verify fazının parite satırı 'eşit' olmalı ya da yalnız 's06_open_start' kabul edilmiş olmalı (başka fark yok); kabul edilen durumda S-06 uyarısı (iç siteler internetten de erişilebilir olacak) okunmuş olmalı (deploy/install.sh --phase verify)."
+          - "https://{{ tagcess_host }}/sites/first-import: önizlemeyi oku, elle DNS kayıtlarını kontrol et, onayla."
+          - "/sync: kuru çalıştırmayı kapat (yeni kurulum kuru çalıştırma açık başlar, Y-06)."
+      - id: app-sites-to-role
+        title: Siteleri arayüzden role geçir (karar 1)
+        steps:
+          - "Siteler open/transition olarak içe aktarıldı (rol kontrolü askıda, bugünkü davranış)."
+          - "Önce rolsüz kullanıcılara Zitadel'de vpn projesinde rol ver (tagcess rol vermez); sonra arayüzden site site 'role' türüne geçir (hedef roller target_roles'ta)."

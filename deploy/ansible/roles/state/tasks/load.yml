@@ -1,0 +1,29 @@
+# Installer state on the host (F6-008): /var/lib/tagcess-install/state.json, secret-free. Read on every run so
+# preflight knows which components this installer installed itself (a fresh run must not treat them as
+# "already there") and rollback knows each phase's backup id.
+- name: Read the installer state
+  ansible.builtin.slurp:
+    src: "{{ install_state_dir }}/state.json"
+  register: state_raw
+  failed_when: false
+  changed_when: false
+  check_mode: false
+
+- name: Installer state
+  ansible.builtin.set_fact:
+    install_state: "{{ (state_raw.content | b64decode | from_json) if state_raw.content is defined else {'phases': {}, 'installed': []} }}"
+
+# A component's package is marked the moment an *_install role installs it (installed.yml), so a phase that fails
+# after its package step still counts as this installer's on the next run (fresh does not mistake it for adopted).
+- name: Components marked installed by this installer
+  ansible.builtin.find:
+    paths: "{{ install_state_dir }}/installed"
+    file_type: file
+  register: state_markers
+  check_mode: false
+
+- name: Installer state with the markers
+  ansible.builtin.set_fact:
+    install_state: >-
+      {{ install_state | combine({'installed': (install_state.installed | default([])
+           + state_markers.files | map(attribute='path') | map('basename') | list) | unique}) }}

@@ -1,0 +1,894 @@
+#!/usr/bin/env bash
+# ak — agent-kit dispatcher.
+#
+# Starts child agent sessions (Claude Code, Codex, OpenCode, Antigravity, ...), sends them messages,
+# waits for their reports and verifies their work. It decides nothing: a child's "done" is a claim,
+# the coordinator re-checks the evidence.
+#
+# Terminal backend: Herdr (primary) or tmux (fallback). Reports travel through events.jsonl
+# (`ak tell`, harness hooks), so the coordinator logic is identical on both backends.
+#
+# This file is shipped by the agent-kit skill and copied into a project as scripts/agent-kit/ak
+# (`ak init`). Standard: ~/.claude/skills/agent-kit/reference/contract.md
+set -euo pipefail
+
+AK_VERSION=1.0.0
+SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+SELF=$SELF_DIR/$(basename "${BASH_SOURCE[0]}")
+SKILL_DIR=""
+[[ "$SELF_DIR" == */agent-kit/scripts ]] && SKILL_DIR=$(dirname "$SELF_DIR")
+
+# AK_<NAME> wins, then the legacy COORD_<NAME> (tagcess), then the default.
+ev() { local a="AK_$1" c="COORD_$1"; printf '%s' "${!a:-${!c:-$2}}"; }
+
+if [ -n "${AK_ROOT:-}" ]; then ROOT=$AK_ROOT
+elif [[ "$SELF_DIR" == */scripts/agent-kit ]]; then ROOT=$(cd "$SELF_DIR/../.." && pwd)
+else ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd); fi
+
+KIT=${AK_KIT_DIR:-$ROOT/.agents/agent-kit}
+CONF=$KIT/kit.conf
+expand() { local v=$1; v=${v//\$HOME/$HOME}; v=${v/#\~/$HOME}; printf '%s' "$v"; }
+conf() { # key default
+  local v=""
+  [ -f "$CONF" ] && v=$(sed -n "s/^$1=//p" "$CONF" | tail -n 1) || true
+  v=${v%%[[:space:]]#*}
+  expand "${v:-$2}"
+}
+
+STATE=$(ev STATE_DIR "$(conf state_dir "$HOME/.local/state/agent-kit/$(basename "$ROOT")")")
+PROTOCOL=$ROOT/$(conf protocol_file ".agents/agent-kit/protocol.md")
+TELL_OVERRIDE=$(conf tell_cmd "")   # adopted projects keep their own child-facing path (e.g. scripts/coord/tell.sh)
+GLOBAL_PROFILES=$(ev GLOBAL_PROFILES "$HOME/.config/agent-kit/profiles.conf")
+PROJECT_PROFILES=$ROOT/$(conf profiles_file ".agents/agent-kit/profiles.conf")
+[ -n "${COORD_PROFILES:-}" ] && PROJECT_PROFILES=$COORD_PROFILES
+TMUX_SOCK=$(ev TMUX_SOCKET "")
+TMUX_PREFIX=$(ev TMUX_PREFIX "ak-")
+HS=$(ev HERDR_SESSION "")
+WRITER_ROLES=" task test fix "
+
+die() { echo "ak: $1" >&2; exit "${2:-1}"; }
+now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+tm() { if [ -n "$TMUX_SOCK" ]; then tmux -L "$TMUX_SOCK" "$@"; else tmux "$@"; fi; }
+H() { if [ -n "$HS" ]; then herdr --session "$HS" "$@"; else herdr "$@"; fi; }
+tsess() { printf '%s%s' "$TMUX_PREFIX" "$1"; }
+rundir() { printf '%s/%s' "$STATE" "$1"; }
+meta() { jq -r ".$2 // empty" "$(rundir "$1")/meta.json" 2>/dev/null; }
+
+usage() {
+  cat <<'EOF'
+Usage: ak <command> [args]
+ Sessions
+  spawn --name N (--profile P | --kind K [--model M]) --role R [--task ID] [--prompt-file F|-]
+        [--dir D] [--scope TEXT] [--force]      R: task|test|fix (write code) | research|review|other
+  send N [TEXT|-]                  deliver a message to the child
+  status [--json]                  sessions, profile, state, last event, alive
+  peek N [-n LINES]                last lines of the child's screen
+  log N                            the child's event log
+  wait [--timeout SEC]             block until a child reports (question/done/blocked/idle/exit/dead)
+  kill N                           stop the child
+  clean N [--force]                save the final screen, stop, move the run dir to archive/
+  attach N                         print the command that opens the child's terminal
+ Profiles and tasks
+  profiles                         the profile library (project overrides global)
+  equiv PROFILE                    independent-reviewer profile for PROFILE (different vendor, similar level)
+  review-for TASK                  the reviewer profile for the task's last code-writing profile
+  tasks [--ready] [--json]         task board from the docs task store (kit.conf task_dir)
+  verify [TASK]                    run the gate (kit.conf check_cmd) and show the diff summary
+ Housekeeping
+  doctor                           tools, backend, profiles, protocol
+  backend                          which backend `spawn` would use now
+  init [flags]                     install/upgrade the kit in a project (run from the skill copy)
+  tell question|done|blocked MSG   (child) report to the coordinator
+  hook TOOL idle|exit              (harness) record a turn end or process exit
+  version
+EOF
+}
+
+# --- backend -------------------------------------------------------------------
+default_backend() {
+  local b; b=$(ev BACKEND "$(conf backend auto)")
+  case "$b" in
+    herdr|tmux) printf '%s' "$b" ;;
+    *) if command -v herdr >/dev/null 2>&1 && { [ "${HERDR_ENV:-}" = 1 ] || [ -n "$HS" ]; }; then printf herdr; else printf tmux; fi ;;
+  esac
+}
+sbackend() { local b; b=$(meta "$1" backend); printf '%s' "${b:-tmux}"; }
+hpane() { jq -r .pane_id "$(rundir "$1")/herdr.json"; }
+htab() { jq -r .tab_id "$(rundir "$1")/herdr.json"; }
+
+# --- profiles ------------------------------------------------------------------
+# Row: kind<TAB>model<TAB>args<TAB>env<TAB>equiv<TAB>use. Empty cells become '-' so TAB splitting is safe.
+# 7 columns: name|kind|model|args|env|equiv|use. 5 columns (legacy): name|tool|model|args|use.
+profile_row() { # name -> row from the project file, else the global one
+  local f
+  for f in "$PROJECT_PROFILES" "$GLOBAL_PROFILES"; do
+    [ -f "$f" ] || continue
+    awk -F'|' -v n="$1" '
+      function t(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return (s == "" ? "-" : s) }
+      /^[ \t]*#/ || NF < 4 { next }
+      t($1) == n {
+        if (NF >= 7) print t($2) "\t" t($3) "\t" t($4) "\t" t($5) "\t" t($6) "\t" t($7)
+        else         print t($2) "\t" t($3) "\t" t($4) "\t-\t-\t" t($5)
+        found = 1; exit }
+      END { exit !found }' "$f" && return 0
+  done
+  return 1
+}
+
+cmd_profiles() {
+  local f src
+  printf '%-12s %-12s %-34s %-9s %s\n' PROFILE KIND MODEL EQUIV USE
+  for f in "$PROJECT_PROFILES" "$GLOBAL_PROFILES"; do
+    [ -f "$f" ] || continue
+    src=global; [ "$f" = "$PROJECT_PROFILES" ] && src=project
+    awk -F'|' -v src="$src" '
+      function t(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return (s == "" ? "-" : s) }
+      /^[ \t]*#/ || NF < 4 { next }
+      { if (NF >= 7) printf "%s\t%s\t%s\t%s\t%s\t(%s)\n", t($1), t($2), t($3), t($6), t($7), src
+        else         printf "%s\t%s\t%s\t-\t%s\t(%s)\n", t($1), t($2), t($3), t($5), src }' "$f"
+  done | awk -F'\t' '!seen[$1]++ { printf "%-12s %-12s %-34s %-9s %s %s\n", $1, $2, $3, $4, $5, $6 }'
+}
+
+cmd_equiv() {
+  local row kind model args env equiv use
+  row=$(profile_row "${1:-}") || die "equiv: unknown profile '${1:-}'" 2
+  IFS=$'\t' read -r kind model args env equiv use <<< "$row"
+  if [ "$equiv" = - ]; then equiv=$(conf default_reviewer opus); fi
+  printf '%s\n' "$equiv"
+}
+
+cmd_review_for() { # task -> reviewer profile = equiv of the profile that last wrote code for the task
+  local task=${1:-} f="$STATE/tasks.jsonl" p
+  [ -n "$task" ] || die "review-for: task id required" 2
+  [ -f "$f" ] || die "review-for: no code-writing session recorded for $task" 2
+  p=$(jq -rs --arg t "$task" 'map(select(.task == $t)) | last | .profile // empty' "$f")
+  [ -n "$p" ] || die "review-for: no code-writing session recorded for $task" 2
+  cmd_equiv "$p"
+}
+
+# --- liveness ------------------------------------------------------------------
+alive() { # name -> 0 while the child's terminal exists and the agent has not ended
+  local run be; run=$(rundir "$1"); [ -d "$run" ] || return 1
+  be=$(sbackend "$1")
+  if [ "$be" = herdr ]; then
+    case "$(cat "$run/state" 2>/dev/null)" in exit|killed|dead) return 1 ;; esac
+    [ -f "$run/herdr.json" ] || return 1
+    H pane get "$(hpane "$1")" 2>/dev/null | jq -e '.result' >/dev/null 2>&1
+  else
+    local s; s=$(tsess "$1")
+    tm has-session -t "=$s:" 2>/dev/null || return 1
+    [ "$(tm display-message -p -t "=$s:" '#{pane_dead}' 2>/dev/null)" = 0 ]
+  fi
+}
+
+sessions() { # names of run dirs
+  [ -d "$STATE" ] || return 0
+  local d
+  for d in "$STATE"/*/; do
+    d=${d%/}; d=${d##*/}
+    [ "$d" = archive ] || [ "$d" = '*' ] || printf '%s\n' "$d"
+  done
+}
+
+event() { # name kind source msg
+  local line
+  line=$(jq -cn --arg ts "$(now)" --arg s "$1" --arg k "$2" --arg src "$3" --arg m "$4" \
+    '{ts:$ts, session:$s, kind:$k, source:$src, msg:$m}')
+  printf '%s\n' "$line" >> "$(rundir "$1")/events.jsonl"
+}
+
+# --- terminal primitives (backend dispatch) ----------------------------------------
+screen() { # name lines -> the child's recent screen text
+  if [ "$(sbackend "$1")" = herdr ]; then
+    H pane read "$(hpane "$1")" --source recent-unwrapped --lines "$2" 2>/dev/null || true
+  else
+    tm capture-pane -p -J -t "=$(tsess "$1"):" -S "-$2" 2>/dev/null || true
+  fi
+}
+visible() { # name -> only what is on screen now (trust dialogs)
+  if [ "$(sbackend "$1")" = herdr ]; then H pane read "$(hpane "$1")" --source visible --lines 60 2>/dev/null || true
+  else tm capture-pane -p -t "=$(tsess "$1"):" 2>/dev/null || true; fi
+}
+key() { # name key
+  if [ "$(sbackend "$1")" = herdr ]; then H pane send-keys "$(hpane "$1")" "$(printf %s "$2" | tr 'A-Z' 'a-z')" >/dev/null 2>&1
+  else tm send-keys -t "=$(tsess "$1"):" "$2"; fi
+}
+
+herdr_workspace() { # sets HERDR_WS; creates "ak-<project>" when needed and remembers its blank first tab in HERDR_BLANK_TAB
+  local label id out
+  HERDR_WS=""; HERDR_BLANK_TAB=""
+  if [ -z "$HS" ] && [ -n "${HERDR_WORKSPACE_ID:-}" ]; then HERDR_WS=$HERDR_WORKSPACE_ID; return 0; fi
+  label="ak-$(basename "$ROOT")"
+  id=$(H workspace list 2>/dev/null | jq -r --arg l "$label" '.result.workspaces[]? | select(.label == $l) | .workspace_id' | sed -n '1p')
+  if [ -z "$id" ]; then
+    out=$(H workspace create --cwd "$ROOT" --label "$label" --no-focus 2>/dev/null) || return 1
+    id=$(jq -r '.result.workspace.workspace_id // empty' <<< "$out")
+    HERDR_BLANK_TAB=$(jq -r '.result.tab.tab_id // empty' <<< "$out")
+  fi
+  [ -n "$id" ] || return 1
+  HERDR_WS=$id
+}
+
+herdr_spawn() { # name dir run ; one tab per child, labelled with the child's name
+  local name=$1 dir=$2 run=$3 ws out pane tab
+  herdr_workspace || return 1
+  ws=$HERDR_WS
+  out=$(H tab create --workspace "$ws" --cwd "$dir" --label "$name" --no-focus 2>/dev/null) || return 1
+  pane=$(jq -r '.result.root_pane.pane_id // empty' <<< "$out")
+  tab=$(jq -r '.result.tab.tab_id // empty' <<< "$out")
+  [ -n "$pane" ] && [ -n "$tab" ] || return 1
+  jq -n --arg ws "$ws" --arg tab "$tab" --arg pane "$pane" --arg hs "$HS" \
+    '{workspace_id:$ws, tab_id:$tab, pane_id:$pane, session:$hs}' > "$run/herdr.json"
+  [ -n "$HERDR_BLANK_TAB" ] && H tab close "$HERDR_BLANK_TAB" >/dev/null 2>&1 || true
+  H pane run "$pane" "bash $(printf %q "$run/launch.sh")" >/dev/null 2>&1 || return 1
+}
+
+tmux_spawn() { # name dir run
+  command -v tmux >/dev/null || return 1
+  tm new-session -d -s "$(tsess "$1")" -x "$(ev COLS 200)" -y "$(ev ROWS 50)" -c "$2" \
+    "bash $(printf %q "$3/launch.sh")" \; set-option -t "$(tsess "$1")" remain-on-exit on >/dev/null
+}
+
+# --- spawn ---------------------------------------------------------------------------
+resolve_kind() { # normalise kind names
+  case "$1" in agy|antigravity) echo antigravity ;; claude|codex|opencode|shell|fake) echo "$1" ;; *) return 1 ;; esac
+}
+
+cmd_spawn() {
+  local name="" prof="" kind_opt="" model_opt="" role="" task="" pfile="" dir=$ROOT scope="" force=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --name) name=$2; shift 2 ;;
+      --profile) prof=$2; shift 2 ;;
+      --kind) kind_opt=$2; shift 2 ;;
+      --model) model_opt=$2; shift 2 ;;
+      --role) role=$2; shift 2 ;;
+      --task) task=$2; shift 2 ;;
+      --prompt-file) pfile=$2; shift 2 ;;
+      --dir) dir=$2; shift 2 ;;
+      --scope) scope=$2; shift 2 ;;
+      --force) force=1; shift ;;
+      *) die "spawn: unknown argument $1" 2 ;;
+    esac
+  done
+  [[ "$name" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]] || die "spawn: --name must match [a-z0-9-] (got '$name')" 2
+  case "$role" in task|test|fix|research|review|other) ;; *) die "spawn: --role must be task|test|fix|research|review|other" 2 ;; esac
+  local kind model args envs equiv use row
+  if [ -n "$prof" ]; then
+    row=$(profile_row "$prof") || die "spawn: unknown profile '$prof' (see: ak profiles)" 2
+    IFS=$'\t' read -r kind model args envs equiv use <<< "$row"
+    [ -n "$model_opt" ] && model=$model_opt
+  elif [ -n "$kind_opt" ]; then
+    kind=$kind_opt; model=${model_opt:--}; args=-; envs=-; prof="adhoc-$kind_opt"
+  else die "spawn: --profile or --kind is required (see: ak profiles)" 2; fi
+  kind=$(resolve_kind "$kind") || die "spawn: profile '$prof' has unknown kind '$kind'" 2
+  [ "$model" = - ] && model=""
+  [ "$args" = - ] && args=""
+  dir=$(cd "$dir" && pwd -P) || die "spawn: --dir does not exist" 2
+
+  local run; run=$(rundir "$name")
+  [ -e "$run" ] && die "spawn: $run exists; run 'ak clean $name' first" 60
+  tm has-session -t "=$(tsess "$name"):" 2>/dev/null && die "spawn: tmux session $(tsess "$name") already exists" 60
+
+  # One code-writing session per working tree.
+  if [[ "$WRITER_ROLES" == *" $role "* ]] && [ "$force" = 0 ]; then
+    local n r d
+    for n in $(sessions); do
+      alive "$n" || continue
+      r=$(meta "$n" role); d=$(meta "$n" dir)
+      if [[ "$WRITER_ROLES" == *" $r "* ]] && [ "$d" = "$dir" ]; then
+        die "spawn: '$n' ($r) is already writing code in $dir; one code-writing session per tree" 60
+      fi
+    done
+  fi
+
+  if [ -z "$scope" ]; then
+    case "$role" in
+      task|fix) scope="only the files your task needs${task:+ for $task}; follow the project's task rules (AGENTS.md)." ;;
+      test) scope="tests for ${task:-the given task}; do not change production code unless told." ;;
+      research) scope="research notes only; no code." ;;
+      review) scope="read-only review; report findings, do not edit files." ;;
+      *) scope="what the message below asks for." ;;
+    esac
+  fi
+
+  local body
+  if [ -z "$pfile" ]; then die "spawn: --prompt-file is required (use - for stdin)" 2
+  elif [ "$pfile" = - ]; then body=$(cat)
+  else body=$(cat "$pfile") || die "spawn: cannot read $pfile" 2; fi
+  [ -n "$body" ] || die "spawn: prompt is empty" 2
+  [ -f "$PROTOCOL" ] || die "spawn: protocol file missing ($PROTOCOL); run ak init" 2
+
+  mkdir -p "$run"
+  shopt -u patsub_replacement 2>/dev/null || true
+  local proto tell_cmd; proto=$(cat "$PROTOCOL")
+  tell_cmd="$SELF tell"; [ -n "$TELL_OVERRIDE" ] && tell_cmd="$ROOT/$TELL_OVERRIDE"
+  proto=${proto//'{{NAME}}'/$name}; proto=${proto//'{{ROLE}}'/$role}
+  proto=${proto//'{{TELL}}'/$tell_cmd}; proto=${proto//'{{SCOPE}}'/$scope}
+  printf '%s\n\n%s\n' "$proto" "$body" > "$run/prompt.md"
+
+  local backend; backend=$(default_backend)
+  echo working > "$run/state"; : > "$run/events.jsonl"; echo 0 > "$run/cursor"
+
+  # Harness hooks call this wrapper; it keeps working when the run dir is the only thing the harness knows.
+  printf '#!/usr/bin/env bash\nexec %q hook "$@"\n' "$SELF" > "$run/hook"; chmod +x "$run/hook"
+
+  local q_run q_dir q_model cmd exports=""
+  q_run=$(printf %q "$run"); q_dir=$(printf %q "$dir"); q_model=$(printf %q "$model")
+  if [ "$envs" != - ]; then # KEY=VALUE tokens from the profile; $HOME / ~ expand here
+    local tok
+    for tok in $envs; do
+      [[ "$tok" == *=* ]] || continue
+      exports+="export ${tok%%=*}=$(printf %q "$(expand "${tok#*=}")")"$'\n'
+    done
+  fi
+  case "$kind" in
+    claude)
+      jq -n --arg c "$run/hook claude idle" '{hooks:{Stop:[{hooks:[{type:"command", command:$c}]}]}}' > "$run/claude-settings.json"
+      cmd="$(printf %q "$(ev CLAUDE_BIN "$(command -v claude || echo claude)")") --dangerously-skip-permissions --disallowedTools AskUserQuestion --settings $q_run/claude-settings.json"
+      [ -n "$(ev CLAUDE_CONFIG_DIR "")" ] && exports+="export CLAUDE_CONFIG_DIR=$(printf %q "$(ev CLAUDE_CONFIG_DIR "")")"$'\n'
+      [ -n "$model" ] && cmd+=" --model $q_model"
+      cmd+=" $args \"\$(cat $q_run/prompt.md)\""
+      ;;
+    codex)
+      cmd="$(printf %q "$(ev CODEX_BIN "$(command -v codex || echo codex)")") --dangerously-bypass-approvals-and-sandbox -C $q_dir"
+      cmd+=" -c $(printf %q "notify=[\"$run/hook\",\"codex\",\"idle\"]")"
+      [ -n "$model" ] && cmd+=" -m $q_model"
+      cmd+=" $args \"\$(cat $q_run/prompt.md)\""
+      ;;
+    opencode)
+      # The profile's env picks the install (XDG_* of o2/o3/o4). A model in the profile overrides the
+      # install's default: OPENCODE_CONFIG is merged over the global config, so only "model" changes.
+      if [ -n "$model" ]; then
+        jq -n --arg m "$model" '{model:$m}' > "$run/opencode-model.json"
+        exports+="export OPENCODE_CONFIG=$q_run/opencode-model.json"$'\n'
+      fi
+      cmd="$(printf %q "$(ev OPENCODE_BIN "$(command -v opencode || echo opencode)")") --auto $args --prompt \"\$(cat $q_run/prompt.md)\" $q_dir"
+      ;;
+    antigravity)
+      cmd="$(printf %q "$(ev AGY_BIN "$(command -v agy || echo agy)")") --dangerously-skip-permissions"
+      [ -n "$model" ] && cmd+=" --model $q_model"
+      cmd+=" $args --prompt-interactive \"\$(cat $q_run/prompt.md)\""
+      ;;
+    fake) cmd="bash $(printf %q "$(ev FAKE_AGENT "$KIT/fake-agent.sh")") \"\$(cat $q_run/prompt.md)\"" ;;
+    shell) cmd="bash -c $(printf %q "$args")" ;;
+  esac
+
+  cat > "$run/launch.sh" <<EOF
+#!/usr/bin/env bash
+# Generated by ak spawn. Profile $prof ($kind${model:+, $model}).
+export AK_SESSION=$(printf %q "$name") AK_RUN=$q_run AK_ROOT=$(printf %q "$ROOT") AK_BIN=$(printf %q "$SELF")
+export COORD_SESSION=\$AK_SESSION COORD_RUN=\$AK_RUN COORD_ROOT=\$AK_ROOT COORD_HOOK=$q_run/hook
+${exports}cd $q_dir || exit 1
+$cmd
+rc=\$?
+$q_run/hook launch exit
+echo "[ak] agent exited (rc=\$rc)"
+EOF
+  chmod +x "$run/launch.sh"
+
+  local used=""
+  if [ "$backend" = herdr ]; then
+    if herdr_spawn "$name" "$dir" "$run"; then used=herdr
+    elif [ "$(ev BACKEND "$(conf backend auto)")" = herdr ]; then
+      rm -rf "$run"; die "spawn: herdr backend failed (is the herdr server running?)" 20
+    else echo "ak: herdr spawn failed, falling back to tmux" >&2; rm -f "$run/herdr.json"; backend=tmux; fi
+  fi
+  if [ "$backend" = tmux ]; then
+    tmux_spawn "$name" "$dir" "$run" || { rm -rf "$run"; die "spawn: tmux new-session failed" 20; }
+    used=tmux
+  fi
+  jq -n --arg name "$name" --arg profile "$prof" --arg kind "$kind" --arg model "$model" --arg role "$role" \
+    --arg task "$task" --arg dir "$dir" --arg backend "$used" --arg started "$(now)" \
+    '{name:$name, profile:$profile, kind:$kind, model:$model, role:$role, task:$task, dir:$dir, backend:$backend, started:$started}' \
+    > "$run/meta.json"
+  event "$name" start ak "profile=$prof kind=$kind role=$role backend=$used${task:+ task=$task}"
+  if [ -n "$task" ] && [[ "$WRITER_ROLES" == *" $role "* ]]; then
+    jq -cn --arg ts "$(now)" --arg t "$task" --arg p "$prof" --arg r "$role" --arg s "$name" \
+      '{ts:$ts, task:$t, profile:$p, role:$r, session:$s}' >> "$STATE/tasks.jsonl"
+  fi
+  # `wait` ignores run dirs without this marker, so a spawn in progress is never reported as dead.
+  : > "$run/launched"
+  case "$kind" in claude|codex|antigravity) ( accept_trust "$name" "$kind" >/dev/null 2>&1 & ) ;; esac
+  echo "spawned $name profile=$prof kind=$kind${model:+ model=$model} role=$role backend=$used dir=$dir"
+  echo "attach: $(cmd_attach "$name")"
+}
+
+accept_trust() { # name kind ; watches the screen for up to AK_TRUST_WAIT seconds
+  local screen
+  for _ in $(seq 1 "$(ev TRUST_WAIT 45)"); do
+    sleep 1
+    [ -d "$(rundir "$1")" ] || return 0
+    screen=$(visible "$1")
+    if [ "$2" = claude ] && [[ "$screen" == *"Yes, I trust this folder"* ]]; then
+      grep -q '❯ *Yes, I trust' <<< "$screen" || key "$1" Down
+      sleep 0.3; key "$1" Enter
+      event "$1" trust ak "accepted the folder trust dialog"; return 0
+    fi
+    if [ "$2" = codex ] && [[ "$screen" == *"Trust this folder?"* ]]; then
+      key "$1" Enter
+      event "$1" trust ak "accepted the folder trust dialog"; return 0
+    fi
+  done
+  # Any other start-up dialog is left to the developer. A child that already reported or ended a turn is past start-up.
+  if grep -qE '"kind":"(question|done|idle|exit)"' "$(rundir "$1")/events.jsonl" 2>/dev/null; then return 0; fi
+  if grep -qE 'No, exit|esc quit|Esc to cancel|Enter to confirm' <<< "${screen:-}"; then
+    event "$1" blocked ak "a start-up dialog is waiting for input; check it with peek or attach"
+    echo blocked > "$(rundir "$1")/state"
+  fi
+}
+
+# --- send / peek / log -------------------------------------------------------------------
+cmd_send() {
+  local name=${1:-}; shift || true
+  [ -d "$(rundir "$name")" ] || die "send: unknown session '$name'" 2
+  alive "$name" || die "send: $name is not running" 3
+  local text
+  if [ $# -eq 0 ] || [ "$1" = - ]; then text=$(cat); else text=$*; fi
+  [ -n "$text" ] || die "send: empty message" 2
+  if [ "$(sbackend "$name")" = herdr ]; then
+    local pane out; pane=$(hpane "$name")
+    out=$(H agent prompt "$pane" "$text" 2>&1) || true
+    if jq -e '.error' >/dev/null 2>&1 <<< "$out"; then
+      [ "$(jq -r '.error.code' <<< "$out")" = agent_blocked ] && die "send: $name is waiting on an approval/question UI; look at it first (peek/attach)" 3
+      # Not a recognised agent (or no agent API): type the text and press Enter.
+      H pane send-text "$pane" "$text" >/dev/null 2>&1
+      sleep "$(ev SEND_DELAY 0.5)"
+      H pane send-keys "$pane" enter >/dev/null 2>&1
+    fi
+  else
+    local s buf; s=$(tsess "$name"); buf="ak-$name"
+    printf '%s' "$text" | tm load-buffer -b "$buf" -
+    tm paste-buffer -p -d -b "$buf" -t "=$s:"
+    sleep "$(ev SEND_DELAY 0.5)"
+    tm send-keys -t "=$s:" Enter
+  fi
+  event "$name" sent ak "$text"
+  echo working > "$(rundir "$name")/state"
+  echo "sent to $name (${#text} chars)"
+}
+
+cmd_peek() {
+  local name=${1:-} n=60; shift || true
+  [ "${1:-}" = -n ] && n=$2
+  [ -d "$(rundir "$name")" ] || die "peek: unknown session '$name'" 2
+  screen "$name" 500 | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' | tail -n "$n"
+}
+
+cmd_log() {
+  local f; f=$(rundir "${1:-}")/events.jsonl
+  [ -f "$f" ] || die "log: unknown session '${1:-}'" 2
+  jq -r '"\(.ts) \(.kind)/\(.source) \(.msg)"' "$f"
+}
+
+# --- status ------------------------------------------------------------------------------
+status_json() {
+  local n run
+  for n in $(sessions); do
+    run=$(rundir "$n")
+    [ -f "$run/meta.json" ] || continue
+    jq -c --arg alive "$(alive "$n" && echo true || echo false)" --arg state "$(cat "$run/state" 2>/dev/null)" \
+      --argjson last "$(tail -n 1 "$run/events.jsonl" 2>/dev/null | grep . || echo null)" \
+      '{name, profile, kind, model, role, task, dir, backend, started, state:$state, alive:($alive=="true"), last:$last}' \
+      "$run/meta.json"
+  done
+}
+
+cmd_status() {
+  if [ "${1:-}" = --json ]; then status_json | jq -s .; return; fi
+  printf '%-18s %-11s %-8s %-9s %-9s %-6s %-6s %s\n' SESSION PROFILE ROLE TASK STATE ALIVE BACKEND LAST
+  status_json | jq -r '[.name, .profile, .role, (if .task == "" then "-" else .task end), .state,
+      (if .alive then "yes" else "no" end), .backend, (if .last then "\(.last.ts) \(.last.kind)" else "-" end)] | @tsv' |
+    while IFS=$'\t' read -r a b c d e f g h; do printf '%-18s %-11s %-8s %-9s %-9s %-6s %-6s %s\n' "$a" "$b" "$c" "$d" "$e" "$f" "$g" "$h"; done
+}
+
+# --- wait --------------------------------------------------------------------------------
+# Reportable events after the cursor. An "idle" is dropped when the last non-idle event before it
+# is already a child report (question/done/blocked): the turn simply ended after that report.
+# Back-to-back idles (Codex sends two per turn) collapse into the last one.
+new_events() { # run upto; reads only the first <upto> complete lines, so a half-written line waits
+  head -n "$2" "$1/events.jsonl" | jq -cs --argjson c "$(cat "$1/cursor")" '
+    . as $all | range($c; length) as $i | $all[$i]
+    | select(.kind | IN("question","done","blocked","idle","exit","dead"))
+    | select(.kind != "idle" or
+        (($all[$i+1].kind // "") != "idle" and
+         ([$all[0:$i][] | select(.kind != "idle")] | last | . == null or (.kind | IN("sent","start","trust")))))'
+}
+
+lines() { wc -l < "$1/events.jsonl" | tr -d ' '; }
+
+# Herdr knows when an agent is blocked on an approval UI or has gone idle, even without a harness hook.
+herdr_poll() { # name
+  local run st; run=$(rundir "$1")
+  [ -f "$run/herdr.json" ] || return 0
+  st=$(H agent get "$(hpane "$1")" 2>/dev/null | jq -r '.result.agent.agent_status // empty' 2>/dev/null) || return 0
+  case "$st" in
+    blocked)
+      if [ ! -f "$run/blocked-seen" ]; then
+        : > "$run/blocked-seen"
+        event "$1" blocked herdr "agent is waiting on an approval/question UI (herdr status: blocked)"
+        echo blocked > "$run/state"
+      fi ;;
+    working) rm -f "$run/blocked-seen"; : > "$run/seen-working" ;;
+    idle|done)
+      rm -f "$run/blocked-seen"
+      if [ -f "$run/seen-working" ]; then rm -f "$run/seen-working"; event "$1" idle herdr ""; fi ;;
+  esac
+}
+
+cmd_wait() {
+  local timeout=1800 interval; interval=$(ev WAIT_INTERVAL 3)
+  [ "${1:-}" = --timeout ] && timeout=$2
+  local deadline=$(( $(date +%s) + timeout )) n run out found
+  while :; do
+    found=""
+    for n in $(sessions); do
+      run=$(rundir "$n")
+      [ -f "$run/launched" ] || continue   # spawn in progress, or cleaned meanwhile
+      if ! alive "$n" && ! grep -qE '"kind":"(exit|dead|killed)"' "$run/events.jsonl" 2>/dev/null; then
+        [ -d "$run" ] || continue
+        event "$n" dead ak "terminal or agent process is gone" 2>/dev/null || continue
+        echo dead > "$run/state"
+      fi
+      [ "$(sbackend "$n")" = herdr ] && alive "$n" && herdr_poll "$n" || true
+      out=$(new_events "$run" "$(lines "$run" 2>/dev/null || echo 0)" 2>/dev/null) || out=""
+      if [ -n "$out" ]; then found+="$out"$'\n'; fi
+    done
+    if [ -n "$found" ]; then
+      # A short grace period, so a report and its turn end arrive together.
+      sleep "$(ev WAIT_GRACE 2)"
+      found=""
+      local upto
+      for n in $(sessions); do
+        run=$(rundir "$n")
+        [ -f "$run/launched" ] || continue
+        upto=$(lines "$run" 2>/dev/null) || continue
+        # Parse errors keep the cursor, so the same lines are read again next time.
+        out=$(new_events "$run" "$upto" 2>/dev/null) || continue
+        [ -n "$out" ] && found+="$out"$'\n'
+        echo "$upto" > "$run/cursor" 2>/dev/null || true
+      done
+      printf '%s' "$found"
+      return 0
+    fi
+    [ "$(date +%s)" -ge "$deadline" ] && { echo '{"kind":"timeout"}'; return 124; }
+    sleep "$interval"
+  done
+}
+
+# --- kill / clean / attach ---------------------------------------------------------------
+stop_terminal() { # name
+  if [ "$(sbackend "$1")" = herdr ]; then H tab close "$(htab "$1")" >/dev/null 2>&1 || true
+  else tm kill-session -t "=$(tsess "$1"):" 2>/dev/null || true; fi
+}
+
+cmd_kill() {
+  local name=${1:-}
+  [ -d "$(rundir "$name")" ] || die "kill: unknown session '$name'" 2
+  stop_terminal "$name"
+  event "$name" killed ak ""
+  echo killed > "$(rundir "$name")/state"
+  echo "killed $name"
+}
+
+cmd_clean() {
+  local name=${1:-} force=0 run
+  [ "${2:-}" = --force ] && force=1
+  run=$(rundir "$name")
+  [ -d "$run" ] || die "clean: unknown session '$name'" 2
+  if alive "$name" && [ "$force" = 0 ]; then die "clean: '$name' is still running; kill it first or use --force" 60; fi
+  screen "$name" 2000 > "$run/final-screen.txt" 2>/dev/null || true
+  stop_terminal "$name"
+  mkdir -p "$STATE/archive"
+  local dest; dest="$STATE/archive/$(date +%Y%m%d-%H%M%S)-$name"
+  mv "$run" "$dest"
+  echo "cleaned $name -> $dest"
+}
+
+cmd_attach() {
+  local name=${1:-}
+  if [ "$(sbackend "$name")" = herdr ]; then
+    if [ -n "$HS" ]; then echo "herdr --session $HS tab focus $(htab "$name")"; else echo "herdr tab focus $(htab "$name")"; fi
+  elif [ -n "$TMUX_SOCK" ]; then echo "tmux -L $TMUX_SOCK attach -t $(tsess "$name")"
+  else echo "tmux attach -t $(tsess "$name")"; fi
+}
+
+# --- child side: tell / hook ---------------------------------------------------------------
+cmd_tell() {
+  local kind=${1:-} msg=${2:-} run session
+  case "$kind" in question|done|blocked) ;; *) echo 'usage: ak tell question|done|blocked "<message>"' >&2; exit 2 ;; esac
+  [ -n "$msg" ] || { echo "ak tell: message is empty" >&2; exit 2; }
+  run=$(ev RUN ""); session=$(ev SESSION "")
+  if [ -z "$run" ] || [ ! -d "$run" ]; then
+    echo "ak tell: not running under a coordinator; tell the developer directly instead." >&2; exit 0
+  fi
+  jq -cn --arg ts "$(now)" --arg kind "$kind" --arg msg "$msg" --arg session "$session" \
+    '{ts:$ts, session:$session, kind:$kind, source:"child", msg:$msg}' >> "$run/events.jsonl"
+  printf '%s\n' "$kind" > "$run/state"
+  if [ "$kind" = question ] && [ "$(ev NOTIFY 1)" = 1 ] && command -v osascript >/dev/null; then
+    osascript -e "display notification \"${session:-child} asked a question\" with title \"agent-kit\"" >/dev/null 2>&1 || true
+  fi
+  echo "ak tell: $kind reported to the coordinator."
+}
+
+cmd_hook() { # never fails the harness
+  local tool=${1:-?} kind=${2:-idle} run session
+  run=$(ev RUN ""); session=$(ev SESSION "")
+  [ -n "$run" ] && [ -d "$run" ] || exit 0
+  case "$kind" in idle|exit) ;; *) kind=idle ;; esac
+  # Codex appends its JSON payload as the last argument; only turn ends matter.
+  if [ "$tool" = codex ] && [ -n "${3:-}" ]; then
+    printf '%s' "$3" | jq -e '.type == "agent-turn-complete"' >/dev/null 2>&1 || exit 0
+  fi
+  jq -cn --arg ts "$(now)" --arg kind "$kind" --arg tool "$tool" --arg session "$session" \
+    '{ts:$ts, session:$session, kind:$kind, source:$tool, msg:""}' >> "$run/events.jsonl" 2>/dev/null || exit 0
+  # Keep an explicit child report (question/done/blocked) as the state; only replace "working".
+  local cur; cur=$(cat "$run/state" 2>/dev/null || echo working)
+  case "$cur" in working|idle) printf '%s\n' "$kind" > "$run/state" ;; esac
+  [ "$kind" = exit ] && printf 'exit\n' > "$run/state"
+  exit 0
+}
+
+# --- tasks / verify ----------------------------------------------------------------------------
+# Task store: docs/tasks/*.md (kit.conf task_dir) with YAML frontmatter: id, title, status, depends, risk, profile.
+# Files whose name starts with "_" (templates) are skipped. GitLab/GitHub stores are managed with their own CLI.
+task_rows() { # TSV: id status risk depends profile file
+  local dir; dir=$ROOT/$(conf task_dir docs/tasks)
+  [ -d "$dir" ] || die "tasks: $dir not found (kit.conf task_dir)" 2
+  local f
+  for f in "$dir"/*.md; do
+    [ -e "$f" ] || continue
+    case "$(basename "$f")" in _*) continue ;; esac
+    awk -v file="$f" '
+      function v(s) { sub(/^[^:]*:[ \t]*/, "", s); sub(/[ \t]+#.*$/, "", s); gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+      function d(s) { gsub(/[\[\]" \t]/, "", s); return (s == "" ? "-" : s) }
+      function o(s) { return (s == "" ? "-" : s) }
+      NR == 1 && /^---[ \t]*$/ { fm = 1; next }
+      fm && /^---[ \t]*$/ { fm = 0; done = 1; print o(id) "\t" o(st) "\t" o(risk) "\t" d(dep) "\t" o(prof) "\t" file; exit }
+      fm && /^id:/ { id = v($0) }
+      fm && /^status:/ { st = v($0) }
+      fm && /^risk:/ { risk = v($0) }
+      fm && /^depends:/ { dep = v($0) }
+      fm && /^profile:/ { prof = v($0) }' "$f"
+  done
+}
+
+cmd_tasks() {
+  local ready=0 json=0 a
+  for a in "$@"; do case "$a" in --ready) ready=1 ;; --json) json=1 ;; esac; done
+  local rows; rows=$(task_rows)
+  [ -n "$rows" ] || { [ "$json" = 1 ] && echo '[]'; return 0; }
+  rows=$(awk -F'\t' -v ready="$ready" '
+    NR == FNR { status[$1] = $2; next }
+    {
+      ok = 1
+      n = split($4, deps, ",")
+      for (i = 1; i <= n; i++) if (deps[i] != "-" && status[deps[i]] != "done") ok = 0
+      isready = ($2 == "todo" && ok) ? "yes" : "no"
+      if (ready == 1 && isready != "yes") next
+      print $1 "\t" $2 "\t" $3 "\t" $4 "\t" $5 "\t" isready "\t" $6
+    }' <(printf '%s\n' "$rows") <(printf '%s\n' "$rows"))
+  [ -n "$rows" ] || { [ "$json" = 1 ] && echo '[]'; return 0; }
+  if [ "$json" = 1 ]; then
+    printf '%s\n' "$rows" | jq -R -s 'split("\n") | map(select(length>0) | split("\t") |
+      {id:.[0], status:.[1], risk:.[2], depends:.[3], profile:.[4], ready:(.[5]=="yes"), file:.[6]})'
+  else
+    printf '%-14s %-8s %-8s %-6s %-12s %s\n' ID STATUS RISK READY PROFILE DEPENDS
+    printf '%s\n' "$rows" | while IFS=$'\t' read -r id st risk dep prof rdy file; do
+      printf '%-14s %-8s %-8s %-6s %-12s %s\n' "$id" "$st" "$risk" "$rdy" "$prof" "$dep"
+    done
+  fi
+}
+
+cmd_verify() {
+  local task=${1:-} chk bad=0
+  if [ -n "$task" ]; then
+    local row; row=$(task_rows | awk -F'\t' -v t="$task" '$1 == t && !f { print; f = 1 }')
+    [ -n "$row" ] || die "verify: task '$task' not found in $(conf task_dir docs/tasks)" 2
+    echo "task: $(cut -f1,2,3 <<< "$row" | tr '\t' ' ')  (id status risk)"
+    local file; file=$(cut -f6 <<< "$row")
+    if grep -qE '^## (Kanıt|Evidence)' "$file"; then
+      awk '/^## (Kanıt|Evidence)/ {f=1; next} /^## / {f=0} f && NF {n++} END {exit !(n>0)}' "$file" \
+        && echo "evidence section: filled" || { echo "evidence section: EMPTY"; bad=1; }
+    else echo "evidence section: missing"; fi
+  fi
+  chk=$(conf check_cmd "")
+  if [ -n "$chk" ]; then
+    echo "gate: $chk"
+    ( cd "$ROOT" && bash -c "$chk" ) && echo "gate: PASS" || { echo "gate: FAIL"; bad=1; }
+  else echo "gate: (no check_cmd in kit.conf)"; fi
+  if git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+    echo "--- git diff --stat ---"; git -C "$ROOT" diff --stat | tail -n 20
+    echo "--- untracked ---"; git -C "$ROOT" status --short | grep '^??' | head -n 20 || true
+  fi
+  return $bad
+}
+
+# --- doctor / backend ------------------------------------------------------------------------------
+cmd_backend() {
+  local b; b=$(default_backend)
+  echo "$b (config: $(ev BACKEND "$(conf backend auto)"); HERDR_ENV=${HERDR_ENV:-unset}${HS:+; herdr session=$HS})"
+}
+
+cmd_doctor() {
+  local bad=0 kinds k
+  ok() { printf '  ok    %s\n' "$1"; }
+  no() { printf '  FAIL  %s\n' "$1"; bad=1; }
+  wn() { printf '  warn  %s\n' "$1"; }
+  command -v jq >/dev/null && ok jq || no "jq not found"
+  command -v tmux >/dev/null && ok "tmux (fallback backend)" || wn "tmux not found: no fallback if herdr fails"
+  if command -v herdr >/dev/null; then
+    ok "herdr $(herdr --version 2>/dev/null | awk '{print $NF}')"
+    local hs; hs=$(H status server 2>/dev/null || true)
+    [[ "$hs" == *"status: running"* ]] && ok "herdr server running" || wn "herdr server not running"
+    [ "${HERDR_ENV:-}" = 1 ] && ok "inside a herdr pane (backend herdr)" || wn "not inside a herdr pane: backend is $(default_backend) (run the coordinator inside herdr)"
+  else wn "herdr not installed: tmux backend only"; fi
+  [ -f "$PROTOCOL" ] && ok "protocol: ${PROTOCOL#$ROOT/}" || no "protocol missing ($PROTOCOL); run ak init"
+  if [ "$(conf level 1)" = 2 ]; then [ -f "$ROOT/$(conf workflow_file .agents/agent-kit/workflow.md)" ] && ok "workflow: $(conf workflow_file .agents/agent-kit/workflow.md)" || wn "level 2 but no workflow file"; fi
+  [ -f "$CONF" ] && ok "kit.conf (level $(conf level 1), tasks $(conf task_source docs))" || no "kit.conf missing; run ak init"
+  [ -f "$PROJECT_PROFILES" ] && ok "project profiles: ${PROJECT_PROFILES#$ROOT/}"
+  [ -f "$GLOBAL_PROFILES" ] && ok "global profiles: $GLOBAL_PROFILES" || { [ -f "$PROJECT_PROFILES" ] || no "no profile library ($GLOBAL_PROFILES)"; }
+  kinds=$( { for f in "$PROJECT_PROFILES" "$GLOBAL_PROFILES"; do [ -f "$f" ] && awk -F'|' '/^[ \t]*#/ || NF < 4 {next} {gsub(/[ \t]/,"",$2); print $2}' "$f"; done; } | sort -u)
+  for k in $kinds; do
+    case "$(resolve_kind "$k" 2>/dev/null || echo "$k")" in
+      claude) command -v claude >/dev/null && ok "claude" || no "claude not found" ;;
+      codex) command -v codex >/dev/null && ok "codex" || no "codex not found" ;;
+      opencode) command -v opencode >/dev/null && ok "opencode" || no "opencode not found" ;;
+      antigravity) command -v agy >/dev/null && ok "agy (antigravity)" || no "agy not found" ;;
+      fake|shell) ;;
+      *) no "unknown kind in profiles: $k" ;;
+    esac
+  done
+  if [ -n "$(ev DOCTOR_PROXY_URL "")" ]; then
+    local pk; pk=$(ev DOCTOR_PROXY_KEY_FILE "")
+    if [ -n "$pk" ] && [ -f "$pk" ] && curl -sf -m 10 -H "Authorization: Bearer $(cat "$pk")" "$(ev DOCTOR_PROXY_URL "")/v1/models" >/dev/null; then
+      ok "LLM proxy reachable"; else no "LLM proxy not reachable or key rejected"; fi
+  fi
+  mkdir -p "$STATE" 2>/dev/null && [ -w "$STATE" ] && ok "state dir: $STATE" || no "state dir not writable: $STATE"
+  return $bad
+}
+
+# --- init (run from the skill copy) ----------------------------------------------------------------
+cmd_init() {
+  [ -n "$SKILL_DIR" ] || die "init: run it from the skill copy (~/.claude/skills/agent-kit/scripts/ak init), not from a project copy" 2
+  local root="" level="" tdir="" tsrc="" chk="" lang="" backend="" pfile="" protof="" wflow="" tellc="" adopt=0 force=0 dry=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --root) root=$2; shift 2 ;;
+      --level) level=$2; shift 2 ;;
+      --task-dir) tdir=$2; shift 2 ;;
+      --task-source) tsrc=$2; shift 2 ;;
+      --check) chk=$2; shift 2 ;;
+      --lang) lang=$2; shift 2 ;;
+      --backend) backend=$2; shift 2 ;;
+      --profiles-file) pfile=$2; shift 2 ;;
+      --protocol-file) protof=$2; shift 2 ;;
+      --workflow-file) wflow=$2; shift 2 ;;
+      --tell-cmd) tellc=$2; shift 2 ;;
+      --adopt) adopt=1; shift ;;
+      --force) force=1; shift ;;
+      --dry-run) dry=1; shift ;;
+      *) die "init: unknown flag $1" 2 ;;
+    esac
+  done
+  root=${root:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}
+  root=$(cd "$root" && pwd -P)
+  local T=$SKILL_DIR/templates kit=$root/.agents/agent-kit conf=$root/.agents/agent-kit/kit.conf
+  local first=1; [ -f "$conf" ] && first=0
+  # Existing values win over defaults; flags win over both.
+  getc() { [ -f "$conf" ] && sed -n "s/^$1=//p" "$conf" | tail -n 1 || true; }
+  level=${level:-$(getc level)}; level=${level:-1}
+  tsrc=${tsrc:-$(getc task_source)}; tsrc=${tsrc:-docs}
+  tdir=${tdir:-$(getc task_dir)}; tdir=${tdir:-docs/tasks}
+  chk=${chk:-$(getc check_cmd)}
+  lang=${lang:-$(getc docs_lang)}; lang=${lang:-tr}
+  backend=${backend:-$(getc backend)}; backend=${backend:-auto}
+  pfile=${pfile:-$(getc profiles_file)}; pfile=${pfile:-.agents/agent-kit/profiles.conf}
+  protof=${protof:-$(getc protocol_file)}; protof=${protof:-.agents/agent-kit/protocol.md}
+  wflow=${wflow:-$(getc workflow_file)}; wflow=${wflow:-.agents/agent-kit/workflow.md}
+  tellc=${tellc:-$(getc tell_cmd)}
+  case "$level" in 1|2) ;; *) die "init: --level must be 1 or 2" 2 ;; esac
+  case "$tsrc" in docs|gitlab|github) ;; *) die "init: --task-source must be docs|gitlab|github" 2 ;; esac
+  do_() { if [ "$dry" = 1 ]; then echo "  (dry-run) $*"; else "$@"; fi; }
+  say() { echo "  $*"; }
+  echo "agent-kit init: $root (level $level, tasks $tsrc:$tdir, ${adopt:+adopt=$adopt}, force=$force)"
+
+  do_ mkdir -p "$kit" "$root/scripts/agent-kit"
+  # 1) the dispatcher (atomic replace: a running copy keeps its old inode)
+  if [ "$dry" = 0 ]; then
+    cp "$SELF" "$root/scripts/agent-kit/.ak.new" && chmod +x "$root/scripts/agent-kit/.ak.new" && mv "$root/scripts/agent-kit/.ak.new" "$root/scripts/agent-kit/ak"
+  fi
+  say "scripts/agent-kit/ak  (v$AK_VERSION)"
+  # 2) kit.conf — created once; later runs keep it and only refresh the version
+  if [ "$first" = 1 ] && [ "$dry" = 0 ]; then
+    cat > "$conf" <<EOF
+# agent-kit configuration (key=value). Standard: ~/.claude/skills/agent-kit/reference/contract.md
+kit_version=$AK_VERSION
+level=$level
+task_source=$tsrc
+task_dir=$tdir
+check_cmd=$chk
+docs_lang=$lang
+backend=$backend
+profiles_file=$pfile
+protocol_file=$protof
+workflow_file=$wflow
+tell_cmd=$tellc
+default_reviewer=opus
+EOF
+    say ".agents/agent-kit/kit.conf  (new)"
+  elif [ "$dry" = 0 ]; then
+    sed -i '' "s/^kit_version=.*/kit_version=$AK_VERSION/" "$conf"
+    say ".agents/agent-kit/kit.conf  (kept; kit_version refreshed)"
+  fi
+  # 3) protocol, workflow (level 2), task template — never overwrite a project's own copy
+  copyfile() { # src dst
+    if [ -e "$2" ] && [ "$force" = 0 ]; then say "${2#$root/}  (exists, kept)"; return 0; fi
+    do_ cp "$1" "$2"; say "${2#$root/}  (written)"
+  }
+  if [ "$protof" = .agents/agent-kit/protocol.md ]; then copyfile "$T/protocol.md" "$kit/protocol.md"
+  else say "protocol: $protof  (project's own, kept)"; fi
+  if [ "$level" = 2 ] && [ "$wflow" = .agents/agent-kit/workflow.md ]; then copyfile "$T/workflow.md" "$kit/workflow.md"
+  elif [ "$level" = 2 ]; then say "workflow: $wflow  (project's own, kept)"; fi
+  if [ "$tsrc" = docs ] && [ "$adopt" = 0 ]; then
+    do_ mkdir -p "$root/$tdir"
+    copyfile "$T/task.$lang.md" "$root/$tdir/_TEMPLATE.md"
+  fi
+  # 4) AGENTS.md block, replaced in place between its markers
+  local target="$root/AGENTS.md" block
+  [ -f "$target" ] || { [ -f "$root/CLAUDE.md" ] && target="$root/CLAUDE.md"; }
+  block=$(sed -e "s#{{LEVEL}}#$level#g" -e "s#{{TASK_SOURCE}}#$tsrc#g" -e "s#{{TASK_DIR}}#$tdir#g" \
+              -e "s#{{CHECK}}#${chk:-—}#g" "$T/AGENTS.block.$lang.md")
+  if [ "$dry" = 0 ]; then
+    if [ ! -f "$target" ]; then
+      printf '# AGENTS.md\n\n%s\n' "$block" > "$root/AGENTS.md"; target=$root/AGENTS.md
+      [ -f "$root/CLAUDE.md" ] || printf '@AGENTS.md\n' > "$root/CLAUDE.md"
+      say "AGENTS.md  (created with the agent-kit block${first:+; CLAUDE.md -> @AGENTS.md})"
+    elif grep -q '<!-- agent-kit:begin -->' "$target"; then
+      printf '%s\n' "$block" > "$target.blk"
+      awk -v blkf="$target.blk" '/<!-- agent-kit:begin -->/ {while ((getline l < blkf) > 0) print l; skip=1; next} /<!-- agent-kit:end -->/ {skip=0; next} !skip {print}' "$target" > "$target.new" \
+        && mv "$target.new" "$target" && rm -f "$target.blk" || die "init: could not refresh the agent-kit block in $target" 1
+      say "${target#$root/}  (agent-kit block refreshed)"
+    else
+      printf '\n%s\n' "$block" >> "$target"
+      say "${target#$root/}  (agent-kit block appended)"
+    fi
+  fi
+  # 5) OpenCode turn-end plugin for the installs named in the profile library (machine level, idempotent)
+  if [ -f "$GLOBAL_PROFILES" ] && [ -f "$SKILL_DIR/scripts/opencode-plugin/coord.js" ]; then
+    local cfg pdir
+    for cfg in $(grep -o 'XDG_CONFIG_HOME=[^ |]*' "$GLOBAL_PROFILES" | sort -u | cut -d= -f2); do
+      cfg=$(expand "$cfg"); pdir=$cfg/opencode/plugin
+      if [ -d "$cfg/opencode" ] && [ ! -f "$pdir/coord.js" ]; then
+        do_ mkdir -p "$pdir"; do_ cp "$SKILL_DIR/scripts/opencode-plugin/coord.js" "$pdir/coord.js"
+        say "opencode plugin installed: ${pdir/#$HOME/~}/coord.js"
+      fi
+    done
+  fi
+  echo "next: scripts/agent-kit/ak doctor && see $SKILL_DIR/SKILL.md (coordinator loop)"
+}
+
+case "${1:-}" in
+  spawn) shift; cmd_spawn "$@" ;;
+  send) shift; cmd_send "$@" ;;
+  status) shift; cmd_status "$@" ;;
+  peek) shift; cmd_peek "$@" ;;
+  log) shift; cmd_log "$@" ;;
+  wait) shift; cmd_wait "$@" ;;
+  kill) shift; cmd_kill "$@" ;;
+  clean) shift; cmd_clean "$@" ;;
+  attach) shift; cmd_attach "$@" ;;
+  profiles) shift; cmd_profiles ;;
+  equiv) shift; cmd_equiv "$@" ;;
+  review-for) shift; cmd_review_for "$@" ;;
+  tasks) shift; cmd_tasks "$@" ;;
+  verify) shift; cmd_verify "$@" ;;
+  doctor) shift; cmd_doctor ;;
+  backend) shift; cmd_backend ;;
+  init) shift; cmd_init "$@" ;;
+  tell) shift; cmd_tell "$@" ;;
+  hook) shift; cmd_hook "$@" ;;
+  version|--version) echo "ak $AK_VERSION" ;;
+  ""|-h|--help|help) usage ;;
+  *) usage >&2; exit 2 ;;
+esac

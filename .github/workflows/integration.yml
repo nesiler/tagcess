@@ -1,0 +1,39 @@
+name: Integration
+
+# Placeholder for the Docker Compose integration tests (test/compose, test/e2e).
+#
+# What runs today: the integration-tagged packages are compiled and vetted, so they cannot rot.
+#
+# What cannot run on ubuntu-latest yet: the compose stack (test/compose/compose.yaml) starts
+# Headscale with OIDC, and Headscale refuses to start without a reachable OIDC issuer. Zitadel is
+# not part of the compose stack; the tests expect an external Zitadel (`make lab-up`). Still to do
+# in a later issue:
+#   - a Zitadel service container (plus its database) with a seeded admin key/PAT,
+#   - running test/compose/seed against it before Headscale starts,
+#   - `docker compose up` for Headscale, oauth2-proxy and Caddy, then
+#     `go test -tags integration ./test/compose/... ./internal/...`,
+#   - the host-lab, k8s-lab and installer suites (need systemd containers or a cluster).
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Vet integration-tagged tests
+        run: go vet -tags integration ./...

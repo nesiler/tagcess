@@ -1,0 +1,377 @@
+{
+  "sites": [
+    {
+      "hosts": [
+        "monitor.example.com"
+      ],
+      "kind": "role",
+      "roles": [
+        "devops",
+        "developer"
+      ],
+      "cert": "le:example.com",
+      "target": "k8s",
+      "magicdns": true,
+      "api_rules": [],
+      "redirects": [],
+      "note": ""
+    },
+    {
+      "hosts": [
+        "dbadmin.example.com"
+      ],
+      "kind": "role",
+      "roles": [
+        "devops",
+        "developer"
+      ],
+      "cert": "le:example.com",
+      "target": "k8s",
+      "magicdns": true,
+      "api_rules": [],
+      "redirects": [],
+      "note": ""
+    },
+    {
+      "hosts": [
+        "dbmetrics.example.com"
+      ],
+      "kind": "role",
+      "roles": [
+        "devops",
+        "developer"
+      ],
+      "cert": "le:example.com",
+      "target": "k8s",
+      "magicdns": true,
+      "api_rules": [],
+      "redirects": [],
+      "note": ""
+    },
+    {
+      "hosts": [
+        "partner-api.example.com"
+      ],
+      "kind": "role",
+      "roles": [
+        "devops",
+        "developer"
+      ],
+      "cert": "le:example.com",
+      "target": "k8s",
+      "magicdns": true,
+      "api_rules": [],
+      "redirects": [],
+      "note": ""
+    },
+    {
+      "hosts": [
+        "k8s-api.example.com"
+      ],
+      "kind": "role",
+      "roles": [
+        "devops",
+        "developer"
+      ],
+      "cert": "le:example.com",
+      "target": "k8s",
+      "magicdns": true,
+      "api_rules": [
+        {
+          "type": "header_present",
+          "value": "Authorization"
+        }
+      ],
+      "redirects": [],
+      "note": "Cluster API tokens"
+    },
+    {
+      "hosts": [
+        "errors.example.com"
+      ],
+      "kind": "role",
+      "roles": [
+        "devops",
+        "developer"
+      ],
+      "cert": "le:example.com",
+      "target": "k8s",
+      "magicdns": true,
+      "api_rules": [
+        {
+          "type": "header_present",
+          "value": "Authorization"
+        },
+        {
+          "type": "path_regex",
+          "value": "^/api/[0-9]+/(envelope|store|security)/"
+        }
+      ],
+      "redirects": [],
+      "note": "Error-tracker SDK ingest paths and API tokens"
+    },
+    {
+      "hosts": [
+        "docs.example.com"
+      ],
+      "kind": "role",
+      "roles": [
+        "devops",
+        "developer",
+        "standart"
+      ],
+      "cert": "le:example.com",
+      "target": "k8s",
+      "magicdns": true,
+      "api_rules": [
+        {
+          "type": "header_present",
+          "value": "Authorization"
+        }
+      ],
+      "redirects": [],
+      "note": "Docs API"
+    },
+    {
+      "hosts": [
+        "tickets.example.com"
+      ],
+      "kind": "role",
+      "roles": [
+        "devops",
+        "developer",
+        "standart"
+      ],
+      "cert": "le:example.com",
+      "target": "k8s",
+      "magicdns": true,
+      "api_rules": [
+        {
+          "type": "header_present",
+          "value": "Authorization"
+        },
+        {
+          "type": "header_present",
+          "value": "X-Tracker-Api-Key"
+        }
+      ],
+      "redirects": [],
+      "note": "Ticket API"
+    },
+    {
+      "hosts": [
+        "projects.example.com"
+      ],
+      "kind": "role",
+      "roles": [
+        "devops",
+        "developer",
+        "standart"
+      ],
+      "cert": "le:example.com",
+      "target": "k8s",
+      "magicdns": true,
+      "api_rules": [
+        {
+          "type": "header_present",
+          "value": "Authorization"
+        },
+        {
+          "type": "header_present",
+          "value": "X-Api-Key"
+        }
+      ],
+      "redirects": [
+        {
+          "source": "/setup",
+          "target": "https://projects.example.com/setup/",
+          "code": 308
+        }
+      ],
+      "note": "Project API; /setup slash redirect"
+    },
+    {
+      "hosts": [
+        "blog.internal.example.org"
+      ],
+      "kind": "role",
+      "roles": [
+        "devops",
+        "developer",
+        "standart"
+      ],
+      "cert": "le:internal.example.org",
+      "target": "k8s",
+      "magicdns": true,
+      "api_rules": [],
+      "redirects": [],
+      "note": ""
+    },
+    {
+      "hosts": [
+        "dashboard.internal.example.org"
+      ],
+      "kind": "role",
+      "roles": [
+        "devops",
+        "developer",
+        "standart"
+      ],
+      "cert": "le:internal.example.org",
+      "target": "k8s",
+      "magicdns": true,
+      "api_rules": [],
+      "redirects": [],
+      "note": ""
+    },
+    {
+      "hosts": [
+        "dashboard-staging.internal.example.org"
+      ],
+      "kind": "role",
+      "roles": [
+        "devops",
+        "developer",
+        "standart"
+      ],
+      "cert": "le:internal.example.org",
+      "target": "k8s",
+      "magicdns": true,
+      "api_rules": [],
+      "redirects": [],
+      "note": ""
+    },
+    {
+      "hosts": [
+        "issues.internal.example.org"
+      ],
+      "kind": "role",
+      "roles": [
+        "devops",
+        "developer",
+        "standart"
+      ],
+      "cert": "le:internal.example.org",
+      "target": "k8s",
+      "magicdns": true,
+      "api_rules": [],
+      "redirects": [],
+      "note": ""
+    },
+    {
+      "hosts": [
+        "blog-staging.internal.example.org"
+      ],
+      "kind": "role",
+      "roles": [
+        "devops",
+        "developer",
+        "standart"
+      ],
+      "cert": "le:internal.example.org",
+      "target": "k8s",
+      "magicdns": true,
+      "api_rules": [],
+      "redirects": [],
+      "note": ""
+    },
+    {
+      "hosts": [
+        "store.internal.example.org"
+      ],
+      "kind": "role",
+      "roles": [
+        "devops",
+        "developer",
+        "standart"
+      ],
+      "cert": "le:internal.example.org",
+      "target": "k8s",
+      "magicdns": true,
+      "api_rules": [],
+      "redirects": [],
+      "note": ""
+    },
+    {
+      "hosts": [
+        "sandbox.example.net"
+      ],
+      "kind": "role",
+      "roles": [
+        "devops",
+        "developer",
+        "standart"
+      ],
+      "cert": "le:example.net",
+      "target": "k8s",
+      "magicdns": true,
+      "api_rules": [],
+      "redirects": [],
+      "note": ""
+    },
+    {
+      "hosts": [
+        "projects-auth.example.com",
+        "storage-api.example.com"
+      ],
+      "kind": "open",
+      "open_reason": "intentional",
+      "cert": "le:example.com",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Project login and storage API stay reachable without a role check"
+    },
+    {
+      "hosts": [
+        "store-staging.internal.example.org",
+        "blog-admin.internal.example.org"
+      ],
+      "kind": "open",
+      "open_reason": "transition",
+      "cert": "le:internal.example.org",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "No Ingress in k8s yet; kept open for now"
+    },
+    {
+      "hosts": [
+        "auth.example.com"
+      ],
+      "kind": "system",
+      "system_template": "zitadel",
+      "system_config": {},
+      "cert": "le:example.com",
+      "target": "k8s",
+      "magicdns": true,
+      "note": "Zitadel gate: login flow public, console internal only"
+    },
+    {
+      "hosts": [
+        "hs.example.com"
+      ],
+      "kind": "system",
+      "system_template": "headscale",
+      "system_config": {
+        "headplane": true
+      },
+      "cert": "auto",
+      "target": "k8s",
+      "magicdns": false,
+      "note": "Headscale and Headplane (/admin)"
+    },
+    {
+      "hosts": [
+        "vpn.example.com"
+      ],
+      "kind": "system",
+      "system_template": "wireguard_ui",
+      "system_config": {
+        "enabled": true
+      },
+      "cert": "auto",
+      "target": "k8s",
+      "magicdns": false,
+      "note": "wireguard-ui"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+[Unit]
+Description=Publish the tagcess Headscale helper status at boot (oneshot)
+Before=tagcess-hshelper.path
+
+[Service]
+Type=oneshot
+TimeoutStartSec=120
+KillMode=control-group
+ExecStart=/usr/local/bin/tagcess-hshelper boot --config /etc/headscale/config.yaml --root /var/lib/tagcess-headscale --unit headscale.service --service-user headscale --health http://127.0.0.1:8080/health --socket /var/run/headscale/headscale.sock --request-uid 10001
+
+[Install]
+WantedBy=multi-user.target

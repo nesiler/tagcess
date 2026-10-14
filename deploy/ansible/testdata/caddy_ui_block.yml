@@ -1,0 +1,19 @@
+# Test helper (F6-005): the caddy_ui block text, written on the controller.
+- name: Caddy UI block
+  hosts: vpn
+  gather_facts: false
+  roles:
+    - role: config
+      tags: [always]
+  tasks:
+    - name: Block text
+      ansible.builtin.set_fact:
+        caddy_ui_block: >-
+          {{ lookup('ansible.builtin.file', playbook_dir ~ '/../../caddy/tagcess.caddy', rstrip=false)
+             | replace(caddy_ui_reference_host | default('tagcess.example.com'), tagcess_host) }}
+    - name: Write it
+      ansible.builtin.copy:
+        content: "{{ caddy_ui_block }}"
+        dest: "{{ caddy_ui_out }}"
+        mode: "0644"
+      delegate_to: localhost

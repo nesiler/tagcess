@@ -1,0 +1,30 @@
+# The single source of the installer's phase order (F6 öneri 8 [Ö]). site.yml imports the roles in exactly
+# this order (TestSiteYml_PhaseOrderMatchesPhasesYml); install.sh, the runbook test and rollback.yml read it.
+#   name    : phase id = the Ansible tag install.sh passes (--tags <name>)
+#   role    : the role that implements the phase
+#   modes   : install_mode values the phase runs in (adopt-only "only if missing" logic lives in the role)
+#   writes  : where it writes: none | host | zitadel | cluster | controller | backup
+#   confirm : the -e variable that must be "yes" for the phase to write ("" = no phase gate)
+tagcess_phases:
+  - {name: preflight, role: preflight, modes: [fresh, adopt], writes: none, confirm: ""}
+  - {name: certbot, role: certbot, modes: [fresh, adopt], writes: host, confirm: ""}
+  - {name: headscale_install, role: headscale_install, modes: [fresh, adopt], writes: host, confirm: ""}
+  - {name: caddy_install, role: caddy_install, modes: [fresh, adopt], writes: host, confirm: ""}
+  - {name: tailscale_join, role: tailscale_join, modes: [fresh, adopt], writes: host, confirm: ""}
+  - {name: zitadel_install, role: zitadel_install, modes: [fresh], writes: cluster, confirm: ""}
+  - {name: zitadel_seed, role: zitadel_seed, modes: [fresh, adopt], writes: zitadel, confirm: ""}
+  - {name: headscale_oidc, role: headscale_install, modes: [fresh, adopt], writes: host, confirm: ""}
+  - {name: backup, role: backup, modes: [fresh, adopt], writes: backup, confirm: ""}
+  - {name: host, role: host, modes: [fresh, adopt], writes: host, confirm: ""}
+  - {name: host_system, role: host_system, modes: [fresh, adopt], writes: host, confirm: confirm_host_system}
+  - {name: hshelper, role: hshelper, modes: [fresh, adopt], writes: host, confirm: ""}
+  - {name: oauth2_proxy, role: oauth2_proxy, modes: [fresh, adopt], writes: host, confirm: ""}
+  - {name: caddy_ui, role: caddy_ui, modes: [fresh, adopt], writes: host, confirm: ""}
+  - {name: app, role: app, modes: [fresh, adopt], writes: host, confirm: ""}
+  - {name: verify, role: verify, modes: [fresh, adopt], writes: none, confirm: ""}
+  - {name: hs_tags, role: headscale_adopt, modes: [fresh, adopt], writes: host, confirm: confirm_hs_tags}
+  - {name: hs_hook_acl, role: headscale_adopt, modes: [fresh, adopt], writes: host, confirm: confirm_hs_hook_acl}
+  - {name: hs_dns_path, role: headscale_adopt, modes: [fresh, adopt], writes: host, confirm: confirm_hs_dns_path}
+  - {name: g02, role: headscale_adopt, modes: [fresh, adopt], writes: host, confirm: confirm_g02}
+  - {name: k8s_access, role: k8s_access, modes: [fresh, adopt], writes: controller, confirm: ""}
+  - {name: verify_final, role: verify, modes: [fresh, adopt], writes: none, confirm: ""}

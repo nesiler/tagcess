@@ -1,0 +1,15 @@
+# hs_hook_acl: the policy file back to before the rule (file mode only; in database mode roll back g02 first).
+- name: "Rollback hs_hook_acl: policy mode"
+  ansible.builtin.command: "grep -Eq '^[[:space:]]+mode:[[:space:]]+database' {{ headscale_config }}"
+  register: rollback_hook_db
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: "Rollback hs_hook_acl: refused in database mode"
+  ansible.builtin.fail:
+    msg: "Policy database modunda: önce g02'yi geri al (rollback.yml --tags g02), sonra hs_hook_acl."
+  when: rollback_hook_db.rc == 0 and install_state.phases.hs_hook_acl is defined and not (install_state.phases.hs_hook_acl.rolled_back | default(false))
+
+- name: "Rollback hs_hook_acl: policy file"
+  ansible.builtin.import_tasks: generic_phase.yml

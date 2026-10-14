@@ -1,0 +1,17 @@
+# hshelper: units stopped and disabled, binary/units/directories back to before (first install: moved aside).
+- name: "Rollback hshelper: which backup, what metadata, backup of today's state first"
+  ansible.builtin.import_tasks: prepare.yml
+
+- name: "Rollback hshelper: stop and disable the units"  # noqa: command-instead-of-module
+  ansible.builtin.shell: |
+    systemctl disable --now tagcess-hshelper.path tagcess-hshelper-boot.service tagcess-hshelper.service 2>/dev/null || true
+  changed_when: true
+  when: install_state.phases.hshelper is defined and not (install_state.phases.hshelper.rolled_back | default(false)) and not ansible_check_mode
+
+- name: "Rollback hshelper: files"
+  ansible.builtin.import_tasks: generic_phase.yml
+
+- name: "Rollback hshelper: systemd forgets the units"
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: install_state.phases.hshelper is defined and not ansible_check_mode

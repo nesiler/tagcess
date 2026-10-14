@@ -1,0 +1,7 @@
+[
+  {"name": "empty", "groups": [], "projection": "{\"oidc\":{\"allowed_groups\":[]}}", "base_rev": "588e4e5db485a0df8ad4e50a1eef0db7d4cf248cde94caebd262ef1ce6642c90"},
+  {"name": "devops", "groups": ["devops"], "projection": "{\"oidc\":{\"allowed_groups\":[\"devops\"]}}", "base_rev": "740a57b59f3878100ec9dd17b117f5239adbb93bd7686cb4cce8a1645bc49ad5"},
+  {"name": "devops+developer", "groups": ["developer", "devops"], "projection": "{\"oidc\":{\"allowed_groups\":[\"devops\",\"developer\"]}}", "base_rev": "fd46142e8e5c31d05a88ecaa0047335ccbb1f36452340571898e248790b9ff30"},
+  {"name": "all three", "groups": ["standart", "developer", "devops"], "projection": "{\"oidc\":{\"allowed_groups\":[\"devops\",\"developer\",\"standart\"]}}", "base_rev": "42ad82a8af0b817eba8b25094a0ca09cc8ae6603ff6d5f4d2f8cb4ab542bf701"},
+  {"name": "developer only", "groups": ["developer"], "projection": "{\"oidc\":{\"allowed_groups\":[\"developer\"]}}", "base_rev": "fa04cc18da0a4e7dc0a5bda93465f7a684af9053524978da620dd5fb0cf43a4e"}
+]

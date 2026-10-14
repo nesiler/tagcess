@@ -1,0 +1,136 @@
+# caddy_ui (F6-005): writes the block, validates the whole config, reloads; a failed validation puts the previous
+# state back and never reloads (rule 7). Once tagcess owns the Caddyfile (first import done) it writes nothing.
+- name: The certificate name is one of cert_names and a plain name
+  ansible.builtin.assert:
+    that:
+      - caddy_ui_cert_name in cert_names
+      - caddy_ui_cert_name is match('^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$')
+    fail_msg: "caddy_ui_cert_name '{{ caddy_ui_cert_name }}' cert_names içinde olmalı ve düz bir ad olmalı"
+    quiet: true
+  when: caddy_ui_cert_name | length > 0
+
+- name: The UI block (reference text with this host)
+  ansible.builtin.set_fact:
+    caddy_ui_block: >-
+      {%- set ref = lookup('ansible.builtin.file', tagcess_repo_root ~ '/deploy/caddy/tagcess.caddy', rstrip=false)
+          | replace(caddy_ui_reference_host, tagcess_host) -%}
+      {%- if caddy_ui_cert_name | length > 0 -%}
+      {{ ref | replace(tagcess_host ~ ' {', tagcess_host ~ ' {' ~ caddy_ui_nl ~ caddy_ui_tab ~ 'tls /etc/letsencrypt/live/' ~ caddy_ui_cert_name ~ '/fullchain.pem /etc/letsencrypt/live/' ~ caddy_ui_cert_name ~ '/privkey.pem', 1) }}
+      {%- else -%}
+      {{ ref }}
+      {%- endif -%}
+
+- name: tagcess owns the Caddyfile already?
+  ansible.builtin.set_fact:
+    caddy_ui_owned: "{{ preflight_report.caddy.tagcess_owned | default(false) | bool }}"
+
+- name: Nothing to write (tagcess owns the Caddyfile)
+  ansible.builtin.debug:
+    msg: "İlk içe aktarma yapılmış: Caddyfile'ın sahibi tagcess, arayüz bloğu onun render'ında. Caddy dosyalarına yazılmadı."
+  when: caddy_ui_owned
+
+- name: Add the UI block
+  when: not caddy_ui_owned
+  block:
+    - name: Current block file
+      ansible.builtin.slurp:
+        src: "{{ caddy_ui_file }}"
+      register: caddy_ui_old
+      failed_when: false
+      check_mode: false
+
+    - name: Main Caddyfile imports the sites directory?
+      ansible.builtin.command: "grep -Eq '^[[:space:]]*import[[:space:]]+(sites/\\*\\.caddy|{{ caddy_ui_sites_dir | regex_escape }}/\\*\\.caddy)[[:space:]]*$' {{ caddyfile_path }}"
+      register: caddy_ui_import
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Already in place?
+      ansible.builtin.set_fact:
+        caddy_ui_needs_write: >-
+          {{ caddy_ui_old.content is not defined or (caddy_ui_old.content | b64decode) != caddy_ui_block or caddy_ui_import.rc != 0 }}
+
+    - name: Write, validate, reload
+      when: caddy_ui_needs_write | bool
+      block:
+        - name: Backup before writing
+          ansible.builtin.include_role:
+            name: backup
+          vars:
+            backup_phase: caddy_ui
+
+        - name: Sites directory
+          ansible.builtin.file:
+            path: "{{ caddy_ui_sites_dir }}"
+            state: directory
+            mode: "0755"
+
+        - name: UI block file
+          ansible.builtin.copy:
+            content: "{{ caddy_ui_block }}"
+            dest: "{{ caddy_ui_file }}"
+            owner: root
+            group: root
+            mode: "0644"
+
+        - name: Import line for the sites directory
+          ansible.builtin.lineinfile:
+            path: "{{ caddyfile_path }}"
+            line: "import {{ caddy_ui_sites_dir }}/*.caddy"
+            insertafter: EOF
+          when: caddy_ui_import.rc != 0
+
+        - name: Validate the whole config
+          ansible.builtin.command: "runuser -u caddy -- caddy validate --config {{ caddyfile_path }} --adapter caddyfile"
+          changed_when: false
+          when: not ansible_check_mode
+
+        - name: Reload Caddy
+          ansible.builtin.systemd_service:
+            name: caddy
+            state: reloaded
+          when: not ansible_check_mode
+
+      rescue:
+        - name: Put the previous block back
+          ansible.builtin.copy:
+            content: "{{ caddy_ui_old.content | b64decode }}"
+            dest: "{{ caddy_ui_file }}"
+            owner: root
+            group: root
+            mode: "0644"
+          when: caddy_ui_old.content is defined
+
+        - name: Remove the new block (there was none)
+          ansible.builtin.file:
+            path: "{{ caddy_ui_file }}"
+            state: absent
+          when: caddy_ui_old.content is not defined
+
+        - name: Remove the added import line
+          ansible.builtin.lineinfile:
+            path: "{{ caddyfile_path }}"
+            line: "import {{ caddy_ui_sites_dir }}/*.caddy"
+            state: absent
+          when: caddy_ui_import.rc != 0
+
+        - name: Stop (Caddy was not reloaded)
+          ansible.builtin.fail:
+            msg: "caddy validate arayüz bloğuyla düştü; blok geri alındı, Caddy yeniden yüklenmedi ({{ caddy_ui_file }})"
+
+- name: oauth2-proxy runs? (the UI gate needs it)
+  ansible.builtin.uri:
+    url: "{{ oauth2_proxy_ping_url }}"
+    status_code: [200, -1]
+    timeout: 3
+  register: caddy_ui_ping
+  failed_when: false
+  check_mode: false
+
+- name: Guide items of caddy_ui
+  ansible.builtin.set_fact:
+    guide_items_caddy_ui: >-
+      {{ [] if caddy_ui_ping.status | default(-1) == 200 else [{'id': 'caddy-ui-oauth2-proxy', 'title': 'Arayüz kapısı oauth2-proxy bekliyor',
+          'steps': ['oauth2-proxy (' ~ oauth2_proxy_ping_url ~ ') yanıt vermiyor; arayüz bloğu eklendi ama kapı kapalı kalır (403/5xx). oauth2_proxy fazını koş.'],
+          'check': {'host_cmd': 'curl -fsS -o /dev/null ' ~ oauth2_proxy_ping_url}}] }}

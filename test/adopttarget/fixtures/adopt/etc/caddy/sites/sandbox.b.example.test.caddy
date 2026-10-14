@@ -1,0 +1,3 @@
+sandbox.b.example.test {
+	import vpn_site b.example.test devops,developer,standart
+}

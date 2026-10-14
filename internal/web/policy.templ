@@ -1,0 +1,401 @@
+package web
+
+import (
+	"strconv"
+	"strings"
+
+	"github.com/nesiler/tagcess/internal/web/ui"
+
+	"github.com/nesiler/tagcess/internal/policydoc"
+)
+
+// The policy editor page (F3-019, H-04): the live policy in a plain textarea, the validation panel,
+// the raw and semantic diff and the confirm form. Every value is escaped by templ.
+
+// stageLabel names a validation stage for the panel, in the order the report runs them.
+func stageLabel(s string) string {
+	switch s {
+	case "input":
+		return "Girdi"
+	case "syntax":
+		return "Sözdizimi"
+	case "structure":
+		return "Yapı"
+	case "locked":
+		return "Kilitli testler"
+	case "check":
+		return "Headscale"
+	}
+	return s
+}
+
+// stageState names a stage outcome in the three states the panel keeps apart (plus skipped).
+func stageState(s string) string {
+	switch s {
+	case "pass":
+		return "geçti"
+	case "fail":
+		return "hata"
+	case "unverified":
+		return "doğrulanamadı"
+	}
+	return "atlandı"
+}
+
+func stageTone(s string) ui.Tone {
+	switch s {
+	case "pass":
+		return ui.OK
+	case "fail":
+		return ui.Err
+	case "unverified":
+		return ui.Warn
+	}
+	return ui.Off
+}
+
+// policyStatusTone marks only a confirmed applied revision as successful.
+func policyStatusTone(s string) ui.Tone {
+	switch s {
+	case "applied":
+		return ui.OK
+	case "failed", "unknown":
+		return ui.Err
+	case "pending", "dry_run":
+		return ui.Warn
+	}
+	return ui.Off
+}
+
+// policyRawDiff retains every marker, including policywriter's newline-only note. The hunk
+// delimiter keeps user lines beginning with ++ or -- from being mistaken for file headers.
+func policyRawDiff(rows []diffRow) string {
+	var out strings.Builder
+	out.WriteString("@@ policy @@\n")
+	for _, row := range rows {
+		out.WriteString(diffMark(row.Kind) + row.Text + "\n")
+	}
+	return out.String()
+}
+
+// policySemanticDiff retains the meaning-level labels while using the shared diff renderer.
+func policySemanticDiff(sec semanticRow) string {
+	var out strings.Builder
+	out.WriteString("@@ " + sec.Label + " @@\n")
+	for _, a := range sec.Added {
+		out.WriteString("+ eklenen: " + a + "\n")
+	}
+	for _, r := range sec.Removed {
+		out.WriteString("- silinen: " + r + "\n")
+	}
+	for _, c := range sec.Changed {
+		out.WriteString("! değişen: " + c.Key + ": " + c.Before + " → " + c.After + "\n")
+	}
+	return out.String()
+}
+
+func diffMark(k diffKind) string {
+	switch k {
+	case diffAdd:
+		return "+ "
+	case diffDel:
+		return "- "
+	}
+	return "! "
+}
+
+// reloadHref is where the stale banner sends the operator: the editor unless the page sets another.
+func reloadHref(v policyPageView) string {
+	if v.ReloadHref != "" {
+		return v.ReloadHref
+	}
+	return "/headscale/policy"
+}
+
+// saveAction is the preview's confirm endpoint; rollback and recovery supply their own.
+func saveAction(p policyPreviewView) string {
+	if p.SaveAction != "" {
+		return p.SaveAction
+	}
+	return "/headscale/policy/save"
+}
+
+func policyApplyFields(p policyPreviewView, baseHash string) []ui.Hidden {
+	fields := []ui.Hidden{{Name: "base_hash", Value: baseHash}}
+	if p.Text != "" {
+		fields = append(fields, ui.Hidden{Name: "report_hash", Value: p.ReportHash}, ui.Hidden{Name: "text", Value: p.Text})
+	}
+	return fields
+}
+
+// saveLabel keeps the shared confirmation label available to policy callers.
+func saveLabel(policyPreviewView) string { return confirmApplyLabel }
+
+// policyBackHref returns to the candidate page for rollback and recovery previews.
+func policyBackHref(p policyPreviewView) string {
+	if p.SaveAction != "" {
+		return p.SaveAction
+	}
+	return "/headscale/policy"
+}
+
+// PolicySubNav keeps the ACL editor, history and controlled recovery in one tab bar.
+templ PolicySubNav(active string) {
+	@ui.Tabs([]ui.Tab{
+		{Key: "editor", Label: "Editör", Href: "/headscale/policy"},
+		{Key: "history", Label: "Geçmiş", Href: "/headscale/policy/history"},
+		{Key: "recovery", Label: "Kontrollü recovery", Href: "/headscale/policy/recovery"},
+	}, active)
+}
+
+// PolicyBanners are the status bands of the editor and of the rollback page (F3-025): what closes
+// editing, the unresolved state, a stale base, a held sync and any other refusal.
+templ PolicyBanners(v policyPageView) {
+	if v.HeadscaleErr != "" {
+		@ui.Callout(ui.N{Tone: ui.Err}) {
+			<strong>Headscale okunamıyor;</strong> policy gösterilemiyor, hiçbir şey yazılmadı. Neden: { v.HeadscaleErr }
+		}
+	}
+	if v.ZitadelErr != "" {
+		@ui.Callout(ui.N{Tone: ui.Warn}) {
+			<strong>Zitadel okunamıyor: düzenleme kapalı.</strong> Roller okunamadığı için gruplar kurulamaz; mevcut policy read-only gösterilir. <small>{ v.ZitadelErr }</small>
+		}
+	}
+	if v.Uncertain != "" {
+		@ui.Callout(ui.N{Tone: ui.Err}) {
+			<strong>Önceki apply belirsiz:</strong> { v.Uncertain }. Canlı policy son apply edilen revision'la eşleşene dek kayıt yapılamaz.
+			<a href="/headscale/policy/revalidate">yeniden doğrula</a> ·
+			<a href="/headscale/policy/recovery">Kontrollü recovery</a>
+		}
+	}
+	if v.Revalidated == "still" {
+		@ui.Callout(ui.N{Tone: ui.Stale}) {Taze okuma: canlı policy son apply edilen revision'la eşleşmiyor; belirsizlik sürüyor.}
+	} else if v.Revalidated == "cleared" {
+		@ui.Callout(ui.N{Tone: ui.OK}) {Taze okuma: canlı policy son apply edilen revision'la eşleşiyor; belirsizlik kalktı.}
+	}
+	if v.Stale {
+		@ui.Callout(ui.N{Tone: ui.Warn}) {
+			<strong>Policy dışarıdan değişti.</strong> Bu metin eski bir sürüme dayanıyor; kaydedilmedi.
+			<a href={ templ.SafeURL(reloadHref(v)) }>yeniden yükle</a> (aşağıdaki metni önce kopyalayın).
+		}
+	}
+	if v.SyncPending != "" {
+		@ui.Callout(ui.N{Tone: ui.Warn}) {
+			Kaydedilmedi: { v.SyncPending }. <a href="/sync">Sync sayfası</a>
+		}
+	}
+	if v.Notice != "" {
+		@ui.Callout(ui.N{Tone: ui.Err}) {{ v.Notice }}
+	}
+}
+
+// PolicyPage renders the editor: the status bands, the textarea, the read-only groups, and after a
+// preview the report panel, the diffs and the confirm form.
+templ PolicyPage(v policyPageView, csrfToken string) {
+	@ui.PageHead(ui.H{Title: "ACL / policy", Sub: "Headscale policy'si (HuJSON).", Tip: "Değişiklik önce doğrulanır ve preview edilir, sonra onayınızla apply edilir. Gruplar Zitadel'den kurulur; kilitli testler kayıtta eklenir."})
+	@HeadscaleTabs("policy", v.DryRun)
+	@PolicySubNav("editor")
+	@PolicyBanners(v)
+	if v.Report != nil {
+		@PolicyReportPanel(*v.Report)
+	}
+	if v.Preview != nil {
+		@PolicyPreviewPanel(*v.Preview, v.BaseHash, csrfToken)
+	}
+	if v.HeadscaleErr != "" && v.Text != "" {
+		@ui.Card(ui.C{Title: "Yazdığınız metin (kaydedilmedi), read-only"}) {
+			@ui.Textarea(ui.TA{ID: "policy-text", Value: "\n" + v.Text, Rows: 28, Code: true, Editor: "hujson", ReadOnly: true, Attrs: templ.Attributes{"aria-label": "Yazdığınız metin (kaydedilmedi), read-only"}})
+		}
+	}
+	if v.HeadscaleErr == "" {
+		if v.Editable {
+			@MaintenanceWideningGuard() {
+				<form method="post" action="/headscale/policy/preview" id="policy-editor">
+					@CSRFField(csrfToken)
+					@ui.HiddenFields([]ui.Hidden{{Name: "base_hash", Value: v.BaseHash}})
+					@ui.Card(ui.C{Title: "Policy (HuJSON)"}) {
+						@ui.Textarea(ui.TA{ID: "policy-text", Name: "text", Value: "\n" + v.Text, Rows: 28, Code: true, Editor: "hujson", ErrorLine: v.errorLine(), Attrs: templ.Attributes{"aria-label": "Policy (HuJSON)"}})
+					}
+					@ui.SaveBar("Preview hiçbir şey yazmaz; kayıtta doğrulama yeniden yapılır.") {
+						@ui.Btn(ui.B{Kind: ui.Primary, Icon: "eye"}) {
+							Preview
+						}
+					}
+				</form>
+			}
+		} else {
+			@ui.Card(ui.C{Title: "Policy (HuJSON), read-only"}) {
+				@ui.Textarea(ui.TA{ID: "policy-text", Value: "\n" + v.Text, Rows: 28, Code: true, Editor: "hujson", ReadOnly: true, Attrs: templ.Attributes{"aria-label": "Policy (HuJSON), read-only"}})
+			}
+		}
+		@ui.Card(ui.C{Title: "Gruplar (read-only)", Desc: "Zitadel rollerinden gelir ve kayıtta yeniden oluşturulur; bu bölümde yapılan değişiklikler kayıtta atılır."}) {
+			if v.Groups == "" {
+				<p>groups bölümü yok.</p>
+			} else {
+				@ui.Code("groups", v.Groups)
+			}
+		}
+		if v.Rules != nil {
+			@MaintenanceWideningGuard() {
+				@PolicyRulesCard(*v.Rules, v.Editable)
+			}
+		}
+		if v.Tags != nil {
+			@MaintenanceWideningGuard() {
+				@PolicyTagsCards(*v.Tags, v.Editable)
+			}
+		}
+	}
+}
+
+// PolicyReportPanel keeps each validation stage's result and parser position distinct.
+templ PolicyReportPanel(rep policydoc.Report) {
+	@ui.Card(ui.C{Title: "Doğrulama raporu"}) {
+		@ui.TableIn() {
+			<thead><tr><th scope="col">Aşama</th><th scope="col">Durum</th><th scope="col">Konum</th><th scope="col">Ayrıntı</th></tr></thead>
+			<tbody>
+				for _, s := range rep.Stages {
+					<tr>
+						<td><strong>{ stageLabel(string(s.Stage)) }</strong></td>
+						<td>@ui.Status(stageTone(string(s.State)), stageState(string(s.State)))</td>
+						<td>
+							if s.Line > 0 {
+								satır { strconv.Itoa(s.Line) }, sütun { strconv.Itoa(s.Column) }
+							}
+						</td>
+						<td>
+							if s.Message != "" {
+								@ui.Code("", s.Message)
+							}
+						</td>
+					</tr>
+				}
+			</tbody>
+		}
+	}
+}
+
+// PolicyRawDiffPanel shows raw markers using the shared diff component.
+templ PolicyRawDiffPanel(title string, rows []diffRow) {
+	@ui.Card(ui.C{Title: title}) {
+		if len(rows) == 0 {
+			<p>Canlı policy ile aynı.</p>
+		} else {
+			@ui.Diff("Policy", policyRawDiff(rows))
+		}
+	}
+}
+
+// PolicySemanticDiffPanel shows input changes; it makes no claim about access effects.
+templ PolicySemanticDiffPanel(rows []semanticRow, scopeNote bool) {
+	@ui.Card(ui.C{Title: "Fark (anlam)"}) {
+		if len(rows) == 0 {
+			<p>Anlamca değişiklik yok (yorum, biçim ve dizi sırası sayılmaz).</p>
+		}
+		for _, sec := range rows {
+			@ui.Diff(sec.Label, policySemanticDiff(sec))
+		}
+		if scopeNote {
+			<p>Bu fark erişim etkisinin kanıtı değildir: yalnız metindeki girdilerin ekleme/silme/değişimini gösterir.</p>
+		}
+	}
+}
+
+// PolicyPreviewPanel presents the report, differences and version-bound approval.
+templ PolicyPreviewPanel(p policyPreviewView, baseHash, csrfToken string) {
+	@PolicyReportPanel(p.Report)
+	if p.Report.Unverified() {
+		@ui.Callout(ui.N{Tone: ui.Warn}) {
+			Headscale'e sorulamadığı için metin doğrulanamadı; kayıt kapalı. Daha sonra yeniden preview edin.
+		}
+	}
+	if p.GroupsRebuilt {
+		@ui.Callout(ui.N{Tone: ui.Info}) {
+			Gruplar tagcess tarafından Zitadel'den yeniden oluşturuldu; metindeki groups değişiklikleri atıldı.
+		}
+	}
+	if len(p.Locked) > 0 {
+		@ui.Callout(ui.N{Tone: ui.Info}) {
+			Kilitli testler eklendi:
+			for _, l := range p.Locked {
+				@ui.Tag(l)
+			}
+		}
+	}
+	if p.AutoApprovers {
+		@ui.Callout(ui.N{Tone: ui.Warn}) {
+			autoApprovers değişti: eşleşen route ve exit node'lar Headscale tarafından otomatik onaylanabilir (yan etki; ayrıca kontrol edin).
+		}
+	}
+	if p.diffComputed() {
+		@PolicyRawDiffPanel("Fark (ham metin)", p.Raw)
+		@PolicySemanticDiffPanel(p.Semantic, true)
+	} else {
+		@ui.Callout(ui.N{Tone: ui.Err, Title: "Fark hesaplanmadı"}) {
+			Metin doğrulanamadı (rapordaki başarısız aşamaya bakın); canlı policy ile karşılaştırılamaz. Hatayı yukarıdaki rapordaki satırda düzeltip yeniden preview edin.
+		}
+	}
+	if p.Confirm {
+		@MaintenanceWideningGuard() {
+			<p>Kayıtta doğrulama yeniden yapılır; preview apply yetkisi değildir.</p>
+			@ApplyForm(saveAction(p), csrfToken, policyApplyFields(p, baseHash), policyBackHref(p))
+		}
+	}
+}
+
+// PolicyResultPage calls only an applied and read-back revision successful.
+templ PolicyResultPage(v policyResultView) {
+	@ui.PageHead(ui.H{Title: "ACL / policy", Sub: "Policy değişikliği sonucu."})
+	@HeadscaleTabs("policy", v.DryRun)
+	@PolicySubNav("editor")
+	switch v.Outcome {
+		case "applied":
+			@ui.Callout(ui.N{Tone: ui.OK}) {
+				<strong>Policy apply edildi</strong> ve geri okunarak doğrulandı.
+			}
+		case "dry_run":
+			@ui.Callout(ui.N{Tone: ui.Warn}) {
+				<strong>Dry-run açık: yazılmadı.</strong> Headscale'deki policy değişmedi; revision kaydedildi.
+			}
+		case "unknown":
+			@ui.Callout(ui.N{Tone: ui.Err}) {
+				<strong>Apply belirsiz:</strong> yazımın sonucu doğrulanamadı. Başka kayıt yapılamaz.
+				<a href="/headscale/policy/recovery">Kontrollü recovery</a>
+			}
+		default:
+			@ui.Callout(ui.N{Tone: ui.Err}) {
+				<strong>Policy apply edilemedi;</strong> başarı değil.
+			}
+	}
+	@ui.Card(ui.C{Title: "Revision"}) {
+		@ui.KV() {
+			<dt>Revision</dt>
+			<dd>
+				if v.RevisionID > 0 {
+					#{ strconv.FormatInt(v.RevisionID, 10) }
+				} else {
+					yok
+				}
+			</dd>
+			<dt>Durum</dt>
+			<dd>@ui.Status(policyStatusTone(v.Status), v.Status)</dd>
+			if v.Detail != "" {
+				<dt>Ayrıntı</dt>
+				<dd>{ v.Detail }</dd>
+			}
+			<dt>Git revision'ı</dt>
+			<dd>
+				if v.GitRevision != "" {
+					<code>{ v.GitRevision }</code>
+				} else if v.GitFailed {
+					git kaydı yazılamadı
+				} else {
+					yok
+				}
+			</dd>
+		}
+	}
+	@ui.Btn(ui.B{Href: "/headscale/policy"}) {
+		Editöre dön
+	}
+}

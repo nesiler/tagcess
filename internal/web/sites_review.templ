@@ -1,0 +1,248 @@
+package web
+
+import (
+	"strconv"
+
+	"github.com/nesiler/tagcess/internal/dns"
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// The site review screens (F2-014): the preview of a site change with its three-artifact diff and
+// warnings, the version-bound approval, the result screen and the first-import action. Every value
+// is escaped by templ.
+
+// SiteReviewPage renders the preview of one site change (AC1, AC4) and, unless the change is
+// blocked by the existing state, the approval form bound to the displayed plan version.
+templ SiteReviewPage(v SiteReviewView, csrfToken string) {
+	@ui.PageHead(ui.H{Title: "Değişiklik preview'u", Sub: "Apply edilecek sıra: " + v.Order, Crumbs: []ui.Crumb{{Label: "Siteler", Href: "/sites"}, {Label: "Preview"}}})
+	<p>
+		<span data-op={ v.Op }>
+			@ui.StatusText(ui.Info, siteOpLabel(v.Op), "")
+		</span>
+		for _, h := range v.Hosts {
+			@ui.Tag(h)
+		}
+	</p>
+	if v.Blocked != "" {
+		@ui.Callout(ui.N{Tone: ui.Err, Title: "Değişiklik mevcut durum yüzünden apply edilemez"}) {
+			<pre><code>{ v.Blocked }</code></pre>
+		}
+		@ui.Btn(ui.B{Href: "/sites"}) {
+			Geri
+		}
+	} else {
+		if len(v.Warnings) > 0 {
+			@ui.Callout(ui.N{Tone: ui.Warn, Title: "Uyarılar"}) {
+				<ul>
+					for _, w := range v.Warnings {
+						<li>{ w }</li>
+					}
+				</ul>
+			}
+		}
+		if len(v.Foreign) > 0 {
+			@ui.Callout(ui.N{Tone: ui.Warn, Title: "Yabancı redirect URI'ler tagcess'e ait değil; korunur, silinmez"}) {
+				<ul>
+					for _, f := range v.Foreign {
+						<li><code>{ f }</code></li>
+					}
+				</ul>
+			}
+		}
+		@ui.Card(ui.C{Title: "Hedef"}) {
+			<div data-target-change="true">
+				if v.Target.Changed() {
+					<p>
+						if v.Target.Before != "" {
+							<code>{ v.Target.Before }</code>
+						} else {
+							(yeni site)
+						}
+						→
+						if v.Target.After != "" {
+							<code>{ v.Target.After }</code>
+						} else {
+							(site silinir)
+						}
+					</p>
+				} else {
+					<p>Hedef değişmiyor: <code>{ v.Target.After }</code></p>
+				}
+			</div>
+		}
+		@ui.Card(ui.C{Title: "Değişecek dosyalar", Desc: "Apply edilince üretilecek dosyalar ve Zitadel kayıtları."}) {
+			@ui.Diff("Caddy", v.Diff.Caddy)
+			@ui.Diff("DNS", v.Diff.DNS)
+			@ui.Diff("Zitadel", v.Diff.Zitadel)
+		}
+		@ApplyForm("/sites/review/approve", csrfToken, []ui.Hidden{{Name: "request", Value: v.Request}, {Name: "plan_version", Value: v.Version}}, "/sites")
+	}
+}
+
+// SiteResultPage renders the outcome of an approval (AC3): the recorded status and reason of the
+// change row and the last known good state (the stored sites).
+templ SiteResultPage(v SiteResultView) {
+	@ui.PageHead(ui.H{Title: "Değişiklik sonucu", Crumbs: []ui.Crumb{{Label: v.back().Label, Href: v.back().Href}, {Label: "Sonuç"}}}) {
+		if v.ChangeID > 0 {
+			@ui.StatusText(ui.Off, "değişiklik #"+strconv.FormatInt(v.ChangeID, 10), "")
+		}
+	}
+	if v.DryRun {
+		@dryRunWarning()
+	}
+	if v.Status != "" {
+		<div data-status={ v.Status }>
+			@ui.Callout(ui.N{Tone: resultTone(v), Title: "Değişiklik durumu: " + statusLabel(v.Status)}) {
+				if v.Reason != "" {
+					if v.Failed {
+						<p><strong>Neden</strong></p>
+						<pre><code>{ v.Reason }</code></pre>
+					} else {
+						<p>{ v.Reason }</p>
+					}
+				}
+			}
+		</div>
+	} else if v.Reason != "" {
+		@ui.Callout(ui.N{Tone: resultTone(v)}) {
+			<pre><code>{ v.Reason }</code></pre>
+		}
+	}
+	if v.Note != "" {
+		@ui.Callout(ui.N{Tone: ui.Warn}) {
+			{ v.Note }
+		}
+	}
+	if v.Applied {
+		@ui.Callout(ui.N{Tone: ui.OK}) {
+			Değişiklik apply edildi; kayıtlı siteler günceldi.
+		}
+	} else {
+		@ui.Callout(ui.N{Tone: ui.Info}) {
+			Site kayıtları değişmedi: son iyi durum korundu. Aşağıdaki kayıtlar hâlâ geçerli;
+			caddy/DNS/Zitadel uyarıları için <a href="/sync">sync sayfasına</a>, izler için
+			<a href="/audit">audit kaydına</a> bakın.
+		}
+	}
+	@ui.Card(ui.C{Title: "Kayıtlı siteler (son iyi durum)"}) {
+		if len(v.Sites) == 0 {
+			<p>Kayıtlı site yok.</p>
+		} else {
+			<ul>
+				for _, h := range v.Sites {
+					<li><code>{ h }</code></li>
+				}
+			</ul>
+		}
+	}
+	@ui.Btn(ui.B{Kind: ui.Primary, Href: v.back().Href}) {
+		{ v.back().Label }
+	}
+}
+
+// SiteFirstImportPage renders the first-import action (G-01): on the entry page the gate state
+// and the preview button, on the preview the seed summary and the parity result with the
+// version-bound approval.
+templ SiteFirstImportPage(v SiteFirstImportView, csrfToken string, preview bool) {
+	@ui.PageHead(ui.H{Title: "İlk import", Sub: "Bugünkü Caddyfile'dan site kayıtlarına geçiş.", Crumbs: []ui.Crumb{{Label: "Siteler", Href: "/sites"}, {Label: "İlk import"}}})
+	if v.DryRun && !v.Done {
+		@dryRunWarning()
+	}
+	if v.SeedErr != "" {
+		@ui.Callout(ui.N{Tone: ui.Err}) {
+			{ v.SeedErr }
+		}
+		@ui.Btn(ui.B{Href: "/sites"}) {
+			Geri
+		}
+	} else if v.GateErr != "" {
+		@ui.Callout(ui.N{Tone: ui.Err}) {
+			Gate durumu okunamadı: { v.GateErr }
+		}
+		@ui.Btn(ui.B{Href: "/sites"}) {
+			Geri
+		}
+	} else if v.Done {
+		@ui.Callout(ui.N{Tone: ui.OK}) {
+			İlk import tamamlandı; bugünkü dosya karşılaştırması artık yapılmaz.
+		}
+		@ui.Btn(ui.B{Href: "/sites"}) {
+			Geri
+		}
+	} else if !preview {
+		@ui.Card(ui.C{}) {
+			<p>
+				Bugünkü Caddyfile site kayıtlarına aktarılır; üretilen dosya bugünkü dosyayla eşdeğerse ilk apply onayınızla yapılır.
+			</p>
+			<p>
+				Durum:
+				if v.Pending {
+					@ui.StatusText(ui.Warn, "ilk apply bekliyor", "")
+				} else {
+					@ui.StatusText(ui.Off, "henüz başlamadı", "")
+				}
+			</p>
+			<form method="post" action="/sites/first-import/preview">
+				@CSRFField(csrfToken)
+				@ui.Btn(ui.B{Kind: ui.Primary, Icon: "eye"}) {
+					Karşılaştırmayı preview et
+				}
+			</form>
+		}
+	} else {
+		@ui.Card(ui.C{Title: "Aktarılacak kayıtlar", Desc: "Bugünkü Caddyfile'dan okunan site kayıtları; üretilen Caddyfile bugünkü dosyayla karşılaştırılır.", Right: firstImportSeedCount(v.SeedCount)}) {
+			if v.ParityErr != "" {
+				@ui.Callout(ui.N{Tone: ui.Err, Title: "Karşılaştırma yapılamadı; ilk apply engellenir"}) {
+					<pre><code>{ v.ParityErr }</code></pre>
+				}
+			} else if v.ParityDiff != "" {
+				@ui.Callout(ui.N{Tone: ui.Err, Title: "Üretilen Caddyfile bugünkü dosyayla eşdeğer değil"}) {
+					@ui.Diff("Caddyfile", v.ParityDiff)
+				}
+			} else {
+				@ui.Callout(ui.N{Tone: ui.OK}) {
+					Üretilen Caddyfile bugünkü dosyayla eşdeğer (caddy adapt).
+				}
+			}
+		}
+		@ui.Card(ui.C{Title: "Elle DNS kayıtları", Desc: "Kalıcı saklanır, her DNS üretiminde korunur."}) {
+			if v.ManualDNSErr != "" {
+				@ui.Callout(ui.N{Tone: ui.Err, Title: "Elle DNS kayıtları alınamadı; ilk apply engellenir"}) {
+					<pre><code>{ v.ManualDNSErr }</code></pre>
+				}
+			} else if len(v.ManualDNS) == 0 {
+				<p>Bugünkü DNS dosyasında site dışı (elle) kayıt yok.</p>
+			} else {
+				@ui.TableIn() {
+					<thead><tr><th>Ad</th><th>Tür</th><th>Değer</th></tr></thead>
+					<tbody>
+						for _, r := range v.ManualDNS {
+							<tr>
+								<td><code>{ r.Name }</code></td>
+								<td>{ r.Type }</td>
+								<td>
+									<code>{ r.Value }</code>
+									if dns.PrivateOutsideTailnet(r.Value) {
+										@offTailnetWarning(r.Value)
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				}
+			}
+		}
+		if firstImportApprovable(v) {
+			@ApplyForm("/sites/first-import", csrfToken, []ui.Hidden{{Name: "parity_version", Value: v.Version}}, "/sites/first-import")
+		} else {
+			@ui.Btn(ui.B{Href: "/sites/first-import"}) {
+				Geri
+			}
+		}
+	}
+}
+
+// firstImportSeedCount is the seed record count shown in the seed card title.
+templ firstImportSeedCount(n int) {
+	@ui.StatusText(ui.Off, strconv.Itoa(n)+" kayıt", "")
+}

@@ -1,0 +1,41 @@
+# verify (F6-008): read-only installation report. Every probe can be replaced (tests run it on the controller).
+verify_host_checks: true
+verify_strict: true          # a parity difference fails the run (false: report only; tests of later phases)
+verify_health_strict: true   # a failed security/health probe fails the run (the report is written first)
+# The host probe: one JSON line. Replaceable so the verdict can be tested without a host.
+verify_probe_cmd: |
+  set +e
+  tagcess_started=$(docker logs tagcess 2>&1 | grep -c 'tagcess started')
+  # Only the errors of the current run: the log keeps earlier runs (a Headscale restart in hs_dns_path/g02 can leave
+  # one before the container's restart). Counted from the container's start, not from the "tagcess started" line,
+  # which comes after the background loops have started and may already have logged.
+  tagcess_errors=$(docker logs --since "$(docker inspect -f '{{ '{{' }}.State.StartedAt{{ '}}' }}' tagcess)" tagcess 2>&1 | grep -c 'level=ERROR')
+  sock=$(stat -c '%A %u %G' /run/tagcess/ui.sock 2>/dev/null)
+  sock_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 --unix-socket /run/tagcess/ui.sock http://tagcess/ 2>/dev/null)
+  hook_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X POST -H 'Content-Type: application/json' -d '{}' http://{{ vpn_tailnet_ip_effective | default('') }}:{{ headscale_hook_port }}/hook 2>/dev/null)
+  ui_code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 --resolve {{ tagcess_host }}:443:127.0.0.1 https://{{ tagcess_host }}/ 2>/dev/null)
+  ping_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 {{ oauth2_proxy_ping_url }} 2>/dev/null)
+  hs=$(systemctl is-active headscale 2>/dev/null); caddy=$(systemctl is-active caddy 2>/dev/null)
+  printf '{"tagcess_started": %s, "tagcess_errors": %s, "sock": "%s", "sock_code": "%s", "hook_code": "%s", "ui_code": "%s", "ping_code": "%s", "headscale": "%s", "caddy": "%s"}\n' \
+    "${tagcess_started:-0}" "${tagcess_errors:-0}" "$sock" "$sock_code" "$hook_code" "$ui_code" "$ping_code" "$hs" "$caddy"
+verify_preview_cmd: >-
+  docker run --rm --network host -v {{ app_config_path | default('/etc/tagcess/config.yaml') }}:/etc/tagcess/config.yaml:ro
+  -v /var/lib/tagcess:/var/lib/tagcess:ro -v {{ caddy_dir }}:{{ caddy_dir }}:ro
+  -v {{ tagcess_dns_records_path | dirname }}:{{ tagcess_dns_records_path | dirname }}:ro
+  {{ tagcess_image }} -config /etc/tagcess/config.yaml -import-preview
+# The unroled-user count needs the Zitadel admin credential (the adopt tool's read-only report); empty: not asked.
+verify_unroled_cmd: >-
+  {{ (zitadel_seed_tool or (install_env_dir ~ '/bin/tagcess-zitadel-adopt')) ~ ' --dry-run --report-unroled --issuer ' ~ zitadel_issuer
+     ~ ' --project ' ~ zitadel_project_name ~ (' --admin-key-file ' ~ (zitadel_admin_key_file | expanduser) if zitadel_admin_key_file else (' --admin-pat-file ' ~ (zitadel_admin_pat_file | expanduser) if zitadel_admin_pat_file else ''))
+     if (zitadel_admin_key_file or zitadel_admin_pat_file) else '' }}
+# Empty: tasks/main.yml pins report-<UTC time>.md once (a default with now() is evaluated anew at every use).
+verify_report_name: ""
+# The F5 checklist items no probe can do.
+verify_manual_checks:
+  - Tarayıcıdan devops girişi → Zitadel → Pano (tailnet içinden)
+  - "Rol matrisi: rollü kullanıcı rol sitesinde 202, rolü olmayan 403 (siteler role geçirildikten sonra)"
+  - '"Çıkış yap" Zitadel end_session üzerinden gerçekten çıkar'
+  - Zitadel'de rol değişikliği /sync'te reconcile tetikler
+  - Pano temiz (drift/uyarılar), policy editörü önizleme + "Onayla ve uygula"
+  - systemctl restart headscale sonrası tagcess kendiliğinden toparlanır
+  - "Tailnet dışı gerçek bir istemciden https://<tagcess_host>/ 403 (hedefte yalnız host loopback ölçülür)"

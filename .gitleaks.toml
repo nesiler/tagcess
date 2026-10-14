@@ -1,0 +1,8 @@
+# gitleaks config: the default rules plus allowlists for known non-secrets.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "pinned release checksums in Dockerfiles"
+regexTarget = "line"
+regexes = ['''_SHA256_(AMD64|ARM64)=[0-9a-f]{64}$''']

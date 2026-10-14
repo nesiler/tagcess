@@ -1,0 +1,158 @@
+# verify (F6-008): one read-only report: services, ui.sock mode, a header-less socket request (403), an unsigned hook
+# POST (401), the UI from a non-tailnet source (403), oauth2-proxy /ping, the first-import parity (tagcess
+# -import-preview; the one accepted difference is s06_open_start, developer decision 2026-10-07, and it is shown as a
+# prominent warning, never silently), the users without a vpn role (information only) and every phase's
+# guide items. Nothing is written on the host; the report goes to the controller. A parity difference ends the run
+# with "uygulamaya hazır değil", a failed security/health probe with "sağlık/güvenlik kontrolü başarısız" (the report is
+# written first in both cases; --check only plans).
+# A fact of its own, computed at every start of the role: verify and verify_final in one run get two reports.
+- name: Report file name (pinned once for this run of the role)
+  ansible.builtin.set_fact:
+    verify_report_file: "{{ verify_report_name if verify_report_name | length > 0 else 'report-' ~ now(utc=true).strftime('%Y%m%dT%H%M%SZ') ~ '.md' }}"
+
+- name: Host probes (read-only)  # noqa: risky-shell-pipe
+  ansible.builtin.shell: "{{ verify_probe_cmd }}"
+  args:
+    executable: /bin/bash
+  register: verify_probe_raw
+  changed_when: false
+  check_mode: false
+  when: verify_host_checks | bool
+
+- name: First-import parity (tagcess -import-preview, read-only)
+  ansible.builtin.command: "{{ verify_preview_cmd }}"
+  register: verify_preview_raw
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Users without a vpn role (count only, read-only)
+  ansible.builtin.command: "{{ verify_unroled_cmd }}"
+  register: verify_unroled_raw
+  delegate_to: localhost
+  become: false
+  run_once: true
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: verify_unroled_cmd | trim != ''
+  no_log: true
+
+- name: Guide files of the phases (controller)
+  ansible.builtin.find:
+    paths: "{{ install_env_dir }}/guide"
+    patterns: "*.json"
+  register: verify_guide_files
+  delegate_to: localhost
+  become: false
+  check_mode: false
+
+- name: Results
+  ansible.builtin.set_fact:
+    verify_probe: "{{ verify_probe_raw.stdout | default('{}') | from_json if verify_host_checks | bool else {} }}"
+    verify_preview: >-
+      {%- set raw = verify_preview_raw.stdout | default('') -%}
+      {%- set i = raw.find('{') -%}
+      {{ (raw[i:] | from_json) if i >= 0 else {'parity': 'unknown', 'error': (verify_preview_raw.stderr | default('') | trim).splitlines() | last | default('çıktı yok')} }}
+    verify_unroled: >-
+      {%- set raw = verify_unroled_raw.stdout | default('') -%}
+      {{ ((raw | from_json).report.unroled_users) if (verify_unroled_raw.rc | default(1)) == 0 and raw | trim else none }}
+    verify_guides: >-
+      {%- set order = tagcess_phases | map(attribute='name') | list -%}
+      {%- set out = [] -%}
+      {%- for name in order -%}
+        {%- for f in verify_guide_files.files | default([]) if (f.path | basename) == name ~ '.json' -%}
+          {%- set _ = out.append(lookup('ansible.builtin.file', f.path) | from_json) -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Accepted parity difference (S-06 open start, developer decision 2026-10-07)
+  ansible.builtin.set_fact:
+    verify_accepted: "{{ verify_preview.accepted | default([]) }}"
+    verify_s06: "{{ verify_preview.accepted | default([]) | selectattr('class', 'equalto', 's06_open_start') | list }}"
+    verify_s06_hosts: "{{ verify_preview.accepted | default([]) | selectattr('class', 'equalto', 's06_open_start') | map(attribute='hosts') | flatten }}"
+
+- name: S-06 open start warning
+  ansible.builtin.set_fact:
+    verify_s06_lines: >-
+      {{ [] if verify_s06 | length == 0 else [
+          'İlk içe aktarmadan sonra bu ' ~ verify_s06 | length ~ ' site internetten de erişilebilir olur (S-06 açık başlangıç, kabul edilen fark s06_open_start, geliştirici kararı 2026-10-07).',
+          "Bugün yalnız tailnet ve serbest kaynaklar (WireGuard, sunucuların kendi adresleri) geçiyor, diğer her kaynak 403 alıyor; tagcess'te bu kaynak kısıtı yok.",
+          'Etkilenen ' ~ verify_s06 | length ~ ' site: ' ~ verify_s06_hosts | join(', '),
+          "WireGuard kapatılınca S-06'yı kapat: tagcess arayüzü → Ayarlar → Site ayarları (/sites/settings) → “Switch'i kapat” → Caddy farkını incele → “Onayla ve apply et”.",
+          "Bundan sonra bu siteler yalnız tailnet'ten erişilir; serbest kaynaklar (WireGuard dahil) 403 alır."] }}
+
+- name: Verdict
+  ansible.builtin.set_fact:
+    verify_checks: >-
+      {%- set p = verify_probe -%}
+      {%- set c = [] -%}
+      {%- if verify_host_checks | bool -%}
+        {%- set _ = c.append({'name': 'tagcess başladı, ERROR yok', 'ok': p.tagcess_started | int > 0 and p.tagcess_errors | int == 0,
+            'detail': 'started=' ~ p.tagcess_started ~ ' errors=' ~ p.tagcess_errors}) -%}
+        {%- set _ = c.append({'name': 'ui.sock srw-rw---- 10001 caddy', 'ok': p.sock == 'srw-rw---- ' ~ tagcess_uid ~ ' caddy', 'detail': p.sock or 'yok'}) -%}
+        {%- set _ = c.append({'name': 'Başlıksız soket isteği 403', 'ok': p.sock_code == '403', 'detail': p.sock_code}) -%}
+        {%- set _ = c.append({'name': 'İmzasız hook POST 401', 'ok': p.hook_code == '401', 'detail': p.hook_code}) -%}
+        {%- set _ = c.append({'name': 'Tailnet dışı kaynaktan arayüz 403 (host loopback)', 'ok': p.ui_code == '403', 'detail': p.ui_code}) -%}
+        {%- set _ = c.append({'name': 'oauth2-proxy /ping 200', 'ok': p.ping_code == '200', 'detail': p.ping_code}) -%}
+        {%- set _ = c.append({'name': 'headscale ve caddy çalışıyor', 'ok': p.headscale == 'active' and p.caddy == 'active', 'detail': p.headscale ~ ' / ' ~ p.caddy}) -%}
+      {%- endif -%}
+      {{ c }}
+    verify_parity_line: >-
+      {{ "içe aktarıldı (Caddyfile tagcess'te; parite karşılaştırılmaz)" if verify_preview.imported | default(false)
+         else ('eşit (0 fark)' if verify_preview.parity | default('') == 'equal'
+         else ('kabul edilen fark s06_open_start (' ~ verify_s06 | length ~ ' site), başka fark yok'
+               if verify_preview.parity | default('') == 'accepted' and verify_accepted | length > 0 and verify_s06 | length == verify_accepted | length
+         else ('tanınmayan kabul edilmiş fark: ' ~ verify_accepted | map(attribute='class') | unique | join(', ')
+               if verify_preview.parity | default('') == 'accepted'
+         else ('FARK: ' ~ verify_preview.diff_count | default('?') ~ ' fark' if verify_preview.parity | default('') == 'diff'
+         else 'bilinmiyor: ' ~ (verify_preview.error | default('ölçülemedi')))))) }}
+    verify_ready: >-
+      {{ verify_preview.imported | default(false) or verify_preview.parity | default('') == 'equal'
+         or (verify_preview.parity | default('') == 'accepted' and verify_accepted | length > 0 and verify_s06 | length == verify_accepted | length) }}
+
+- name: Report (controller)
+  ansible.builtin.template:
+    src: report.md.j2
+    dest: "{{ install_env_dir }}/{{ verify_report_file }}"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  changed_when: false
+  check_mode: false
+
+- name: Report summary
+  ansible.builtin.debug:
+    msg:
+      - "Rapor: {{ install_env_dir }}/{{ verify_report_file }}"
+      - "Parite: {{ verify_parity_line }}"
+      - "{{ ('UYARI: ' ~ verify_s06_lines | join(' ')) if verify_s06_lines | length > 0 else 'Kabul edilen fark yok' }}"
+      - "Kontroller: {{ verify_checks | selectattr('ok') | list | length }}/{{ verify_checks | length }} geçti"
+      - "Rolsüz kullanıcı: {{ verify_unroled if verify_unroled is not none else 'bilinmiyor' }} (bilgi)"
+
+- name: Guide items of verify
+  ansible.builtin.set_fact:
+    guide_items_verify: >-
+      {{ ([] if verify_s06_lines | length == 0 else [{'id': 'verify-s06-open-start', 'blocking': true,
+          'title': 'UYARI: S-06 açık başlangıç, iç siteler internetten de erişilebilir', 'steps': verify_s06_lines}])
+         + ([] if (verify_unroled is none or verify_unroled | int == 0) else [{'id': 'verify-unroled-users', 'title': 'Rolsüz kullanıcılar (bilgi)',
+          'steps': [verify_unroled ~ " aktif kullanıcının vpn projesinde rolü yok. Rolleri Zitadel'de vpn projesinde sen verirsin (tagcess rol vermez).",
+                    'Sonra siteleri arayüzden site site role geçir; o zamana kadar siteler open/transition (bugünkü davranış).']}]) }}
+
+- name: Guide items of verify_final (the same items)
+  ansible.builtin.set_fact:
+    guide_items_verify_final: "{{ guide_items_verify }}"
+
+- name: Not ready to apply (parity is not 0)
+  ansible.builtin.fail:
+    msg: "uygulamaya hazır değil: ilk içe aktarma paritesi {{ verify_parity_line }} (rapor: {{ install_env_dir }}/{{ verify_report_file }})"
+  when: not verify_ready | bool and not ansible_check_mode and verify_strict | bool
+
+- name: A mandatory security/health check failed
+  ansible.builtin.fail:
+    msg: >-
+      sağlık/güvenlik kontrolü başarısız: {{ verify_checks | rejectattr('ok') | map(attribute='name') | join('; ') }}
+      (rapor: {{ install_env_dir }}/{{ verify_report_file }})
+  when: verify_checks | rejectattr('ok') | list | length > 0 and not ansible_check_mode and verify_health_strict | bool

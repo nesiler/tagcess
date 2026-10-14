@@ -1,0 +1,33 @@
+# tagcess web UI (system site, S-05.2). Reference for the `tagcess` system template (ADR 0010); the
+# rendered template must produce this same text with the configured host. Only devops reaches the UI,
+# and only from the tailnet; non-tailnet sources get 403.
+tagcess.example.com {
+	@tailnet remote_ip 100.64.0.0/10
+	handle @tailnet {
+		# oauth2-proxy's login endpoints (start/callback) must reach oauth2-proxy itself.
+		handle /oauth2/* {
+			reverse_proxy 127.0.0.1:4180
+		}
+
+		# Strip the client's own X-Auth-Request-* headers before forward_auth, so the only source of
+		# the identity headers is oauth2-proxy (security.md §3.1). `route` keeps this literal order.
+		route {
+			request_header -X-Auth-Request-User
+			request_header -X-Auth-Request-Email
+			request_header -X-Auth-Request-Groups
+			forward_auth 127.0.0.1:4180 {
+				uri /oauth2/auth?allowed_groups=devops
+				copy_headers X-Auth-Request-User X-Auth-Request-Email X-Auth-Request-Groups
+				# oauth2-proxy returns 401 when there is no session; send the browser to sign in.
+				@unauthenticated status 401
+				handle_response @unauthenticated {
+					redir * /oauth2/start?rd={http.request.uri}
+				}
+			}
+			reverse_proxy unix//run/tagcess/ui.sock
+		}
+	}
+	handle {
+		respond 403
+	}
+}

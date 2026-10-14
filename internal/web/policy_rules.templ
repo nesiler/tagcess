@@ -1,0 +1,239 @@
+package web
+
+import (
+	"fmt"
+	"strings"
+
+
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// The ACL rules form card (F3-023, H-04). Every input and button declares form="policy-editor", so
+// a form action submits the live textarea text together with its own fields — the draft is
+// stateless and a manual textarea edit is never lost. Editing runs through the targeted policydoc
+// operations; the table and the feedback come from the last rendered text.
+//
+// The add and edit forms live in dialogs, which sit before the card's table and callouts: a field
+// error is written next to its input (inside its dialog) and again, as a callout, at the top of the
+// card, where it is visible while the dialog is closed.
+
+func expField(i int, f string) string  { return fmt.Sprintf("exp_%d_%s", i, f) }
+func editField(i int, f string) string { return fmt.Sprintf("edit_%d_%s", i, f) }
+
+// sectionState renders the presence note of a form-external section.
+func sectionState(has bool) string {
+	if has {
+		return "var"
+	}
+	return "yok"
+}
+
+// rulesDesc is the card description: which sections the form does not edit.
+func rulesDesc(v policyRulesView) string {
+	return fmt.Sprintf("Form dışı bölümler — grants: %s, ssh: %s — ham editörden düzenlenir.", sectionState(v.HasGrants), sectionState(v.HasSSH))
+}
+
+// editorAttrs ties a control to the policy editor form and marks it invalid when a field error
+// belongs to it. extra adds more attributes (a datalist, an accessible name).
+func editorAttrs(fieldErr, name string, extra templ.Attributes) templ.Attributes {
+	a := templ.Attributes{"form": "policy-editor"}
+	for k, val := range extra {
+		a[k] = val
+	}
+	if fieldErr == name {
+		a["aria-invalid"] = "true"
+	}
+	return a
+}
+
+// protoOptions are the protocol names Headscale's ACL accepts most often; any other is typed.
+var protoOptions = []string{"tcp", "udp", "icmp", "sctp", "igmp", "esp", "ah", "gre", "ipv6-icmp"}
+
+// dstSuggestions are the alias suggestions as destinations on every port.
+func dstSuggestions(sug []string) []string {
+	out := make([]string, 0, len(sug))
+	for _, s := range sug {
+		out = append(out, s+":*")
+	}
+	return out
+}
+
+// lines splits a newline list into its non-empty entries, keeping an entry exactly as typed except
+// for surrounding space (the server reads it the same way, formLines).
+func lines(s string) []string {
+	var out []string
+	for _, l := range strings.Split(s, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// submitAttrs makes a button submit the policy editor form to action.
+func submitAttrs(action string) templ.Attributes {
+	return templ.Attributes{"form": "policy-editor", "formaction": action}
+}
+
+// fieldError is the error message right below its input.
+templ fieldError(viewErr, name, msg string) {
+	if viewErr == name {
+		@ui.Callout(ui.N{Tone: ui.Err}) {
+			{ msg }
+		}
+	}
+}
+
+templ PolicyRulesCard(v policyRulesView, editable bool) {
+	@ui.Card(ui.C{Title: "ACL kuralları", Desc: rulesDesc(v), Right: policyRuleAddButton(v, editable)}) {
+		if v.ReadErr == "" && editable {
+			@policyRuleAddDialog(v)
+			for _, row := range v.Rows {
+				@policyRuleEditDialog(v, row)
+			}
+		}
+		if v.General != "" {
+			@ui.Callout(ui.N{Tone: ui.Err}) {
+				{ v.General }
+			}
+		}
+		if v.ReadErr != "" {
+			@draftFormRecovery(v.Feedback)
+			@ui.Callout(ui.N{Tone: ui.Warn}) {
+				Kurallar bu metinden okunamadı; form kapalı, ham editörü kullanın: { v.ReadErr }
+			}
+		} else {
+			if v.Applied != "" {
+				@ui.Callout(ui.N{Tone: ui.Info}) {
+					{ v.Applied }
+				}
+			}
+			if v.FieldErr != "" {
+				@ui.Callout(ui.N{Tone: ui.Err, Title: "Kural değişikliği reddedildi"}) {
+					{ v.FieldMsg }
+				}
+			}
+			if len(v.Rows) == 0 {
+				@ui.Empty("shield", "Kural yok.", "")
+			} else {
+				@ui.TableIn() {
+					<thead>
+						<tr>
+							<th scope="col">#</th>
+							<th scope="col">Action</th>
+							<th scope="col">Protokol</th>
+							<th scope="col">Kaynak (src)</th>
+							<th scope="col">Hedef (dst)</th>
+							<th scope="col" aria-label="İşlemler"></th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, row := range v.Rows {
+							<tr>
+								<td>{ fmt.Sprint(row.Index) }</td>
+								<td><code>{ row.Action }</code></td>
+								<td>
+									if row.Proto != "" {
+										{ row.Proto }
+									} else {
+										tümü
+									}
+								</td>
+								<td><code>{ strings.Join(row.Src, ", ") }</code></td>
+								<td><code>{ strings.Join(row.Dst, ", ") }</code></td>
+								@ui.Actions() {
+									if editable {
+										@ui.Btn(ui.B{Small: true, Type: "button", Icon: "edit", Title: fmt.Sprintf("Kural %d düzenle/sil", row.Index), Attrs: templ.Attributes{"data-dialog-open": ruleEditID(row.Index)}}) {
+											Düzenle
+										}
+									}
+								}
+							</tr>
+						}
+					</tbody>
+				}
+			}
+		}
+	}
+}
+
+func ruleEditID(i int) string { return fmt.Sprintf("rule-edit-%d", i) }
+
+// policyRuleAddButton opens the add dialog; it is offered only while the form is open.
+templ policyRuleAddButton(v policyRulesView, editable bool) {
+	if editable && v.ReadErr == "" {
+		@ui.Btn(ui.B{Small: true, Type: "button", Icon: "plus", Attrs: templ.Attributes{"data-dialog-open": "rule-add"}}) {
+			Kural ekle
+		}
+	}
+}
+
+// policyRuleAddDialog adds one rule at the end of acls.
+templ policyRuleAddDialog(v policyRulesView) {
+	@ui.Dialog(ui.D{ID: "rule-add", Title: "Kural ekle", Open: v.Feedback.Dialog == "rule-add", Desc: "Kural draft'a eklenir; kayıt preview ve onayla olur. Action hep accept.", Wide: true}) {
+		@ui.Field(ui.F{Label: "Kaynak (src)", For: "add_src", Help: "Listeden seçin ya da alias yazıp Enter'a basın."}) {
+			@ui.MultiSelect(ui.MS{ID: "add_src", Name: "add_src", Values: lines(v.Feedback.value("add_src", "")), Options: v.Sug, Rows: 2, Attrs: editorAttrs(v.FieldErr, "add_src", nil)})
+			@fieldError(v.FieldErr, "add_src", v.FieldMsg)
+		}
+		@ui.Field(ui.F{Label: "Hedef (dst)", For: "add_dst", Help: "alias:port biçiminde, ör. tag:web:443."}) {
+			@ui.MultiSelect(ui.MS{ID: "add_dst", Name: "add_dst", Values: lines(v.Feedback.value("add_dst", "")), Options: dstSuggestions(v.Sug), Rows: 2, Attrs: editorAttrs(v.FieldErr, "add_dst", nil)})
+			@fieldError(v.FieldErr, "add_dst", v.FieldMsg)
+		}
+		@ui.Field(ui.F{Label: "Protokol", For: "add_proto", Help: "Boşsa tüm protokoller."}) {
+			@ui.Input(ui.In{ID: "add_proto", Name: "add_proto", Value: v.Feedback.value("add_proto", ""), Placeholder: "tcp", Options: protoOptions, Attrs: editorAttrs(v.FieldErr, "add_proto", nil)})
+			@fieldError(v.FieldErr, "add_proto", v.FieldMsg)
+		}
+		@ui.DialogFoot() {
+			@ui.Btn(ui.B{Kind: ui.Primary, Name: "add", Value: "1", Attrs: submitAttrs("/headscale/policy/rules/add")}) {
+				Ekle
+			}
+		}
+	}
+}
+
+// policyRuleEditDialog edits or deletes one rule row; the hidden expected-* fields carry the rule
+// the table showed, so a rule that moved in the meantime is refused (409).
+templ policyRuleEditDialog(v policyRulesView, row ruleRow) {
+	@ui.Dialog(ui.D{ID: ruleEditID(row.Index), Title: fmt.Sprintf("Kural %d düzenle/sil", row.Index), Open: v.Feedback.Dialog == ruleEditID(row.Index), Desc: "Değişiklik draft'a yazılır; kayıt preview/onay ile olur.", Wide: true}) {
+		<input type="hidden" name={ expField(row.Index, "action") } value={ row.Action } form="policy-editor"/>
+		<input type="hidden" name={ expField(row.Index, "proto") } value={ row.Proto } form="policy-editor"/>
+		for _, s := range row.Src {
+			<input type="hidden" name={ expField(row.Index, "src") } value={ s } form="policy-editor"/>
+		}
+		for _, d := range row.Dst {
+			<input type="hidden" name={ expField(row.Index, "dst") } value={ d } form="policy-editor"/>
+		}
+		@ui.Field(ui.F{Label: "Kaynak (src)", For: editField(row.Index, "src")}) {
+			@ui.MultiSelect(ui.MS{ID: editField(row.Index, "src"), Name: editField(row.Index, "src"), Values: lines(v.Feedback.value(editField(row.Index, "src"), strings.Join(row.Src, "\n"))), Options: v.Sug, Rows: 2, Attrs: editorAttrs(v.FieldErr, editField(row.Index, "src"), nil)})
+			@fieldError(v.FieldErr, editField(row.Index, "src"), v.FieldMsg)
+		}
+		@ui.Field(ui.F{Label: "Hedef (dst)", For: editField(row.Index, "dst")}) {
+			@ui.MultiSelect(ui.MS{ID: editField(row.Index, "dst"), Name: editField(row.Index, "dst"), Values: lines(v.Feedback.value(editField(row.Index, "dst"), strings.Join(row.Dst, "\n"))), Options: dstSuggestions(v.Sug), Rows: 2, Attrs: editorAttrs(v.FieldErr, editField(row.Index, "dst"), nil)})
+			@fieldError(v.FieldErr, editField(row.Index, "dst"), v.FieldMsg)
+		}
+		@ui.Field(ui.F{Label: "Protokol", For: editField(row.Index, "proto")}) {
+			@ui.Input(ui.In{ID: editField(row.Index, "proto"), Name: editField(row.Index, "proto"), Value: v.Feedback.value(editField(row.Index, "proto"), row.Proto), Options: protoOptions, Attrs: editorAttrs(v.FieldErr, editField(row.Index, "proto"), nil)})
+			@fieldError(v.FieldErr, editField(row.Index, "proto"), v.FieldMsg)
+		}
+		@ui.DialogFoot() {
+			@ui.Btn(ui.B{Kind: ui.DangerOutline, Icon: "delete", Name: "del", Value: fmt.Sprint(row.Index), Attrs: submitAttrs("/headscale/policy/rules/delete")}) {
+				Sil
+			}
+			@ui.Btn(ui.B{Kind: ui.Primary, Name: "edit", Value: fmt.Sprint(row.Index), Attrs: submitAttrs("/headscale/policy/rules/update")}) {
+				Güncelle
+			}
+		}
+	}
+}
+
+// draftFormRecovery preserves rejected fields without enabling edits when a source is unavailable.
+templ draftFormRecovery(f draftFormFeedback) {
+ if len(f.Values) > 0 {
+  <section aria-label="Korunan form girdileri">
+   @ui.Callout(ui.N{Tone: ui.Info, Title: "Form girdileri korundu"}) {
+    Kaynak okunamadığı için form işlemleri kapalıdır. Aşağıdaki girdileri kopyalayıp ham metni veya kaynak bağlantısını düzelttikten sonra yeniden deneyebilirsiniz.
+   }
+   @ui.Code("Korunan form girdileri", f.summary())
+  </section>
+ }
+}

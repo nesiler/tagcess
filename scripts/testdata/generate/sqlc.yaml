@@ -1,0 +1,9 @@
+version: "2"
+sql:
+  - engine: sqlite
+    schema: internal/genfixture/schema.sql
+    queries: internal/genfixture/queries
+    gen:
+      go:
+        package: db
+        out: internal/genfixture/db

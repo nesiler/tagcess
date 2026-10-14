@@ -1,0 +1,76 @@
+# preflight (F6-002): reads the host, never writes it. Every component is first detected; version/path/port
+# checks apply only to what exists. Missing components are "to install", not blockers (decision 8 [K]).
+# Untouchables (Headplane, WireGuard, wireguard-ui, dnsmasq, nftables) are only reported. Secret files are
+# stat()ed (exists/mode/owner), never read. The report goes to the controller (preflight.json + .md); a
+# blocker or an install_mode conflict (mode.yml) fails the run before any phase writes.
+- name: Probe the host (read-only)
+  ansible.builtin.script:
+    cmd: "probe.py {{ preflight_probe_args | to_json | b64encode }}"
+    executable: python3
+  vars:
+    preflight_probe_args:
+      headscale_config: "{{ headscale_config }}"
+      headscale_policy_path: "{{ headscale_policy_path }}"
+      headscale_db_path: "{{ headscale_db_path }}"
+      headscale_socket: "{{ headscale_socket }}"
+      headscale_health_url: "{{ headscale_health_url }}"
+      headscale_dns_records_path: "{{ headscale_dns_records_path }}"
+      caddyfile_path: "{{ caddyfile_path }}"
+      caddy_sites_dir: "{{ caddy_sites_dir }}"
+      caddy_admin_url: "{{ caddy_admin_url }}"
+      cert_names: "{{ cert_names }}"
+      oauth2_proxy_dir: "{{ oauth2_proxy_dir }}"
+      hook_port: "{{ headscale_hook_port }}"
+      zitadel_discovery_url: "{{ zitadel_discovery_url }}"
+      validate_certs: "{{ zitadel_validate_certs }}"
+      host_secret_paths: "{{ preflight_host_secret_paths }}"
+  register: preflight_raw
+  changed_when: false
+  check_mode: false
+
+- name: Probe result
+  ansible.builtin.set_fact:
+    preflight_probe: "{{ preflight_raw.stdout | from_json }}"
+
+- name: Read the Headscale config (secret values never leave memory)
+  ansible.builtin.slurp:
+    src: "{{ headscale_config }}"
+  register: preflight_hs_cfg_raw
+  when: preflight_probe.headscale.present and preflight_probe.headscale.config.exists
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: The Headscale settings the installer needs (no secret field)
+  ansible.builtin.set_fact:
+    preflight_hs_cfg: >-
+      {%- set c = (preflight_hs_cfg_raw.content | b64decode | from_yaml) if preflight_hs_cfg_raw.content is defined else {} -%}
+      {{ {'policy_mode': (c.policy | default({})).mode | default('file'),
+          'policy_path': (c.policy | default({})).path | default(''),
+          'extra_records_path': (c.dns | default({})).extra_records_path | default(''),
+          'listen_addr': c.listen_addr | default(''),
+          'server_url': c.server_url | default(''),
+          'unix_socket': c.unix_socket | default(''),
+          'oidc': c.oidc is defined and (c.oidc.issuer | default('')) != '',
+          'oidc_issuer': (c.oidc | default({})).issuer | default('')} }}
+  no_log: true
+
+- name: Controller-side secret files (exists, mode; never the content)
+  ansible.builtin.stat:
+    path: "{{ item.value | expanduser }}"
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: "{{ secret_files | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  delegate_to: localhost
+  become: false
+  register: preflight_controller_secrets
+  check_mode: false
+
+- name: Mode proposal and gate
+  ansible.builtin.import_tasks: mode.yml
+
+- name: Preflight report
+  ansible.builtin.import_tasks: report.yml

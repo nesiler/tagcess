@@ -1,0 +1,178 @@
+package web
+
+import (
+	"strconv"
+	"time"
+
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// SiteHistoryPage lists the durable source versions of a site (A-03.4): when, who, what kind of
+// change, the Git revision of its artifacts, and a link to the read-only rollback preview. A
+// revision that was not committed yet is shown as pending, never as a success. Policy revision
+// and rollback operations are linked separately from the site-version flow.
+templ SiteHistoryPage(v SiteHistoryView) {
+	@ui.PageHead(ui.H{Title: "Site geçmişi: " + v.Hosts, Sub: "Sitenin kayıtlı sürümleri, en yenisi üstte.", Crumbs: []ui.Crumb{{Label: "Siteler", Href: "/sites"}, {Label: "Geçmiş"}}}) {
+		@ui.Btn(ui.B{Href: "/sites"}) {
+			Siteler
+		}
+	}
+	@ui.ListTable(ui.L{Label: "Site sürümleri"}) {
+		<thead>
+			<tr>
+				<th scope="col">Sürüm</th>
+				<th scope="col">Zaman (UTC)</th>
+				<th scope="col">Kim</th>
+				<th scope="col">İşlem</th>
+				<th scope="col">Git revision'ı</th>
+				<th scope="col" aria-label="İşlemler"></th>
+			</tr>
+		</thead>
+		<tbody>
+			for _, row := range v.Versions {
+				<tr>
+					<td><strong>{ strconv.FormatInt(row.ID, 10) }</strong></td>
+					<td><time datetime={ row.At.Format(time.RFC3339) }>{ row.At.Format("2006-01-02 15:04:05") }</time></td>
+					<td>{ row.Actor }</td>
+					<td>
+						{ opLabel(row.Op) }
+						if row.Rollback {
+							· { "sürüm " + strconv.FormatInt(row.RollbackOf, 10) + " geri yüklendi" }
+						}
+					</td>
+					<td>
+						if row.Revision == "" {
+							@ui.StatusText(ui.Warn, "revision bekliyor", "")
+						} else {
+							<code>{ shortRevision(row.Revision) }</code>
+						}
+					</td>
+					@ui.Actions() {
+						@ui.Btn(ui.B{Small: true, Href: rollbackHref(v.SiteID, row.ID), Icon: "undo"}) {
+							Bu sürüme dön (preview et)
+						}
+					}
+				</tr>
+			}
+		</tbody>
+	}
+	<p>
+		Headscale policy rollback'i için: <a href="/headscale/policy/history">Policy geçmişi</a>.
+	</p>
+}
+
+// RollbackPreviewPage is the read-only preview of a rollback: the diff of the three artifacts, the
+// widening warning with its acknowledgement, and the approval form that carries the live base hash
+// of this preview. Nothing here writes anything; the form's POST does.
+templ RollbackPreviewPage(v RollbackPreviewView, csrfToken string) {
+	@ui.PageHead(ui.H{Title: "Rollback preview'u", Sub: "Onaylanana kadar hiçbir şey yazılmaz.", Crumbs: []ui.Crumb{{Label: "Siteler", Href: "/sites"}, {Label: "Geçmiş", Href: historyHref(v.SiteID)}, {Label: "Preview"}}}) {
+		@ui.Btn(ui.B{Href: historyHref(v.SiteID)}) {
+			Geçmiş
+		}
+	}
+	@ui.Card(ui.C{Title: "Sürüm " + strconv.FormatInt(v.Version.ID, 10), Desc: "Bu sürüm yeni bir değişiklik olarak apply edilir; eski dosyalar olduğu gibi yüklenmez."}) {
+		@ui.KV() {
+			<dt>Site</dt>
+			<dd><code>{ v.Version.Hosts }</code></dd>
+			<dt>İşlem</dt>
+			<dd>{ opLabel(v.Version.Op) }</dd>
+			<dt>Zaman (UTC)</dt>
+			<dd>{ v.Version.At.Format("2006-01-02 15:04:05") }</dd>
+			<dt>Kim</dt>
+			<dd>{ v.Version.Actor }</dd>
+		}
+	}
+	for _, d := range v.Diffs {
+		@ui.Diff(d.Title, d.Diff)
+	}
+	if len(v.Widens) > 0 {
+		@ui.Callout(ui.N{Tone: ui.Warn, Title: "Bu rollback erişimi genişletiyor"}) {
+			<ul>
+				for _, w := range v.Widens {
+					<li>{ w }</li>
+				}
+			</ul>
+		}
+	}
+	if v.NoChange {
+		@ui.Callout(ui.N{Tone: ui.Info}) {
+			Site zaten bu sürümde; apply edilecek bir değişiklik yok.
+		}
+	} else {
+		<form method="post" action={ templ.SafeURL(rollbackHref(v.SiteID, v.Version.ID)) }>
+			@CSRFField(csrfToken)
+			@ui.HiddenFields([]ui.Hidden{{Name: "base_hash", Value: v.BaseHash}})
+			if len(v.Widens) > 0 {
+				@ui.Check(ui.Chk{ID: "ack_widen", Name: "ack_widen", Label: "Erişimin yukarıdaki gibi genişlemesini onaylıyorum"})
+			}
+			@ui.BtnRow() {
+				@ui.Btn(ui.B{Kind: ui.Danger, Icon: "undo"}) {
+					{ confirmApplyLabel }
+				}
+				@ui.Btn(ui.B{Href: historyHref(v.SiteID)}) {
+					Vazgeç
+				}
+			}
+		</form>
+	}
+}
+
+// NoticePage is the outcome or refusal of a rollback.
+templ NoticePage(v NoticeView) {
+	@ui.PageHead(ui.H{Title: v.Title, Crumbs: []ui.Crumb{{Label: "Siteler", Href: "/sites"}, {Label: "Sonuç"}}})
+	@ui.Callout(ui.N{Tone: noticeTone(v.Level)}) {
+		<p>{ v.Message }</p>
+	}
+	if v.ChangeID != 0 || v.Revision != "" || v.RevisionPending {
+		@ui.Card(ui.C{Title: "Değişiklik kaydı"}) {
+			@ui.KV() {
+				if v.ChangeID != 0 {
+					<dt>Değişiklik</dt>
+					<dd>{ strconv.FormatInt(v.ChangeID, 10) }</dd>
+				}
+				if v.Revision != "" {
+					<dt>Git revision'ı</dt>
+					<dd><code>{ shortRevision(v.Revision) }</code></dd>
+				}
+				if v.RevisionPending {
+					<dt>Git revision'ı</dt>
+					<dd>
+						@ui.StatusText(ui.Warn, "revision bekliyor", "")
+						@ui.Tip("Git commit'i yapılamadı; yeniden deneme için kuyruğa alındı ve kritik uyarı verildi. Apply edilen durum doğrulandı ve korundu.")
+					</dd>
+				}
+			}
+		}
+	}
+	@ui.BtnRow() {
+		@ui.Btn(ui.B{Href: v.BackHref}) {
+			{ v.BackLabel }
+		}
+		@ui.Btn(ui.B{Href: "/audit"}) {
+			Audit
+		}
+	}
+}
+
+// rollbackHref and historyHref build the history URLs of a site.
+func rollbackHref(siteID, versionID int64) string {
+	return "/sites/" + strconv.FormatInt(siteID, 10) + "/history/" + strconv.FormatInt(versionID, 10) + "/rollback"
+}
+
+func historyHref(siteID int64) string {
+	return "/sites/" + strconv.FormatInt(siteID, 10) + "/history"
+}
+
+// noticeTone maps a notice level to its tone; an unknown level is never a success.
+func noticeTone(level string) ui.Tone {
+	switch level {
+	case "success":
+		return ui.OK
+	case "warning":
+		return ui.Warn
+	case "danger":
+		return ui.Err
+	default:
+		return ui.Info
+	}
+}

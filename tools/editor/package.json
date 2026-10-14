@@ -1,0 +1,16 @@
+{
+  "name": "tagcess-policy-editor",
+  "private": true,
+  "description": "Source of internal/web/static/editor.js (CodeMirror 6 for the HuJSON policy editor). Built by build.sh; nothing here runs at runtime.",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/language": "6.12.4",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.13",
+    "@lezer/highlight": "1.2.5"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

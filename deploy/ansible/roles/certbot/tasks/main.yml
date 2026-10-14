@@ -1,0 +1,34 @@
+# certbot (F6-012). See defaults/main.yml. The role never calls the Cloudflare API itself: certbot's DNS-01 plugin
+# writes only the _acme-challenge TXT record (TestCertbotRole_DNSRecordsAsGuide).
+- name: certbot here, and whose
+  ansible.builtin.set_fact:
+    certbot_present: "{{ preflight_components.certbot | default(false) }}"
+    certbot_owned: "{{ 'certbot' in (install_state.installed | default([])) }}"
+    certbot_add_ok: "{{ install_mode == 'fresh' or 'certbot' in (confirm_add_missing | default('') | string).split(',') }}"
+
+- name: Existing certbot adopted untouched (certificate expiry only)
+  ansible.builtin.debug:
+    msg: "certbot zaten kurulu ve bu araçla kurulmadı: devralındı. Sertifikalar: {{ preflight_probe.certs | default([]) | map(attribute='name') | zip(preflight_probe.certs | default([]) | map(attribute='not_after', default='?')) | map('join', ' → ') | join(', ') or '-' }}"
+  when: certbot_present and not certbot_owned
+
+- name: Missing certbot not added without confirmation (adopt)
+  ansible.builtin.debug:
+    msg: "certbot yok ve adopt kipinde onaysız eklenmez (confirm_add_missing=certbot)."
+  when: not certbot_present and not certbot_owned and not certbot_add_ok
+
+- name: Install and issue
+  ansible.builtin.include_tasks: issue.yml
+  when: certbot_owned or (not certbot_present and certbot_add_ok)
+
+- name: Guide items of certbot
+  ansible.builtin.set_fact:
+    guide_items_certbot: >-
+      {%- set g = [] -%}
+      {%- if certbot_owned or (not certbot_present and certbot_add_ok) -%}
+        {%- set _ = g.append({'id': 'certbot-dns-records', 'title': 'DNS A kayıtlarını VPN host\'una yönelt',
+            'steps': ['Cloudflare\'de şu adlar için A kaydı → VPN host\'unun genel IP\'si' ~ (' (' ~ certbot_public_ip ~ ')' if certbot_public_ip else '') ~ ': ' ~ (certbot_dns_hosts | join(', ')) ~ '. Araç Cloudflare\'e A kaydı yazmaz.',
+                      'Kontrol: dig +short ' ~ certbot_dns_hosts[0]],
+            'check': {'cmd': 'for h in ' ~ (certbot_dns_hosts | join(' ')) ~ '; do r=$(dig +short "$h" A 2>/dev/null) || exit 2; test -n "$r" || exit 1'
+                             ~ ('; test "$r" = ' ~ certbot_public_ip if certbot_public_ip else '') ~ ' || exit 1; done'}}) -%}
+      {%- endif -%}
+      {{ g }}

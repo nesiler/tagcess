@@ -1,0 +1,220 @@
+package web
+
+import (
+	"strconv"
+
+	"github.com/nesiler/tagcess/internal/hsadmin"
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// The device action screens (F3-014): the detail page's write panel, the delete confirm page and
+// the shared outcome screen. Every form POSTs (NFR-03) and carries the shown state's version so a
+// changed node is refused as stale; the executor behind them owns the real enforcement. The pages
+// compose internal/web/ui components only (docs/ui-guide.md).
+
+// deviceActionPath is the route of one device action; "/rename", "/expire", "/expiry",
+// "/expiry/disable", "/delete" or "" for the detail page.
+func deviceActionPath(id uint64, suffix string) string {
+	return "/headscale/devices/" + strconv.FormatUint(id, 10) + suffix
+}
+
+// deviceActionsSection renders the write panel of the detail page. On a protected node only the
+// rename form is drawn and the server badge is shown; the executor refuses the same writes again
+// if a hand-made POST arrives.
+templ deviceActionsSection(detail DeviceDetailView, csrf string) {
+	if detail.Actions != nil {
+		@ui.Card(ui.C{Title: "İşlemler"}) {
+			if detail.Actions.Protected {
+				<p>
+					@ui.StatusText(ui.Warn, "korumalı sunucu", "")
+					@ui.Tip("Sunucu node'ları silinemez, expire edilemez ve expire süresi değiştirilemez; yalnızca adı değiştirilebilir.")
+				</p>
+			}
+			if detail.Actions.Warning != "" {
+				@ui.Callout(ui.N{Tone: ui.Warn}) {
+					{ detail.Actions.Warning }
+				}
+			}
+			@deviceRenameForm(detail, csrf)
+			if !detail.Actions.Protected && detail.Actions.Warning == "" {
+				@deviceExpireNowForm(detail, csrf)
+				@MaintenanceWideningGuard() {
+					if !detail.Actions.Reopenable {
+						@deviceSetExpiryForm(detail, csrf)
+						@deviceDisableExpiryForm(detail, csrf)
+					}
+					if detail.Actions.Reopenable {
+						@ui.Field(ui.F{Label: "Yeniden aç", Help: "Rol kaybıyla expire edilen kişisel cihaz yalnız yönetici onayıyla açılır."}) {
+							@MaintenanceWideningLink(deviceActionPath(detail.Row.ID, "/reopen"), "Yeniden aç…", ui.B{})
+						}
+					}
+				}
+				@ui.Field(ui.F{Label: "Sil", Help: "Geri alınamaz; cihazın yeniden kaydolması gerekir."}) {
+					@ui.Btn(ui.B{Kind: ui.DangerOutline, Href: deviceActionPath(detail.Row.ID, "/delete")}) {
+						Cihazı sil…
+					}
+				}
+			}
+		}
+	}
+}
+
+// deviceRenameForm is the one form a protected node keeps. Narrowing, so it is never gated by the
+// maintenance guard. Every action is one Field row: what it does on the left, the control and its
+// button on one line on the right.
+templ deviceRenameForm(detail DeviceDetailView, csrf string) {
+	@ui.Field(ui.F{Label: "Ad", For: "device-rename", Help: "Headscale'deki benzersiz cihaz adı (MagicDNS adı)."}) {
+		<form method="post" action={ templ.SafeURL(deviceActionPath(detail.Row.ID, "/rename")) }>
+			@CSRFField(csrf)
+			@ui.HiddenFields([]ui.Hidden{{Name: "expected", Value: detail.Version}, {Name: "current_name", Value: detail.Row.Name}})
+			@ui.Inline() {
+				@ui.Input(ui.In{ID: "device-rename", Name: "name", Value: detail.Row.Name, Required: true})
+				@ui.Btn(ui.B{Kind: ui.OKOutline}) {
+					Adı değiştir
+				}
+			}
+		</form>
+	}
+}
+
+// deviceExpireNowForm cuts the node off now; narrowing, so it stays enabled under maintenance.
+templ deviceExpireNowForm(detail DeviceDetailView, csrf string) {
+	@ui.Field(ui.F{Label: "Erişimi kes", Help: "Cihaz hemen expire edilir; yeniden giriş gerekir."}) {
+		<form method="post" action={ templ.SafeURL(deviceActionPath(detail.Row.ID, "/expire")) }>
+			@CSRFField(csrf)
+			@ui.HiddenFields([]ui.Hidden{{Name: "expected", Value: detail.Version}, {Name: "current_expiry", Value: detail.Row.ExpiryRaw}})
+			@ui.Btn(ui.B{Kind: ui.DangerOutline}) {
+				Şimdi expire et
+			}
+		</form>
+	}
+}
+
+// deviceSetExpiryForm changes the expiry; widening, so the maintenance guard wraps it.
+templ deviceSetExpiryForm(detail DeviceDetailView, csrf string) {
+	@ui.Field(ui.F{Label: "Yeni expire (UTC)", For: "device-expiry"}) {
+		<form method="post" action={ templ.SafeURL(deviceActionPath(detail.Row.ID, "/expiry")) }>
+			@CSRFField(csrf)
+			@ui.HiddenFields([]ui.Hidden{{Name: "expected", Value: detail.Version}, {Name: "current_expiry", Value: detail.Row.ExpiryRaw}})
+			@ui.Inline() {
+				@ui.Input(ui.In{ID: "device-expiry", Name: "expiry", Type: "datetime-local", Required: true})
+				@ui.Btn(ui.B{Kind: ui.OKOutline}) {
+					Süreyi ayarla
+				}
+			}
+		</form>
+	}
+}
+
+// deviceDisableExpiryForm clears the expiry; widening, so the maintenance guard wraps it.
+templ deviceDisableExpiryForm(detail DeviceDetailView, csrf string) {
+	@ui.Field(ui.F{Label: "Süresiz", Help: "Cihazın expire süresi kaldırılır."}) {
+		<form method="post" action={ templ.SafeURL(deviceActionPath(detail.Row.ID, "/expiry/disable")) }>
+			@CSRFField(csrf)
+			@ui.HiddenFields([]ui.Hidden{{Name: "expected", Value: detail.Version}, {Name: "current_expiry", Value: detail.Row.ExpiryRaw}})
+			@ui.Btn(ui.B{}) {
+				Expire&#39;i kapat
+			}
+		</form>
+	}
+}
+
+// DeviceDeleteConfirmPage is the delete's second step: the warning, the device and the confirm
+// form. The POST carries confirm=evet; without it the handler refuses.
+templ DeviceDeleteConfirmPage(view DeviceDeleteConfirmView, csrf string) {
+	@ui.PageHead(ui.H{Title: "Silme onayı", Crumbs: []ui.Crumb{{Label: "Cihazlar", Href: "/headscale/devices"}, {Label: "Silme onayı"}}})
+	@HeadscaleTabs("devices", false)
+	if view.Err != nil {
+		@ui.Callout(ui.N{Tone: ui.Err, Title: "Cihaz okunamadı"}) {
+			Neden: { view.Err.Error() }
+		}
+		@ui.Btn(ui.B{Href: "/headscale/devices"}) {
+			Listeye dön
+		}
+	} else {
+		@ui.Callout(ui.N{Tone: ui.Err}) {
+			<strong>{ view.Row.Name }</strong> cihazı tailnet&#39;ten kaldırılacak. İşlem geri alınamaz; cihazın yeniden kaydolması gerekir.
+		}
+		<form method="post" action={ templ.SafeURL(deviceActionPath(view.Row.ID, "/delete")) }>
+			@CSRFField(csrf)
+			@ui.HiddenFields([]ui.Hidden{
+				{Name: "expected", Value: view.Version},
+				{Name: "current_name", Value: view.Row.Name},
+				{Name: "confirm", Value: confirmWord},
+			})
+			@ui.BtnRow() {
+				@ui.Btn(ui.B{Kind: ui.Danger}) {
+					Cihazı sil
+				}
+				@ui.Btn(ui.B{Href: deviceActionPath(view.Row.ID, "")}) {
+					Vazgeç
+				}
+			}
+		</form>
+	}
+}
+
+// DeviceActionResultPage names the outcome explicitly (AC8): uygulandı, başarısız, sonuç
+// bilinmiyor, bayat veya engellendi, plus the executor's note.
+templ DeviceActionResultPage(view DeviceActionResultView) {
+	@ui.PageHead(ui.H{Title: "İşlem sonucu", Crumbs: []ui.Crumb{{Label: "Cihazlar", Href: "/headscale/devices"}, {Label: "İşlem sonucu"}}})
+	@HeadscaleTabs("devices", false)
+	@deviceActionResultCallout(view)
+	@ui.BtnRow() {
+		@ui.Btn(ui.B{Href: deviceActionPath(view.DeviceID, "")}) {
+			Cihaza dön
+		}
+		@ui.Btn(ui.B{Href: "/headscale/devices"}) {
+			Listeye dön
+		}
+	}
+}
+
+// deviceActionResultCallout is the shared outcome box: the explicit status, the action and the
+// executor's note.
+templ deviceActionResultCallout(view DeviceActionResultView) {
+	@ui.Callout(ui.N{Tone: deviceActionTone(view.Status), Title: deviceActionStatusLabel(view.Status)}) {
+		<p>
+			{ view.Action }
+			if view.DeviceName != "" {
+				· cihaz: <strong>{ view.DeviceName }</strong>
+			}
+			if view.NewName != "" {
+				· yeni ad: <strong data-new-name>{ view.NewName }</strong>
+			}
+		</p>
+		if view.Note != "" {
+			<p>{ view.Note }</p>
+		}
+	}
+}
+
+// deviceActionStatusLabel maps the executor status to its explicit screen text.
+func deviceActionStatusLabel(s hsadmin.Status) string {
+	switch s {
+	case hsadmin.StatusApplied:
+		return "Apply edildi"
+	case hsadmin.StatusFailed:
+		return "Başarısız"
+	case hsadmin.StatusUnknown:
+		return "Sonuç bilinmiyor"
+	case hsadmin.StatusStale:
+		return "Bayat"
+	case hsadmin.StatusBlocked:
+		return "Engellendi"
+	}
+	return string(s)
+}
+
+// deviceActionTone maps the executor status to the callout's tone. Only an applied write is OK;
+// every uncertain or refused outcome warns or errors (fail safe).
+func deviceActionTone(s hsadmin.Status) ui.Tone {
+	switch s {
+	case hsadmin.StatusApplied:
+		return ui.OK
+	case hsadmin.StatusFailed:
+		return ui.Err
+	default:
+		return ui.Warn
+	}
+}

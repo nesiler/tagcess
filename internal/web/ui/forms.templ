@@ -1,0 +1,218 @@
+package ui
+
+// Field is one form row: label and help on the left, the control (children) on the right. Inside a
+// Dialog the two stack.
+templ Field(f F) {
+	{{ ctx = withFieldDescription(ctx, f) }}
+	<div class="field">
+		<div>
+			if f.For != "" {
+				<label class="field-label" for={ f.For }>{ f.Label }</label>
+			} else {
+				<span class="field-label">{ f.Label }</span>
+			}
+			if f.Help != "" {
+				<div class="field-help" { optAttrs(nil, "id", f.helpID())... }>{ f.Help }</div>
+			}
+		</div>
+		<div>
+			{ children... }
+			if f.Err != "" {
+				<p class="field-err" { optAttrs(nil, "id", f.errID())... }>{ f.Err }</p>
+			}
+		</div>
+	</div>
+}
+
+// Input is a single-line text input; with Options it suggests known values (a combobox).
+templ Input(i In) {
+	<input
+		class="input"
+		type={ i.inputType() }
+		name={ i.Name }
+		value={ i.Value }
+		autocomplete={ i.autocomplete() }
+		required?={ i.Required }
+		disabled?={ i.Disabled }
+		readonly?={ i.ReadOnly }
+		{ i.attrs(ctx)... }
+	/>
+	if i.listID() != "" {
+		@datalist(i.listID(), i.Options)
+	}
+}
+
+// datalist holds the suggested values of a combobox or multi-value input.
+templ datalist(id string, options []string) {
+	<datalist id={ id }>
+		for _, o := range options {
+			<option value={ o }></option>
+		}
+	</datalist>
+}
+
+// MultiSelect is a multi-value field (roles, tags, owners): chips plus a suggesting input in the
+// browser, the plain textarea or input without script. See MS.
+templ MultiSelect(m MS) {
+	<div class="multi" data-multi>
+		if m.Sep == "" {
+			<textarea
+				class="input"
+				name={ m.Name }
+				rows={ m.rows() }
+				spellcheck="false"
+				required?={ m.Required }
+				disabled?={ m.Disabled }
+				{ m.attrs(ctx)... }
+			>{ m.value() }</textarea>
+		} else {
+			<input
+				class="input"
+				type="text"
+				name={ m.Name }
+				value={ m.value() }
+				autocomplete="off"
+				required?={ m.Required }
+				disabled?={ m.Disabled }
+				{ m.attrs(ctx)... }
+			/>
+		}
+		if m.listID() != "" {
+			@datalist(m.listID(), m.Options)
+		}
+	</div>
+}
+
+// Textarea is a multi-line input; one value per line is the convention for lists.
+templ Textarea(t TA) {
+	<textarea
+		class={ t.class() }
+		name={ t.Name }
+		rows={ t.rows() }
+		spellcheck="false"
+		required?={ t.Required }
+		disabled?={ t.Disabled }
+		readonly?={ t.ReadOnly }
+		{ t.attrs(ctx)... }
+	>{ t.Value }</textarea>
+}
+
+// Select is a select box.
+templ Select(s Sel) {
+	<select class="input" name={ s.Name } disabled?={ s.Disabled } { s.attrs(ctx)... }>
+		for _, o := range s.Options {
+			<option value={ o.Value } selected?={ o.Value == s.Selected }>{ o.Label }</option>
+		}
+	</select>
+}
+
+// Check is a checkbox with its label; the hint is shown under the label.
+templ Check(c Chk) {
+	<label class="check">
+		<input type="checkbox" name={ c.Name } value={ c.value() } checked?={ c.Checked } disabled?={ c.Disabled } { c.attrs()... }/>
+		<span>
+			{ c.Label }
+			if c.Hint != "" {
+				<small>{ c.Hint }</small>
+			}
+		</span>
+	</label>
+}
+
+// RadioGroup is a set of radio buttons for one choice. Use it when every option needs its label or
+// hint visible at once; a Select is enough for a short list of plain values.
+templ RadioGroup(g RG) {
+	<fieldset class="radios" disabled?={ g.Disabled }>
+		if g.Legend != "" {
+			<legend class="field-label">{ g.Legend }</legend>
+		}
+		for _, o := range g.Options {
+			<label class="check">
+				<input type="radio" { optAttrs(nil, "id", o.ID)... } name={ g.Name } value={ o.Value } checked?={ o.Value == g.Selected }/>
+				<span>
+					{ o.Label }
+					if o.Hint != "" {
+						<small>{ o.Hint }</small>
+					}
+				</span>
+			</label>
+		}
+	</fieldset>
+}
+
+// Checks lays out several Check boxes in a wrapping row.
+templ Checks() {
+	<div class="checks">
+		{ children... }
+	</div>
+}
+
+// Inline keeps a control and its button on one line (wrapping only when there is no room), e.g. a
+// rename input with its submit button inside a Field.
+templ Inline() {
+	<div class="inline">
+		{ children... }
+	</div>
+}
+
+// Row puts inputs of a repeated entry side by side (1:2), e.g. an API rule's type and value.
+templ Row() {
+	<div class="frow">
+		{ children... }
+	</div>
+}
+
+// Row3 is Row for three inputs (source, target, code).
+templ Row3() {
+	<div class="frow frow-3">
+		{ children... }
+	</div>
+}
+
+// InlineEdit is a closed-by-default editor inside a row (details/summary, no script): the row shows
+// the value as text, and the summary button opens the edit form (children) under it. The form's
+// input and button stay on one line.
+templ InlineEdit(label string) {
+	<details class="iedit">
+		<summary class="btn btn-sm btn-ghost">
+			@IconSm("edit")
+			{ label }
+		</summary>
+		<div class="iedit-body">
+			{ children... }
+		</div>
+	</details>
+}
+
+// SaveBar is the sticky bar at the end of a long form: a note on the left, the buttons (children)
+// on the right.
+templ SaveBar(note string) {
+	<div class="savebar">
+		<span class="muted">{ note }</span>
+		<span class="savebar-acts">
+			{ children... }
+		</span>
+	</div>
+}
+
+// Switch is an on/off switch that submits its form (see SW). Inside a form with the CSRF field.
+templ Switch(s SW) {
+	<button class="switch" type="submit" role="switch" aria-checked={ s.checked() } aria-label={ s.Label } name={ s.Name } value={ s.Value } disabled?={ s.Disabled } { s.attrs()... }>
+		<span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
+		<span class="switch-text">{ s.stateText() }</span>
+	</button>
+}
+
+// FileInto is a file picker that reads a small text file (a kubeconfig, a PEM) into the textarea
+// with the given id, in the browser (ui.js). The file never posts on its own: the textarea stays
+// the form field, so pasting works the same way. Without script the picker stays hidden.
+templ FileInto(id, target, label string) {
+	<div class="file-into" data-file-tools hidden>
+		<label class="btn btn-sm" for={ id }>
+			@IconSm("file")
+			{ label }
+		</label>
+		<input class="sr-only" type="file" id={ id } accept=".yaml,.yml,.conf,.config,.pem,.crt,.txt,text/plain" data-file-into={ target }/>
+		<span class="muted" role="status" aria-live="polite" data-file-status></span>
+	</div>
+}

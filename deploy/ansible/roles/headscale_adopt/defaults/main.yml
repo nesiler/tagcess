@@ -1,0 +1,8 @@
+# headscale_adopt (F6-007): the Headscale steps before and including G-02, each behind its own confirmation.
+hs_vpn_node: ""             # the VPN host's Headscale node name; empty: read from `tailscale status` on the host
+hs_k8s_node: ""             # the k8s node's name (adopt: k8s-host); empty: not checked (Ansible never connects there)
+hs_hook_src: tag:k8s
+hs_hook_dst: "tag:vpn-server:{{ headscale_hook_port }}"
+g02_candidate_config: /etc/headscale/config.g02-candidate.yaml
+g02_test_corrupt_readback: false   # TEST ONLY: the test inventory sets it to prove the abort path
+hs_dns_candidate: /etc/headscale/config.dns-candidate.yaml   # Headscale picks the config format by extension

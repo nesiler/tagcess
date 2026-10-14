@@ -1,0 +1,72 @@
+- name: Package architecture
+  ansible.builtin.command: dpkg --print-architecture
+  register: hs_install_arch_cmd
+  changed_when: false
+  check_mode: false
+
+- name: Installed Headscale version
+  ansible.builtin.command: dpkg-query -W -f=${Version} headscale
+  register: hs_install_dpkg
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Package plan
+  ansible.builtin.set_fact:
+    hs_install_arch: "{{ hs_install_arch_cmd.stdout | trim }}"
+    hs_install_need_pkg: "{{ hs_install_dpkg.rc != 0 or hs_install_dpkg.stdout | trim != headscale_version }}"
+
+- name: The architecture has a pinned package
+  ansible.builtin.assert:
+    that: [hs_install_arch in headscale_deb_sha256]
+    fail_msg: "headscale_deb_sha256 içinde {{ hs_install_arch }} yok"
+    quiet: true
+
+- name: Pinned package
+  when: hs_install_need_pkg
+  block:
+    - name: Download directory
+      ansible.builtin.file:
+        path: "{{ headscale_download_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Download the pinned .deb (kept only when its sha256 matches)
+      ansible.builtin.get_url:
+        url: "{{ headscale_deb_url }}"
+        dest: "{{ headscale_download_dir }}/headscale_{{ headscale_version }}_linux_{{ hs_install_arch }}.deb"
+        checksum: "sha256:{{ headscale_deb_sha256[hs_install_arch] }}"
+        mode: "0644"
+      register: hs_install_download
+
+    - name: Install the package
+      ansible.builtin.apt:
+        deb: "{{ headscale_download_dir }}/headscale_{{ headscale_version }}_linux_{{ hs_install_arch }}.deb"
+      when: not ansible_check_mode
+
+- name: Mark the package as this installer's
+  ansible.builtin.include_role:
+    name: state
+    tasks_from: installed.yml
+  vars:
+    state_component: headscale
+  when: not ansible_check_mode
+
+- name: sqlite3 (consistent database backups, preflight requires it next to Headscale)
+  ansible.builtin.apt:
+    name: sqlite3
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Plan only (--check, the package is not installed yet)
+  ansible.builtin.debug:
+    msg: "--check: Headscale {{ headscale_version }} kurulur; config ve başlangıç policy'si gerçek çalıştırmada yazılır."
+  when: ansible_check_mode and hs_install_need_pkg
+
+- name: Config and policy
+  ansible.builtin.include_tasks: configure.yml
+  when: not (ansible_check_mode and hs_install_need_pkg)
+
+- name: Installed by this installer (rollback leaves it, preflight lets fresh manage it)
+  ansible.builtin.set_fact:
+    state_installed: [headscale]

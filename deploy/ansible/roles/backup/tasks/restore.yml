@@ -1,0 +1,402 @@
+# Restore one backup (F6-003; rollback.yml reuses it per phase). The backup is verified whole first (nothing is stopped
+# for a missing or damaged one). Files go back next, then Caddy and Headscale are validated; a failed validation stops
+# before any reload/restart and names the restored files (fail safe, rule 7). Only then are the touched services
+# reloaded/restarted and checked. Whatever fails after the first change is undone (the files and databases the restore
+# replaced are saved under <backup>/undo-<id>/ and put back) and the services run again as before (fix H3). The undo
+# stops the owners of a restored database first (it copies the database and its WAL/SHM back), reloads Caddy when the
+# restore had reloaded it (the running config is measured against the one from before) and never reports a service that
+# did not come back as a success (review R2-H2, R2-H3).
+#   restore_backup_id (required), restore_only (path prefixes; default all), restore_sqlite (database paths to
+#   copy back; their service is stopped first)
+- name: "Restore: the backup id is valid"
+  ansible.builtin.assert:
+    that:
+      - restore_backup_id | default('') is match('^[0-9A-Za-z._-]+$')
+    fail_msg: "Geri yükleme için geçerli bir backup_id ver (ör. -e backup_id=20261006T120000Z-1a2b-host)"
+    quiet: true
+
+- name: "Restore: services before"
+  ansible.builtin.command: "systemctl is-active {{ item }}"  # noqa: command-instead-of-module
+  loop: [headscale, caddy, oauth2-proxy]
+  register: restore_services_before
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: "Restore: the backup is whole (nothing is stopped for a missing or damaged one)"
+  ansible.builtin.script:
+    cmd: "restore.py {{ restore_verify_args | to_json | b64encode }}"
+    executable: python3
+  vars:
+    restore_verify_args:
+      mode: verify
+      root: "{{ backup_root }}"
+      id: "{{ restore_backup_id }}"
+      only: "{{ restore_only | default([]) }}"
+      sqlite: "{{ restore_sqlite | default([]) }}"
+  register: restore_verify_raw
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: "{{ restore_no_log | default(true) | bool }}"
+
+- name: "Restore: stop before anything is touched when the backup is missing or damaged"
+  ansible.builtin.fail:
+    msg: >-
+      Geri yükleme yapılamadı, hiçbir servis durdurulmadı ve hiçbir dosya değişmedi: {{ ((restore_verify_raw.stderr | default('') ~ '\n'
+      ~ restore_verify_raw.stdout | default('')) | trim).splitlines() | select | list | last | default('bilinmeyen hata') }}
+  when: restore_verify_raw.rc | default(1) != 0
+
+- name: "Restore: the running Caddy config before (the undo is measured against it)"
+  ansible.builtin.shell: set -o pipefail; curl -fsS --max-time 5 {{ caddy_admin_url }}/config/ | sha256sum | cut -d' ' -f1
+  args:
+    executable: /bin/bash
+  register: restore_caddy_live_before
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: restore_services_before.results[1].stdout == 'active'
+
+- name: "Restore: state to put back when a step fails"
+  ansible.builtin.set_fact:
+    restore_caddy_reloaded: false
+    restore_undo_id: "{{ now(utc=true).strftime('%Y%m%dT%H%M%SZ') }}-{{ '%04x' | format(65535 | random) }}"
+    restore_hs_touched: false
+    restore_tagcess_touched: false
+    restore_oauth_touched: false
+
+- name: "Restore: stop, restore, validate, restart"
+  block:
+    - name: "Restore: remember restore_hs_touched"
+      ansible.builtin.set_fact:
+        restore_hs_touched: true
+      when: headscale_db_path in (restore_sqlite | default([])) and not ansible_check_mode
+
+    - name: "Restore: stop Headscale for its database"
+      ansible.builtin.systemd_service:
+        name: headscale
+        state: stopped
+      when: headscale_db_path in (restore_sqlite | default([]))
+
+    - name: "Restore: remember restore_tagcess_touched"
+      ansible.builtin.set_fact:
+        restore_tagcess_touched: true
+      when: "'/var/lib/tagcess/tagcess.db' in (restore_sqlite | default([])) and not ansible_check_mode"
+
+    - name: "Restore: stop tagcess for its database"
+      ansible.builtin.command: docker stop tagcess
+      register: restore_tagcess_stop
+      changed_when: restore_tagcess_stop.rc == 0
+      failed_when: false
+      when: "'/var/lib/tagcess/tagcess.db' in (restore_sqlite | default([]))"
+
+    - name: "Restore: put the files back"
+      ansible.builtin.script:
+        cmd: "restore.py {{ restore_args | to_json | b64encode }}"
+        executable: python3
+      vars:
+        restore_args:
+          root: "{{ backup_root }}"
+          id: "{{ restore_backup_id }}"
+          only: "{{ restore_only | default([]) }}"
+          sqlite: "{{ restore_sqlite | default([]) }}"
+          remove_absent: "{{ restore_remove_absent | default(false) | bool }}"
+          dry_run: "{{ ansible_check_mode }}"
+          undo_id: "{{ restore_undo_id }}"
+      register: restore_raw
+      changed_when: >-
+        restore_raw.rc | default(1) == 0 and
+        ((restore_raw.stdout | from_json).restored | length + (restore_raw.stdout | from_json).removed | length) > 0
+      failed_when: false
+      check_mode: false
+      no_log: "{{ restore_no_log | default(true) | bool }}"
+
+    - name: "Restore: stop when the files could not be restored"
+      ansible.builtin.fail:
+        msg: >-
+          Geri yükleme yapılamadı: {{ ((restore_raw.stderr | default('') ~ '\n' ~ restore_raw.stdout | default('')) | trim).splitlines()
+          | select | list | last | default('bilinmeyen hata') }}
+      when: restore_raw.rc | default(1) != 0
+
+    - name: "Restore: what changed"
+      ansible.builtin.set_fact:
+        restore_result: "{{ restore_raw.stdout | from_json }}"
+
+    - name: "Restore: touched components"
+      ansible.builtin.set_fact:
+        restore_touched: >-
+          {%- set paths = restore_result.restored + restore_result.removed -%}
+          {%- set t = {'caddy': false, 'headscale_config': false, 'headscale_policy': false, 'oauth2': false, 'tagcess': false, 'systemd': false} -%}
+          {%- for p in paths -%}
+            {%- if p.startswith(caddy_dir) or p.startswith('/etc/caddy-secrets') or '/caddy.service.d' in p -%}{%- set _ = t.update({'caddy': true}) -%}{%- endif -%}
+            {%- if p == headscale_config or '/headscale.service.d' in p -%}{%- set _ = t.update({'headscale_config': true}) -%}{%- endif -%}
+            {%- if p == headscale_policy_path -%}{%- set _ = t.update({'headscale_policy': true}) -%}{%- endif -%}
+            {%- if p.startswith(oauth2_proxy_dir) or '/oauth2-proxy.service.d' in p -%}{%- set _ = t.update({'oauth2': true}) -%}{%- endif -%}
+            {%- if p.startswith('/etc/tagcess') -%}{%- set _ = t.update({'tagcess': true}) -%}{%- endif -%}
+            {%- if '.service.d' in p -%}{%- set _ = t.update({'systemd': true}) -%}{%- endif -%}
+          {%- endfor -%}
+          {%- if headscale_db_path in restore_result.db_restored -%}{%- set _ = t.update({'headscale_config': true}) -%}{%- endif -%}
+          {%- if '/var/lib/tagcess/tagcess.db' in restore_result.db_restored -%}{%- set _ = t.update({'tagcess': true}) -%}{%- endif -%}
+          {{ t }}
+
+    - name: "Restore: systemd units changed"
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: restore_touched.systemd and not ansible_check_mode
+
+    - name: "Restore: validate Caddy"
+      ansible.builtin.command: "runuser -u caddy -- caddy validate --config {{ caddyfile_path }} --adapter caddyfile"
+      register: restore_caddy_validate
+      when: restore_touched.caddy and not ansible_check_mode
+      changed_when: false
+      failed_when: false
+
+    - name: "Restore: validate Headscale"
+      ansible.builtin.shell: |
+        set -e
+        runuser -u headscale -- headscale -c {{ headscale_config }} configtest
+        if grep -Eq '^[[:space:]]+mode:[[:space:]]+file' {{ headscale_config }} && [ -f {{ headscale_policy_path }} ]; then
+          # policy check asks the running server; a stopped one is read directly (as the headscale user).
+          bypass=""; systemctl is-active -q headscale || bypass="--bypass-grpc-and-access-database-directly --force"
+          runuser -u headscale -- headscale -c {{ headscale_config }} policy check $bypass -f {{ headscale_policy_path }}
+        fi
+      register: restore_hs_validate
+      when: (restore_touched.headscale_config or restore_touched.headscale_policy) and not ansible_check_mode
+      changed_when: false
+      failed_when: false
+
+    - name: "Restore: validation failed, nothing is reloaded"
+      ansible.builtin.fail:
+        msg: >-
+          Geri yüklenen config doğrulamadan geçmedi; hiçbir servis yeniden yüklenmedi/başlatılmadı.
+          Geri gelen dosyalar: {{ restore_result.restored | join(', ') }}.
+          {{ ('Caddy (' ~ caddyfile_path ~ '): ' ~ ((restore_caddy_validate.stderr | default('') | trim).splitlines() | last | default('')))
+             if restore_caddy_validate.rc | default(0) != 0 else '' }}
+          {{ ('Headscale (' ~ headscale_config ~ ' / ' ~ headscale_policy_path ~ '): '
+              ~ ((restore_hs_validate.stderr | default(restore_hs_validate.stdout | default('')) | trim).splitlines() | last | default('')))
+             if restore_hs_validate.rc | default(0) != 0 else '' }}
+      when: restore_caddy_validate.rc | default(0) != 0 or restore_hs_validate.rc | default(0) != 0
+
+    - name: "Restore: remember restore_caddy_reloaded"
+      ansible.builtin.set_fact:
+        restore_caddy_reloaded: true
+      when: restore_touched.caddy and not ansible_check_mode and (restore_services_before.results[1].stdout == 'active')
+
+    - name: "Restore: reload Caddy"
+      ansible.builtin.systemd_service:
+        name: caddy
+        state: reloaded
+      when: restore_touched.caddy and not ansible_check_mode and (restore_services_before.results[1].stdout == 'active')
+
+    - name: "Restore: remember restore_hs_touched"
+      ansible.builtin.set_fact:
+        restore_hs_touched: true
+      when: not ansible_check_mode and (restore_touched.headscale_config or restore_touched.headscale_policy) and (restore_services_before.results[0].stdout == 'active')
+
+    - name: "Restore: Headscale back up"
+      ansible.builtin.systemd_service:
+        name: headscale
+        state: "{{ 'restarted' if restore_touched.headscale_config else 'reloaded' }}"
+      when: >-
+        not ansible_check_mode and (restore_touched.headscale_config or restore_touched.headscale_policy)
+        and (restore_services_before.results[0].stdout == 'active')
+
+    - name: "Restore: remember restore_oauth_touched"
+      ansible.builtin.set_fact:
+        restore_oauth_touched: true
+      when: restore_touched.oauth2 and not ansible_check_mode and restore_services_before.results[2].stdout == 'active'
+
+    - name: "Restore: oauth2-proxy back to its config"
+      ansible.builtin.systemd_service:
+        name: oauth2-proxy
+        state: restarted
+      when: restore_touched.oauth2 and not ansible_check_mode and restore_services_before.results[2].stdout == 'active'
+
+    - name: "Restore: remember restore_tagcess_touched"
+      ansible.builtin.set_fact:
+        restore_tagcess_touched: true
+      when: restore_touched.tagcess and not ansible_check_mode
+
+    - name: "Restore: tagcess container picks up its config"
+      ansible.builtin.command: docker restart tagcess
+      register: restore_tagcess_restart
+      when: restore_touched.tagcess and not ansible_check_mode
+      changed_when: restore_tagcess_restart.rc == 0
+      failed_when: false
+
+    - name: "Restore: Headscale health"
+      ansible.builtin.uri:
+        url: "{{ headscale_health_url }}"
+        status_code: 200
+      register: restore_hs_health
+      until: restore_hs_health.status == 200
+      retries: 20
+      delay: 1
+      when: not ansible_check_mode and restore_services_before.results[0].stdout == 'active'
+
+    - name: "Restore: Caddy running"
+      ansible.builtin.command: systemctl is-active caddy  # noqa: command-instead-of-module
+      changed_when: false
+      when: not ansible_check_mode and restore_services_before.results[1].stdout == 'active'
+
+    - name: "Restore: summary"
+      ansible.builtin.debug:
+        msg:
+          - "Yedek {{ restore_result.id }} ({{ restore_result.phase }}) geri yüklendi{{ ' (--check: yalnız plan)' if ansible_check_mode else '' }}."
+          - "Geri gelen: {{ restore_result.restored | join(', ') or '-' }}"
+          - "Kaldırılan (yedekte yoktu, restore-removed/ altına taşındı): {{ restore_result.removed | join(', ') or '-' }}"
+          - "Yedek anında yoktu, silinmedi: {{ restore_result.left | join(', ') or '-' }}"
+          - "Veritabanı: {{ restore_result.db_restored | join(', ') or '-' }}"
+
+  rescue:
+    - name: "Restore: what failed"
+      ansible.builtin.set_fact:
+        restore_failed_msg: "{{ ansible_failed_result.msg | default('Geri yükleme düştü') | trim }}"
+
+    # The undo copies the databases (and their WAL/SHM) back: their owners must not run meanwhile.
+    - name: "Restore: stop Headscale before its database is put back"
+      ansible.builtin.systemd_service:
+        name: headscale
+        state: stopped
+      failed_when: false
+      when: restore_hs_touched | bool and not ansible_check_mode
+
+    - name: "Restore: stop tagcess before its database is put back"
+      ansible.builtin.command: docker stop tagcess
+      changed_when: false
+      failed_when: false
+      when: restore_tagcess_touched | bool and not ansible_check_mode
+
+    - name: "Restore: put the replaced files and databases back"
+      ansible.builtin.script:
+        cmd: "restore.py {{ restore_undo_args | to_json | b64encode }}"
+        executable: python3
+      vars:
+        restore_undo_args:
+          mode: undo
+          root: "{{ backup_root }}"
+          id: "{{ restore_backup_id }}"
+          undo_id: "{{ restore_undo_id }}"
+      register: restore_undo_raw
+      changed_when: restore_undo_raw.rc | default(1) == 0
+      failed_when: false
+      check_mode: false
+      no_log: "{{ restore_no_log | default(true) | bool }}"
+
+    - name: "Restore: systemd units back"
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      failed_when: false
+      when: (restore_touched | default({})).systemd | default(false) and not ansible_check_mode
+
+    - name: "Restore: Headscale runs again (it was active before)"
+      ansible.builtin.systemd_service:
+        name: headscale
+        state: restarted
+      register: restore_hs_again
+      failed_when: false
+      when: restore_hs_touched | bool and restore_services_before.results[0].stdout == 'active' and not ansible_check_mode
+
+    - name: "Restore: oauth2-proxy runs with its old config again"
+      ansible.builtin.systemd_service:
+        name: oauth2-proxy
+        state: restarted
+      register: restore_oauth_again
+      failed_when: false
+      when: restore_oauth_touched | bool and restore_services_before.results[2].stdout == 'active' and not ansible_check_mode
+
+    - name: "Restore: tagcess container runs again"
+      ansible.builtin.command: docker restart tagcess
+      register: restore_tagcess_again
+      changed_when: restore_tagcess_again.rc == 0
+      failed_when: false
+      when: restore_tagcess_touched | bool and not ansible_check_mode
+
+    - name: "Restore: Caddy validates the put-back Caddyfile"
+      ansible.builtin.command: "runuser -u caddy -- caddy validate --config {{ caddyfile_path }} --adapter caddyfile"
+      register: restore_caddy_again_validate
+      changed_when: false
+      failed_when: false
+      when: >-
+        restore_caddy_reloaded | bool and restore_services_before.results[1].stdout == 'active' and not ansible_check_mode
+        and restore_undo_raw.rc | default(1) == 0
+
+    - name: "Restore: Caddy runs the put-back config again (the restore had reloaded it)"
+      ansible.builtin.systemd_service:
+        name: caddy
+        state: reloaded
+      register: restore_caddy_again
+      failed_when: false
+      when: restore_caddy_again_validate is not skipped and restore_caddy_again_validate.rc | default(1) == 0
+
+    - name: "Restore: the running Caddy config measured against the one from before"
+      ansible.builtin.shell: set -o pipefail; curl -fsS --max-time 5 {{ caddy_admin_url }}/config/ | sha256sum | cut -d' ' -f1
+      args:
+        executable: /bin/bash
+      register: restore_caddy_live_after
+      changed_when: false
+      failed_when: false
+      when: restore_caddy_again_validate is not skipped and restore_caddy_again_validate.rc | default(1) == 0
+
+    - name: "Restore: Headscale healthy again"
+      ansible.builtin.uri:
+        url: "{{ headscale_health_url }}"
+        status_code: 200
+      register: restore_hs_again_health
+      until: restore_hs_again_health.status == 200
+      retries: 20
+      delay: 1
+      failed_when: false
+      when: restore_hs_touched | bool and restore_services_before.results[0].stdout == 'active' and not ansible_check_mode
+
+    # A service that did not come back is reported, never masked by the success wording.
+    - name: "Restore: which services did not come back"
+      ansible.builtin.set_fact:
+        restore_undo_problems: >-
+          {%- set p = [] -%}
+          {%- if restore_hs_again is defined and restore_hs_again is not skipped and restore_hs_again.status is not defined -%}
+            {%- set _ = p.append('Headscale yeniden başlatılamadı') -%}{%- endif -%}
+          {%- if restore_hs_again_health is defined and restore_hs_again_health is not skipped and restore_hs_again_health.status | default(0) != 200 -%}
+            {%- set _ = p.append('Headscale sağlık kontrolü (' ~ headscale_health_url ~ ') geçmedi') -%}{%- endif -%}
+          {%- if restore_oauth_again is defined and restore_oauth_again is not skipped and restore_oauth_again.status is not defined -%}
+            {%- set _ = p.append('oauth2-proxy yeniden başlatılamadı') -%}{%- endif -%}
+          {%- if restore_tagcess_again is defined and restore_tagcess_again is not skipped and restore_tagcess_again.rc | default(0) != 0 -%}
+            {%- set _ = p.append('tagcess container\'ı yeniden başlatılamadı') -%}{%- endif -%}
+          {%- if restore_caddy_again_validate is defined and restore_caddy_again_validate is not skipped and restore_caddy_again_validate.rc | default(0) != 0 -%}
+            {%- set _ = p.append('geri konan Caddyfile doğrulamadan geçmedi, çalışan Caddy config\'i hâlâ geri yüklenen yedeğin kuralları olabilir') -%}{%- endif -%}
+          {%- if restore_caddy_again is defined and restore_caddy_again is not skipped and restore_caddy_again.status is not defined -%}
+            {%- set _ = p.append('Caddy yeniden yüklenemedi, çalışan config geri yüklenen yedeğin kuralları olabilir') -%}{%- endif -%}
+          {%- if restore_caddy_live_after is defined and restore_caddy_live_after is not skipped
+                 and (restore_caddy_live_after.stdout | default('') | trim) != (restore_caddy_live_before.stdout | default('') | trim)
+                 and (restore_caddy_live_before.rc | default(1)) == 0 -%}
+            {%- set _ = p.append('çalışan Caddy config\'i geri yüklemeden önceki ile aynı değil') -%}{%- endif -%}
+          {{ p }}
+
+    - name: "Restore: what to tell"
+      ansible.builtin.set_fact:
+        restore_undo_note: >-
+          {{ ('DİKKAT: önceki durum geri konamadı; kayıtlı kopya ' ~ backup_root ~ '/' ~ restore_backup_id ~ '/undo-' ~ restore_undo_id ~ '/ altında, elle geri koy.')
+             if restore_undo_raw.rc | default(1) != 0
+             else (('Önceki dosyalar ve veritabanı geri kondu AMA DİKKAT, servisler tam düzelmedi: ' ~ (restore_undo_problems | join('; ')) ~ '.')
+                   if restore_undo_problems | length > 0
+                   else 'Önceki dosyalar ve veritabanı geri kondu; servisler önceki çalışma durumuna döndürüldü.') }}
+
+    - name: "Restore: stopped, the previous state is back"
+      ansible.builtin.fail:
+        msg: "{{ restore_failed_msg }} {{ restore_undo_note }}"
+
+- name: "Restore: the saved previous state is no longer needed"
+  ansible.builtin.script:
+    cmd: "restore.py {{ restore_drop_args | to_json | b64encode }}"
+    executable: python3
+  vars:
+    restore_drop_args:
+      mode: drop_undo
+      root: "{{ backup_root }}"
+      id: "{{ restore_backup_id }}"
+      undo_id: "{{ restore_undo_id }}"
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+  no_log: true

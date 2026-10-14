@@ -1,0 +1,19 @@
+# oauth2_proxy (F6-006, decision 3 [K]): the role only manages the config and keeps the service running.
+#   oauth2_proxy_runtime: systemd (adopt: existing binary + unit, never installed here) | container (lab/fresh)
+#   oauth2_proxy_cookie_profile: tagcess (one shared _tagcess_gate cookie, 1 h, no refresh) | existing (today's
+#   cookie settings as preflight read them). Default: fresh -> tagcess, adopt -> existing; adopt switches to tagcess
+#   only with confirm_oauth2_cookie=yes (everyone signs in once more).
+oauth2_proxy_cookie_profile: "{{ 'tagcess' if install_mode == 'fresh' else 'existing' }}"
+oauth2_proxy_state: started
+oauth2_proxy_image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.4
+oauth2_proxy_binary: /usr/local/bin/oauth2-proxy
+oauth2_proxy_cfg: "{{ oauth2_proxy_dir }}/oauth2-proxy.cfg"
+oauth2_proxy_compose: "{{ oauth2_proxy_dir }}/compose.yaml"
+oauth2_proxy_container_uid: 65532        # the image's nonroot user
+oauth2_proxy_http_address: 127.0.0.1:4180
+oauth2_proxy_check_port: 4189            # scratch port of the candidate check
+oauth2_proxy_cookie_domains: "{{ app_allowed_domains | map('regex_replace', '^', '.') | list }}"
+oauth2_proxy_whitelist_domains: "{{ [auth_host] + oauth2_proxy_cookie_domains }}"
+oauth2_proxy_allow_unverified_email: "{{ ((preflight_probe | default({})).oauth2_proxy | default({})).settings.insecure_oidc_allow_unverified_email | default(false) }}"
+oauth2_proxy_secret_dir: "{{ '/etc/oauth2-proxy' if oauth2_proxy_runtime == 'container' else oauth2_proxy_dir }}"
+oauth2_proxy_secret_ref_suffix: ""   # only the candidate check renders ".candidate": the check config reads the candidate secret files

@@ -1,0 +1,12 @@
+# ansible-lint settings for the tagcess installer (F6-001).
+offline: true
+skip_list:
+  # The installer settings are shared by every role (they are the defaults of roles/config and the
+  # environment file), not role-private variables; a per-role prefix would split one setting into many.
+  - var-naming[no-role-prefix]
+  # Task names start with the component's own lowercase name (tagcess, certbot, sqlite3, zitadel.json).
+  - name[casing]
+  # Long Jinja expressions (guide items, preflight checks) read better on one line than split mid-expression.
+  - yaml[line-length]
+exclude_paths:
+  - .ansible/

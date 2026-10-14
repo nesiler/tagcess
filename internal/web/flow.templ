@@ -1,0 +1,57 @@
+package web
+
+import "github.com/nesiler/tagcess/internal/web/ui"
+
+// The shared change flow pieces (docs/ui-guide.md): every state-changing form carries the CSRF
+// field, every preview ends in the same apply form, every destructive action asks in a dialog.
+
+// confirmApplyLabel is the one confirm button text of every preview screen (F5 L4).
+const confirmApplyLabel = "Onayla ve apply et"
+
+// CSRFField is the hidden CSRF token every state-changing form carries (NFR-03).
+templ CSRFField(token string) {
+	<input type="hidden" name={ CSRFParam } value={ token }/>
+}
+
+// ApplyForm ends a preview: it posts the version-bound fields of the shown plan with the shared
+// confirm label, next to a way back.
+templ ApplyForm(action, token string, fields []ui.Hidden, backHref string) {
+	<form method="post" action={ templ.SafeURL(action) }>
+		@CSRFField(token)
+		@ui.HiddenFields(fields)
+		@ui.BtnRow() {
+			@ui.Btn(ui.B{Kind: ui.Primary, Icon: "check"}) {
+				{ confirmApplyLabel }
+			}
+			@ui.Btn(ui.B{Href: backHref}) {
+				Vazgeç
+			}
+		}
+	</form>
+}
+
+// ConfirmDialog asks before a destructive or hard-to-undo action. A control with
+// data-dialog-open set to id opens it; children are extra body text or inputs of the form.
+templ ConfirmDialog(id, title, desc, action, token string, fields []ui.Hidden, label string) {
+	@ui.Dialog(ui.D{ID: id, Title: title, Desc: desc}) {
+		<form method="post" action={ templ.SafeURL(action) }>
+			@CSRFField(token)
+			@ui.HiddenFields(fields)
+			{ children... }
+			@ui.DialogFoot() {
+				@ui.Btn(ui.B{Kind: ui.Danger}) {
+					{ label }
+				}
+			}
+		</form>
+	}
+}
+
+// dryRunWarning is the box that says an apply changes nothing while dry-run is on (A1).
+templ dryRunWarning() {
+	@ui.Callout(ui.N{Tone: ui.Warn, Title: "Dry-run açık: hiçbir şey apply edilmedi"}) {
+		<p>
+			Onaylansa da apply edilmez. Gerçekten apply etmek için <a href="/sync">sync sayfasından</a> dry-run'ı kapatın.
+		</p>
+	}
+}

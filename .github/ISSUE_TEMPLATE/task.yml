@@ -1,0 +1,60 @@
+name: Task
+description: Planned work for one branch and one PR (maintainers and the coordinator).
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One issue = one branch = one PR. Keep it to one concern and one reviewable diff (roughly 1-5 files).
+        Add one `type:*` label, the `area:*` labels, `risk:auth` when it applies, and the milestone.
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What changes for the user or the system, in one or two sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Function IDs (S-, Y-, H-, K-, P-, A-, NFR-), ADRs, docs sections, and `Depends on #n` lines.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Observable and testable, in EARS form, each naming the test that proves it. Mark open points as [Open].
+      value: |
+        - [ ] AC1: WHEN ... THE system SHALL ... (test: `TestXxx` in `./internal/...`)
+        - [ ] AC2: IF ... THEN THE system SHALL ... (test: `TestYyy`)
+    validations:
+      required: true
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Risk
+      description: "auth = touches authn/authz, webhook verification, policy or ACL writes, generated config, node expiry or secrets (label risk:auth; needs the security review and the developer's approval)."
+      options:
+        - normal
+        - auth
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Packages or files expected to change, and what is explicitly out of scope.
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      description: Optional worker profile override (defaults in .agents/roles.conf), for example sonnet.
+  - type: input
+    id: reviewer
+    attributes:
+      label: Reviewer
+      description: Optional reviewer profile override, for example codex.

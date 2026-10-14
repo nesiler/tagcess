@@ -1,0 +1,13 @@
+#!/bin/sh
+# tagcess installer (certbot, F6-012): renewed certificates stay readable by Caddy, then Caddy reloads.
+set -e
+if getent group caddy >/dev/null; then
+	chgrp caddy /etc/letsencrypt/live /etc/letsencrypt/archive
+	chmod 0750 /etc/letsencrypt/live /etc/letsencrypt/archive
+	for d in /etc/letsencrypt/archive/*/; do
+		[ -d "$d" ] || continue
+		chgrp -R caddy "$d"
+		chmod 0640 "$d"privkey*.pem
+	done
+fi
+if [ -z "${TAGCESS_NO_RELOAD:-}" ] && systemctl is-active -q caddy; then systemctl reload caddy; fi

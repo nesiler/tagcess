@@ -1,0 +1,247 @@
+package web
+
+import (
+	"strconv"
+
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// The pre-auth key screens (F3-017, H-03/H-05): the key list with the tagged key form, the confirm
+// page of an expire or delete, and the result page that shows a new key's value exactly once.
+// Every value is escaped by templ; no component receives a key value except KeyResultPage.
+
+// KeysPage renders the key list and, below it, the tagged key form (shared devices).
+templ KeysPage(view KeysView, csrfToken string) {
+	@ui.PageHead(ui.H{Title: "Pre-auth key'leri", Sub: "Paylaşımlı cihazlar ve node kaydı için ön yetkili key'ler."})
+	@HeadscaleTabs("keys", view.DryRun)
+	@KeysSubNav("preauth")
+	if view.FormError != "" {
+		@ui.Callout(ui.N{Tone: ui.Err}) {
+			Key üretilmedi; hiçbir şey yazılmadı: { view.FormError }
+		}
+	}
+	if view.Err != nil {
+		@ui.Callout(ui.N{Tone: ui.Err, Title: "Key'ler okunamadı"}) {
+			liste gösterilmiyor. Neden: { view.Err.Error() }
+		}
+	} else if len(view.Rows) == 0 {
+		@ui.Card(ui.C{}) {
+			@ui.Empty("key", "Kayıtlı pre-auth key yok.", "")
+		}
+	} else {
+		if len(activeKeys(view.Rows)) == 0 {
+			@ui.Card(ui.C{Flush: true}) {
+				@ui.Empty("key", "Kullanılabilir pre-auth key yok.", "Kayıtlı key'lerin hepsinin süresi dolmuş; yeni key aşağıdan üretilir.")
+			}
+		} else {
+			@keysTable("Pre-auth key'ler", activeKeys(view.Rows))
+		}
+		if n := len(expiredKeys(view.Rows)); n > 0 {
+			@ui.Fold("Süresi dolmuş key'ler ("+strconv.Itoa(n)+")", templ.Attributes{"data-expired-keys": "true"}) {
+				@keysTable("Süresi dolmuş key'ler", expiredKeys(view.Rows))
+			}
+		}
+	}
+	@ui.Card(ui.C{Title: "Paylaşımlı cihaz için tag'li key üret", Desc: "Key tag'li bir cihaz kaydeder; varsayılan tek kullanımlıktır."}) {
+		if view.TagsErr != nil {
+			@ui.Callout(ui.N{Tone: ui.Err, Title: "Tag'ler okunamadı"}) {
+				key üretilemez. Neden: { view.TagsErr.Error() }
+			}
+		} else if len(view.TagOptions) == 0 {
+			<p>Policy'de seçilebilir tag yok (sunucu tag'leri seçilemez).</p>
+		} else {
+			@MaintenanceWideningGuard() {
+				<form method="post" action="/headscale/keys/preauth/create">
+					@CSRFField(csrfToken)
+					@ui.Field(ui.F{Label: "Tag'ler", Help: "Policy'deki tag'ler; sunucu tag'leri seçilemez."}) {
+						@ui.Checks() {
+							for _, tag := range view.TagOptions {
+								@ui.Check(ui.Chk{ID: "tag-" + tag, Name: "tags", Value: tag, Label: tag})
+							}
+						}
+					}
+					@ui.Field(ui.F{Label: "Geçerlilik süresi", For: "expires_in", Help: "Boşsa 1 saat, en fazla 30 gün; ör. 90m, 24h, 7d."}) {
+						@ui.Input(ui.In{ID: "expires_in", Name: "expires_in", Placeholder: "1h", Options: []string{"1h", "24h", "7d", "30d"},
+							Pattern: personalExpiryPattern, Msg: "Süreyi sayı ve birimle yazın: 90m, 24h veya 7d (en fazla 30 gün)."})
+					}
+					@ui.Field(ui.F{Label: "Seçenekler", Help: "Yeniden kullanılabilir key ele geçirilirse süresi dolana kadar cihaz kaydedebilir; yalnız gerekince seçin."}) {
+						@ui.Checks() {
+							@ui.Check(ui.Chk{ID: "reusable", Name: "reusable", Value: "1", Label: "Yeniden kullanılabilir"})
+							@ui.Check(ui.Chk{ID: "ephemeral", Name: "ephemeral", Value: "1", Label: "Geçici (çevrimdışı kalınca cihaz silinir)"})
+						}
+					}
+					@ui.BtnRow() {
+						@ui.Btn(ui.B{Kind: ui.Primary}) {
+							Key üret
+						}
+					}
+				</form>
+			}
+		}
+	}
+}
+
+// KeyConfirmPage asks for the confirmation of an expire or a delete. The version binds the POST to
+// the key state shown here.
+templ KeyConfirmPage(view KeyConfirmView, csrfToken string) {
+	@ui.PageHead(ui.H{Title: "Pre-auth key " + strconv.FormatUint(view.Row.ID, 10), Crumbs: []ui.Crumb{{Label: "Pre-auth key'leri", Href: "/headscale/keys"}, {Label: "Onay"}}})
+	@HeadscaleTabs("keys", view.DryRun)
+	@KeysSubNav("preauth")
+	@ui.KV() {
+		<dt>Sahip / tag'ler</dt>
+		<dd>
+			{ view.Row.Owner }
+			for _, tag := range view.Row.Tags {
+				@ui.Tag(tag)
+			}
+		</dd>
+		<dt>Son kullanma</dt>
+		<dd>{ view.Row.Expiry }</dd>
+		<dt>Durum</dt>
+		<dd>
+			@keyStatus(view.Row)
+		</dd>
+	}
+	if view.Action == "expire" {
+		@ui.Callout(ui.N{Tone: ui.Warn}) {
+			Key iptal edilir (süresi doldurulur). Bu işlem geri alınamaz: gerekirse yeni bir key üretmeniz gerekir.
+			Bu key ile daha önce kaydolmuş node'lar etkilenmez.
+		}
+	} else {
+		@ui.Callout(ui.N{Tone: ui.Err}) {
+			Key silinir. Bu işlem geri alınamaz; node'lar silinmez, yalnız key kaydı kalkar.
+		}
+	}
+	<form method="post" action={ templ.URL("/headscale/keys/preauth/" + strconv.FormatUint(view.Row.ID, 10) + "/" + view.Action) }>
+		@CSRFField(csrfToken)
+		@ui.HiddenFields([]ui.Hidden{{Name: "version", Value: view.Version}})
+		@ui.BtnRow() {
+			if view.Action == "expire" {
+				@ui.Btn(ui.B{Kind: ui.WarnOutline}) {
+					İptal et
+				}
+			} else {
+				@ui.Btn(ui.B{Kind: ui.Danger}) {
+					Sil
+				}
+			}
+			@ui.Btn(ui.B{Href: "/headscale/keys"}) {
+				Vazgeç
+			}
+		}
+	</form>
+}
+
+// KeyResultPage shows an operation's outcome. A created key's value appears here and nowhere
+// else, once: the page is the response of the creating POST and nothing stores it.
+templ KeyResultPage(title, subNav string, bypass bool, out KeyOutcome) {
+	@ui.PageHead(ui.H{Title: title})
+	@KeysSubNav(subNav)
+	if bypass {
+		@BypassWarning()
+	}
+	if out.Status == "applied" {
+		@ui.Callout(ui.N{Tone: ui.OK}) {
+			{ out.Message }
+		}
+	} else {
+		@ui.Callout(ui.N{Tone: ui.Err}) {
+			{ out.Message }
+		}
+	}
+	if out.Secret != "" {
+		@ui.Card(ui.C{Title: "Key (kimlik " + strconv.FormatUint(out.KeyID, 10) + ")"}) {
+			<p><strong>Bu değer bir daha gösterilmeyecek;</strong> şimdi kopyalayın. Sayfa yenilenirse yoktur.</p>
+			@ui.Secret(out.Secret)
+		}
+	}
+	@ui.Btn(ui.B{Href: "/headscale/keys"}) {
+		Listeye dön
+	}
+}
+
+// BypassWarning says that a personal key skips the OIDC sign-in (H-03); the form and every result
+// page of the personal key flow show it.
+templ BypassWarning() {
+	@ui.Callout(ui.N{Tone: ui.Warn}) {
+		Bu key OIDC giriş şartlarını baypas eder: key ile kaydolan cihaz için OIDC girişi, <code>allowed_groups</code> ve olası
+		domain/e-posta filtreleri apply edilmez. Yalnız kullanıcıya güvenli bir kanaldan iletin; key tek kullanımlıktır.
+	}
+}
+
+// keysTable is the key list table; the active and the expired keys are shown in separate tables.
+templ keysTable(label string, rows []KeyRowView) {
+	@ui.ListTable(ui.L{Label: label, Search: true}) {
+		<thead>
+			<tr>
+				<th scope="col">Kimlik</th>
+				<th scope="col">Sahip / tag'ler</th>
+				<th scope="col">Tür</th>
+				<th scope="col">Kullanıldı</th>
+				<th scope="col">Son kullanma</th>
+				<th scope="col">Oluşturma</th>
+				<th scope="col">Durum</th>
+				<th scope="col" aria-label="İşlemler"></th>
+			</tr>
+		</thead>
+		<tbody>
+			for _, row := range rows {
+				<tr>
+					<td>{ strconv.FormatUint(row.ID, 10) }</td>
+					<td>
+						{ row.Owner }
+						for _, tag := range row.Tags {
+							@ui.Tag(tag)
+						}
+					</td>
+					<td>{ keyKindText(row) }</td>
+					<td>
+						if row.Used {
+							evet
+						} else {
+							hayır
+						}
+					</td>
+					<td>{ row.Expiry }</td>
+					<td>{ row.Created }</td>
+					<td>
+						@keyStatus(row)
+					</td>
+					@ui.Actions() {
+						if !row.Expired {
+							@ui.Btn(ui.B{Kind: ui.WarnOutline, Small: true, Href: "/headscale/keys/preauth/" + strconv.FormatUint(row.ID, 10) + "/expire"}) {
+								İptal et
+							}
+						}
+						@ui.Btn(ui.B{Kind: ui.DangerOutline, Small: true, Href: "/headscale/keys/preauth/" + strconv.FormatUint(row.ID, 10) + "/delete"}) {
+							Sil
+						}
+					}
+				</tr>
+			}
+		</tbody>
+	}
+}
+
+// keyStatus is a key's state as coloured text: expired is an error, active is good, the rest neutral.
+templ keyStatus(row KeyRowView) {
+	if row.Expired {
+		@ui.StatusText(ui.Err, row.Status, "")
+	} else if row.Status == "aktif" {
+		@ui.StatusText(ui.OK, row.Status, "")
+	} else {
+		@ui.StatusText(ui.Off, row.Status, "")
+	}
+}
+
+// keyKindText is the kind of a key on one line: single-use or reusable, and ephemeral.
+func keyKindText(row KeyRowView) string {
+	out := "tek kullanımlık"
+	if row.Reusable {
+		out = "yeniden kullanılabilir"
+	}
+	if row.Ephemeral {
+		out += ", geçici"
+	}
+	return out
+}

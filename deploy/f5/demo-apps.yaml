@@ -1,0 +1,129 @@
+# F5 lab demo apps (traefik/whoami) behind the k3s Traefik ingress: books, calendar, panel. No secrets.
+# Apply on the k8s node: kubectl apply -f demo-apps.yaml (replace lab.example.com for another lab domain).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: books, namespace: demo}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: books}}
+  template:
+    metadata: {labels: {app: books}}
+    spec:
+      containers:
+        - name: whoami
+          image: traefik/whoami:v1.10.3
+          args: ["--name", "books"]
+          ports: [{containerPort: 80}]
+          resources: {requests: {cpu: 5m, memory: 8Mi}, limits: {memory: 32Mi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: books, namespace: demo}
+spec:
+  selector: {app: books}
+  ports: [{port: 80, targetPort: 80}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: books
+  namespace: demo
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: books.lab.example.com
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: books, port: {number: 80}}}}
+  tls:
+    - hosts: [books.lab.example.com]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: calendar, namespace: demo}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: calendar}}
+  template:
+    metadata: {labels: {app: calendar}}
+    spec:
+      containers:
+        - name: whoami
+          image: traefik/whoami:v1.10.3
+          args: ["--name", "calendar"]
+          ports: [{containerPort: 80}]
+          resources: {requests: {cpu: 5m, memory: 8Mi}, limits: {memory: 32Mi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: calendar, namespace: demo}
+spec:
+  selector: {app: calendar}
+  ports: [{port: 80, targetPort: 80}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: calendar
+  namespace: demo
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: calendar.lab.example.com
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: calendar, port: {number: 80}}}}
+  tls:
+    - hosts: [calendar.lab.example.com]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: panel, namespace: demo}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: panel}}
+  template:
+    metadata: {labels: {app: panel}}
+    spec:
+      containers:
+        - name: whoami
+          image: traefik/whoami:v1.10.3
+          args: ["--name", "panel"]
+          ports: [{containerPort: 80}]
+          resources: {requests: {cpu: 5m, memory: 8Mi}, limits: {memory: 32Mi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: panel, namespace: demo}
+spec:
+  selector: {app: panel}
+  ports: [{port: 80, targetPort: 80}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: panel
+  namespace: demo
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: panel.lab.example.com
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: panel, port: {number: 80}}}}
+  tls:
+    - hosts: [panel.lab.example.com]

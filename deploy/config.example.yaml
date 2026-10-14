@@ -1,0 +1,103 @@
+# tagcess settings file. Start with: tagcess -config /etc/tagcess/config.yaml
+# Validate without starting:          tagcess -config /etc/tagcess/config.yaml -check
+#
+# Unknown fields are an error. Secrets never go in this file: fields ending in _file hold the path of a
+# read-only file that contains the secret.
+
+# SQLite database and the artifact git repository.
+data_dir: /var/lib/tagcess
+
+# k8s credential (token/CA) imported from the UI. Separate rw directory (0700, owned by the tagcess
+# UID), outside data_dir and excluded from every SQLite/git backup. No value belongs in this file.
+# Required to store a credential: when empty, nothing is stored (the UI shows a setup error).
+k8s_auth_dir: /var/lib/tagcess-credentials
+
+# Web interface. Caddy proxies to this unix socket; identity headers are trusted only here.
+ui:
+  socket: /run/tagcess/ui.sock
+  socket_group: caddy
+  socket_mode: "0660"   # quoted octal string; default "0660"
+
+# Zitadel webhook listener (reachable over Tailscale only).
+hook:
+  listen: 100.64.0.4:9443
+  signing_key_file: /etc/tagcess/secrets/webhook-signing-key
+  # Optional. When set, the same listener also serves /groups: the Zitadel preuserinfo rest_call
+  # target that fills the `groups` claim (oauth2-proxy allowed_groups). The file holds the
+  # target's signing key as raw bytes (not trimmed). When unset, /groups is not served and
+  # tokens carry no `groups` claim.
+  # groups_signing_key_file: /etc/tagcess/secrets/groups-signing-key
+
+# Headscale gRPC unix socket. compose.yaml mounts its directory (/var/run/headscale), not the file, so
+# the path survives a Headscale restart; the client redials on its own.
+headscale:
+  socket: /var/run/headscale/headscale.sock
+
+# H-07 host helper directories (ADR 0021 b): tagcess writes the patch request into requests/ (rw) and
+# reads result.json/status.json from results/ (ro). These are the only host helper paths the container
+# sees; the helper's private/ directory and the real Headscale config.yaml are never mounted.
+hostapply:
+  requests_dir: /var/lib/tagcess-headscale/requests
+  results_dir: /var/lib/tagcess-headscale/results
+
+# Zitadel API: service user with a JWT profile key (ADR 0009).
+zitadel:
+  issuer: https://auth.example.com
+  project_id: "000000000000000000"
+  key_file: /etc/tagcess/secrets/zitadel-key.json
+  # Name of the OIDC application whose redirect URIs follow the site records (ADR 0012).
+  oauth2_proxy_app: oauth2-proxy
+
+# oauth2-proxy gate (J1). client_id is the public client id of the OIDC app named zitadel.oauth2_proxy_app
+# (not a secret). With it, "Çıkış yap" and the 403 page's "Başka hesapla giriş yap" also end the Zitadel
+# session (end_session); tagcess registers https://<sites.tagcess_host>/ as the app's post-logout redirect
+# URI. Needs sites.tagcess_host. Empty: the links only clear the oauth2-proxy cookie.
+gate:
+  client_id: "000000000000000000@vpn"
+
+# Caddy admin API and the file a restart reads (ADR 0005).
+caddy:
+  admin_url: http://127.0.0.1:2019
+  caddyfile_path: /etc/caddy/Caddyfile
+
+# MagicDNS extra-records file (ADR 0013) and the resolver asked about changed names.
+dns:
+  records_path: /var/lib/headscale/dns-extra.json
+  # resolver: 100.100.100.100:53   # default
+
+# Periodic reconcile; webhooks only trigger an earlier run.
+sync:
+  interval: 5m          # default 5m
+
+# Site allowlists (S-02, security.md §5). These are non-empty by requirement.
+sites:
+  # A site hostname must be one of these domains or a subdomain of one. Config-only for now.
+  allowed_domains:
+    - example.com
+    - internal.example.org
+    - example.net
+  # Hosts a url target may point at. Seeds the setting the interface edits on first start.
+  allowed_targets:
+    - 100.64.0.5
+  # Internal sources of the zitadel system site; fills the first-import record. Empty is allowed.
+  zitadel_internal_sources:
+    - 10.8.0.0/24
+    - 127.0.0.1/32
+    - "::1/128"
+  # Email of the Caddyfile global block (Let's Encrypt).
+  acme_email: admin@example.com
+  # certbot certificate names under /etc/letsencrypt/live that cert:auto may resolve to. The
+  # longest one covering every host of a site wins (F2-004).
+  certificates:
+    - example.com
+    - internal.example.org
+  # The MagicDNS A value every site host points at (ADR 0013).
+  vpn_address: 100.64.0.4
+  # Upstream of the Caddyfile's (k8s) snippet, https://host[:port]. Optional: unset is
+  # https://100.64.0.5; an existing installation's Traefik internal entrypoint is :8443. The first-import
+  # parity is checked with this value and every apply writes it.
+  # k8s_upstream: https://100.64.0.5:8443
+  # Host of the tagcess system site; required together with seed_file.
+  tagcess_host: tagcess.example.com
+  # First-import seed (G-01). Optional: while unset the interface hides the action.
+  # seed_file: /etc/tagcess/seed-sites.json

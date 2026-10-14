@@ -1,0 +1,79 @@
+package web
+
+import "github.com/nesiler/tagcess/internal/web/ui"
+
+// headscaleTabsView is the top of every Headscale page (F3-012): the dry-run note (R2 karar 22) and
+// the section-wide maintenance band (F3b-020 AC4). The section's screens are listed in the sidebar
+// (Nav), so the page itself carries no tab bar. Every page of the section reaches it through
+// HeadscaleTabs (headscale_tabs.go), which supplies the band from the request context; pages never
+// read the maintenance row themselves.
+templ headscaleTabsView(dryRun bool, maint maintenanceBannerView) {
+	if dryRun {
+		@ui.Callout(ui.N{Tone: ui.Warn}) {
+			{ dryRunNote }
+		}
+	}
+	@MaintenanceBand(maint)
+}
+
+// MaintenanceBand is the maintenance banner shown on every Headscale tab (F3b-020 AC4): while a
+// host config change is open it names the state, the time since it began and the request ID, and
+// says that widening writes are stopped; an unreadable row warns instead of guessing, and the
+// last close note (a dry run applied no diff, AC8) stays visible. It renders nothing when off.
+templ MaintenanceBand(v maintenanceBannerView) {
+	if v.Unreadable {
+		@ui.Callout(ui.N{Tone: ui.Err}) {
+			bakım durumu okunamadı; genişleten yazmalar güvenli tarafta durduruldu
+		}
+	} else if v.Active {
+		@ui.Callout(ui.N{Tone: ui.Warn}) {
+			bakım sürüyor: durum { string(v.State) }, başlangıçtan beri { v.Elapsed }, istek <code>{ v.RequestID }</code>.
+			Genişleten Headscale yazmaları durduruldu; daraltan yazmalar sürer.
+		}
+	} else if v.Pending {
+		@ui.Callout(ui.N{Tone: ui.Info}) {
+			bakım kapanıyor: reconcile sürüyor, istek <code>{ v.RequestID }</code>. Genişleten yazmalar reconcile bitene kadar kapalı.
+		}
+	} else if v.DryRunSkipped {
+		@ui.Callout(ui.N{Tone: ui.Info}) {
+			{ dryRunSkippedNote }
+		}
+	}
+}
+
+// MaintenanceWideningGuard disables the widening controls it wraps while a host config change is
+// open or reconciling (F3b-020 AC4): it shows the reason and makes the controls inert inside a
+// disabled fieldset, so no widening write can start from the interface. Narrowing actions are never
+// wrapped. It reads the same request context as the band.
+templ MaintenanceWideningGuard() {
+	if note := wideningNotice(ctx); note != "" {
+		<fieldset disabled aria-disabled="true">
+			@ui.Callout(ui.N{Tone: ui.Warn}) {
+				{ note }
+			}
+			{ children... }
+		</fieldset>
+	} else {
+		{ children... }
+	}
+}
+
+// MaintenanceWideningLink renders a widening link as a button; while widening is disabled it is
+// inert and says why, so the operator cannot start the flow from here (its target form is disabled
+// too).
+templ MaintenanceWideningLink(href, label string, b ui.B) {
+	{{ note := wideningNotice(ctx) }}
+	{{ b.Href, b.Disabled = href, note != "" }}
+	if note != "" {
+		{{ b.Title = note }}
+	}
+	@ui.Btn(b) {
+		{ label }
+	}
+}
+
+// KeysSubNav is the sub-navigation of the keys tab. The keys pages (F3-017/018/022) take it from
+// here; none of them writes its own.
+templ KeysSubNav(active string) {
+	@ui.Tabs(navTabs(keysSubNav), active)
+}

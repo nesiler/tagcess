@@ -1,0 +1,4 @@
+# host_system (F6-005): the host steps that touch existing services, only with confirm_host_system=yes.
+# Cloudflare token files tagcess must not be able to write next to (/etc/caddy becomes tagcess-writable).
+host_system_token_candidates: [cf.env, cloudflare.env, cloudflare.ini, cf-token.env]
+host_system_secrets_dir: /etc/caddy-secrets

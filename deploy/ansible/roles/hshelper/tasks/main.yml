@@ -1,0 +1,151 @@
+# hshelper (F6-005): installs the Headscale host helper through deploy/hshelper/install.sh (single source of the
+# install steps: sha256-verified copy, ADR 0021 b directories, rendered units, systemd-analyze, enable). The role
+# skips install.sh when the binary and the three units already match (no restart, changed=0). It never touches
+# Headscale and leaves headscale.config_write_enabled off (a UI switch, F3b-026).
+- name: Host architecture
+  ansible.builtin.command: dpkg --print-architecture
+  register: hshelper_arch
+  changed_when: false
+  check_mode: false
+
+- name: Controller bin directory
+  ansible.builtin.file:
+    path: "{{ install_env_dir }}/bin"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  check_mode: false
+  when: hshelper_binary == ''
+
+- name: Build the static helper on the controller
+  ansible.builtin.command:
+    cmd: "go build -trimpath -ldflags=-s -o {{ hshelper_built }} ./cmd/tagcess-hshelper"
+    chdir: "{{ tagcess_repo_root }}"
+  environment:
+    CGO_ENABLED: "0"
+    GOOS: linux
+    GOARCH: "{{ hshelper_arch.stdout }}"
+  vars:
+    hshelper_built: "{{ install_env_dir }}/bin/tagcess-hshelper-linux-{{ hshelper_arch.stdout }}"
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  check_mode: false
+  when: hshelper_binary == ''
+
+- name: Binary and its sha256
+  ansible.builtin.set_fact:
+    hshelper_src: "{{ hshelper_binary or (install_env_dir ~ '/bin/tagcess-hshelper-linux-' ~ hshelper_arch.stdout) }}"
+
+- name: Controller sha256 of the binary
+  ansible.builtin.stat:
+    path: "{{ hshelper_src }}"
+    checksum_algorithm: sha256
+  register: hshelper_src_stat
+  delegate_to: localhost
+  become: false
+  check_mode: false
+
+- name: The binary matches the given sha256 (otherwise nothing is installed)
+  ansible.builtin.assert:
+    that:
+      - hshelper_src_stat.stat.exists
+      - hshelper_sha256 == '' or hshelper_sha256 == hshelper_src_stat.stat.checksum
+    fail_msg: "hshelper binary {{ hshelper_src }}: sha256 {{ hshelper_src_stat.stat.checksum | default('yok') }}, beklenen {{ hshelper_sha256 }}; hiçbir dosya değiştirilmedi"
+    quiet: true
+
+- name: What is installed today
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    checksum_algorithm: sha256
+  loop: "{{ ['/usr/local/bin/tagcess-hshelper'] + hshelper_units | map('regex_replace', '^', '/etc/systemd/system/') | list }}"
+  register: hshelper_now
+  check_mode: false
+
+- name: Expected unit text (install.sh renders exactly these two values)
+  ansible.builtin.set_fact:
+    hshelper_expected_units: >-
+      {%- set out = {} -%}
+      {%- for u in hshelper_units -%}
+        {%- set text = lookup('ansible.builtin.file', tagcess_repo_root ~ '/deploy/hshelper/' ~ u, rstrip=false)
+            | replace('--request-uid 10001', '--request-uid ' ~ hshelper_request_uid)
+            | replace('http://127.0.0.1:8080/health', hshelper_health_url) -%}
+        {%- set _ = out.update({u: text | hash('sha256')}) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Is anything different?
+  ansible.builtin.set_fact:
+    hshelper_needs_install: >-
+      {%- set r = hshelper_now.results -%}
+      {%- set bin_ok = r[0].stat.exists and r[0].stat.checksum == hshelper_src_stat.stat.checksum -%}
+      {%- set ns = namespace(units_ok=true) -%}
+      {%- for i in range(hshelper_units | length) -%}
+        {%- set st = r[i + 1].stat -%}
+        {%- if not st.exists or st.checksum != hshelper_expected_units[hshelper_units[i]] -%}{%- set ns.units_ok = false -%}{%- endif -%}
+      {%- endfor -%}
+      {{ not (bin_ok and ns.units_ok) }}
+
+- name: Install through deploy/hshelper/install.sh
+  when: hshelper_needs_install | bool
+  block:
+    - name: Backup before writing
+      ansible.builtin.include_role:
+        name: backup
+      vars:
+        backup_phase: hshelper
+
+    - name: Stage directory
+      ansible.builtin.file:
+        path: "{{ hshelper_stage_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Stage the binary and the install script with its units
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ hshelper_stage_dir }}/{{ item.dest }}"
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - {src: "{{ hshelper_src }}", dest: tagcess-hshelper, mode: "0755"}
+        - {src: "{{ tagcess_repo_root }}/deploy/hshelper/install.sh", dest: install.sh, mode: "0755"}
+        - {src: "{{ tagcess_repo_root }}/deploy/hshelper/tagcess-hshelper.path", dest: tagcess-hshelper.path, mode: "0644"}
+        - {src: "{{ tagcess_repo_root }}/deploy/hshelper/tagcess-hshelper.service", dest: tagcess-hshelper.service, mode: "0644"}
+        - {src: "{{ tagcess_repo_root }}/deploy/hshelper/tagcess-hshelper-boot.service", dest: tagcess-hshelper-boot.service, mode: "0644"}
+      loop_control:
+        label: "{{ item.dest }}"
+
+    - name: Run install.sh (verifies the sha256 again on the host)
+      ansible.builtin.command: >-
+        {{ hshelper_stage_dir }}/install.sh --binary {{ hshelper_stage_dir }}/tagcess-hshelper
+        --sha256 {{ hshelper_src_stat.stat.checksum }} --request-uid {{ hshelper_request_uid }} --health {{ hshelper_health_url }}
+      changed_when: true
+      when: not ansible_check_mode
+
+  always:
+    - name: Remove the stage directory
+      ansible.builtin.file:
+        path: "{{ hshelper_stage_dir }}"
+        state: absent
+      when: not ansible_check_mode
+
+- name: The helper published its status
+  ansible.builtin.stat:
+    path: /var/lib/tagcess-headscale/results/status.json
+  register: hshelper_status
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: The .path unit is enabled and status.json exists
+  ansible.builtin.assert:
+    that:
+      - hshelper_status.stat.exists
+    fail_msg: "tagcess-hshelper kuruldu ama status.json yayımlanmadı (journalctl -u tagcess-hshelper-boot)"
+    quiet: true
+  when: not ansible_check_mode

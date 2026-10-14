@@ -1,0 +1,521 @@
+package web
+
+import (
+	"strconv"
+
+	"github.com/nesiler/tagcess/internal/dashboard"
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// The dashboard screen (F4-028): the devops start page. Every card carries its own source time and
+// freshness (shown as coloured text with the time at the right of the title); a failed or empty
+// source is shown "bilinmiyor". Every value is escaped by templ; the stored raw error text and risk
+// context are never rendered.
+
+// DashboardPage renders the read-only start page: the F4-027 model cards, the observation-derived
+// health/TLS/two-gate cards, the drift card and the k8s inventory state.
+templ DashboardPage(v DashboardPageView) {
+	@ui.PageHead(ui.H{Title: "Pano"})
+	@dashboardSetupBox(v.Setup)
+	@dashboardSummary(v)
+	@ui.Grid(2) {
+		@dashboardDevicesCard(v.Model.Devices)
+		@dashboardMatrixCard(v.Model.Matrix)
+		@dashboardBoundariesCard(v.Model.Boundaries)
+		@dashboardSyncCard(v.Model.Sync)
+		@dashboardAlertsCard(v.Model.Alerts)
+		@dashboardDriftCard(v.Model.Alerts, v.Drift, v.DriftUnknown, v.DriftHeld, v.DriftWaiting)
+	}
+	@dashboardSnapshotCard(v.Snapshot)
+	<section id="health-checks" aria-label="Sağlık kontrolleri">
+		for _, c := range v.Health {
+			@dashboardHealthCard(c)
+		}
+	</section>
+	@dashboardLoopsCard(v.Loops)
+}
+
+// dashboardSummary shows the existing per-source card values in a compact overview.
+templ dashboardSummary(v DashboardPageView) {
+	@ui.Grid(4) {
+		for _, tile := range dashboardTiles(v) {
+			@ui.TileCard(tile)
+		}
+	}
+}
+
+// dashboardSetupBox is the single "kurulum bekliyor" state: every unfinished installation step with
+// the page that finishes it. Fresh installs show this instead of a pile of alerts.
+templ dashboardSetupBox(steps []SetupStep) {
+	if len(steps) > 0 {
+		<div data-setup-box="true">
+			@ui.Callout(ui.N{Tone: ui.Info, Title: "Kurulum bekliyor"}) {
+				<p>Bu adımlar bitince ilgili kartlar dolar:</p>
+				<ul>
+					for _, st := range steps {
+						<li data-setup-step={ st.Key }><a href={ templ.SafeURL(st.Href) }>{ st.Label }</a></li>
+					}
+				</ul>
+			}
+		</div>
+	}
+}
+
+// setupWaiting is the one-line note of a card that waits for a pending step.
+templ setupWaiting(st *SetupStep) {
+	<p data-waiting={ st.Key }>
+		Kurulum bekleniyor: <a href={ templ.SafeURL(st.Href) }>{ st.Label }</a>
+	</p>
+}
+
+// dashboardLoopsCard lists the F4 loop jobs with their state and last run, so a loop that stopped is
+// visible. Only fixed labels are rendered, never a job's raw error.
+templ dashboardLoopsCard(rows []LoopRow) {
+	if len(rows) > 0 {
+		<div data-card="loops">
+			@ui.Card(ui.C{Title: "Arka plan işleri", Desc: "Envanter, sağlık, drift ve uyarı kontrollerini düzenli çalıştıran işler."}) {
+				@ui.TableIn() {
+					<thead>
+						<tr><th scope="col">İş</th><th scope="col">Durum</th><th scope="col">Son çalışma</th></tr>
+					</thead>
+					<tbody>
+						for _, r := range rows {
+							<tr data-loop={ r.Job } data-loop-state={ r.State }>
+								<td>{ loopJobLabel(r.Job) }</td>
+								<td>
+									@ui.Status(dashboardFreshnessTone(r.State), loopStateLabel(r.State))
+									@ui.Tip(r.Reason)
+								</td>
+								<td>{ dashTime(r.LastAttempt) }</td>
+							</tr>
+						}
+					</tbody>
+				}
+			}
+		</div>
+	}
+}
+
+// dashboardFreshness is a card's source state at the right of its title: coloured text and the
+// source's last-GOOD time, never the failed attempt's, so a failed source never looks current. An
+// unreadable source with no good value says so instead.
+templ dashboardFreshness(s dashboard.SourceState) {
+	<span data-freshness={ string(s.Freshness) }>
+		if s.Err != nil && s.ObservedAt.IsZero() {
+			@ui.StatusText(dashboardFreshnessTone(string(s.Freshness)), "kaynak okunamadı", "")
+		} else {
+			@ui.StatusText(dashboardFreshnessTone(string(s.Freshness)), freshnessLabel(string(s.Freshness)), dashTime(s.ObservedAt))
+		}
+	</span>
+}
+
+// dashboardDevicesCard is the Headscale device card. Connectivity is not a physical access guarantee.
+templ dashboardDevicesCard(c dashboard.DevicesCard) {
+	<div data-card="devices" data-freshness={ string(c.Freshness) }>
+		@ui.Card(ui.C{Title: "Cihazlar ve son görülme", Desc: c.Caveat, Right: dashboardFreshness(c.SourceState)}) {
+			if string(c.Freshness) == freshnessUnknown {
+				<p>bilinmiyor: cihaz kaynağı okunamadı.</p>
+			} else {
+				<p>Bağlı: { strconv.Itoa(c.Online) } / { strconv.Itoa(c.Count) } · <a href="/headscale/devices">Tüm cihazlar</a></p>
+			}
+			if len(c.Devices) > 0 {
+				@ui.TableIn() {
+					<thead>
+						<tr><th scope="col">Ad</th><th scope="col">Sahip</th><th scope="col">Durum</th><th scope="col">Son görülme</th></tr>
+					</thead>
+					<tbody>
+						for _, d := range c.Devices {
+							<tr>
+								<td>{ d.Name }</td>
+								<td>{ d.Owner }</td>
+								<td>
+									@ui.Status(dashboardDeviceTone(d.Online, string(c.Freshness)), deviceOnlineLabel(d.Online))
+								</td>
+								<td>
+									if d.Online {
+										şu an bağlı
+									} else if d.LastSeen.IsZero() {
+										hiç görülmedi
+									} else {
+										{ d.LastSeen.Format("2006-01-02 15:04") }
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				}
+			}
+		}
+	</div>
+}
+
+// dashboardMatrixCard is the expected Caddy role access matrix: Zitadel vpn roles x role-controlled
+// sites. It is expected access, not effective end-to-end access; a stale role source is shown with
+// its original time and must not be read as current effective access.
+templ dashboardMatrixCard(m dashboard.MatrixCard) {
+	<div data-card="matrix" data-freshness={ string(m.Freshness) }>
+		@ui.Card(ui.C{Title: "Rol erişimi", Desc: m.Caveat, Right: dashboardFreshness(m.SourceState)}) {
+			if string(m.Freshness) == freshnessStale {
+				<p>Rol kaynağı okunamadı; son bilinen roller gösteriliyor, güncel etkili erişim iddiası değildir.</p>
+			}
+			if string(m.Freshness) == freshnessUnknown {
+				<p>bilinmiyor: rol veya site kaynağı okunamadı.</p>
+			} else if len(m.Roles) == 0 || len(m.Sites) == 0 {
+				<p>
+					Gösterilecek rol veya rol kontrollü site yok.
+					<a href="/sites/new">Rol kontrollü site ekleyin</a>; roller Zitadel'de tanımlanır.
+				</p>
+			} else {
+				@ui.TableIn() {
+					<thead>
+						<tr>
+							<th scope="col">Rol</th>
+							for _, s := range m.Sites {
+								<th scope="col">
+									{ matrixSiteLabel(s) }
+									if s.APIRuleCount > 0 {
+										@ui.Tip("API bypass kuralı var (" + strconv.Itoa(s.APIRuleCount) + "): kurala uyan istek rol kontrolünü atlar.")
+									}
+								</th>
+							}
+						</tr>
+					</thead>
+					<tbody>
+						for ri, role := range m.Roles {
+							<tr>
+								<th scope="row">{ role }</th>
+								for si := range m.Sites {
+									<td data-allowed={ allowedFlag(m.Allowed, ri, si) }>
+										@ui.Status(dashboardAccessTone(m, ri, si), allowedLabel(m.Allowed, ri, si))
+									</td>
+								}
+							</tr>
+						}
+					</tbody>
+				}
+			}
+		}
+	</div>
+}
+
+// dashboardBoundariesCard lists the access rules the role matrix does not model, one short row each.
+templ dashboardBoundariesCard(c dashboard.BoundariesCard) {
+	<div data-card="boundaries" data-freshness={ string(c.Freshness) }>
+		@ui.Card(ui.C{Title: "Erişim sınırları", Desc: "Rol matrisinde görünmeyen erişim kuralları.", Right: dashboardFreshness(c.SourceState)}) {
+			if len(c.Boundaries) == 0 {
+				<p>Kayıt yok.</p>
+			} else {
+				@ui.TableIn() {
+					<thead>
+						<tr><th scope="col">Kural</th><th scope="col">Site</th><th scope="col">Durum</th></tr>
+					</thead>
+					<tbody>
+						for _, b := range c.Boundaries {
+							<tr data-boundary={ b.Kind }>
+								<td>
+									{ boundaryKindLabel(b.Kind) }
+									@ui.Tip(b.Detail)
+								</td>
+								<td>
+									if b.Subject != "" {
+										{ b.Subject }
+									} else {
+										tümü
+									}
+								</td>
+								<td>{ boundaryState(b) }</td>
+							</tr>
+						}
+					</tbody>
+				}
+			}
+		}
+	</div>
+}
+
+// dashboardSyncCard is the last sync result card.
+templ dashboardSyncCard(c dashboard.SyncCard) {
+	<div data-card="sync" data-freshness={ string(c.Freshness) }>
+		@ui.Card(ui.C{Title: "Sync", Right: dashboardFreshness(c.SourceState)}) {
+			if c.Result != "" {
+				<p data-sync-result={ c.Result }>
+					Son sonuç:{ " " }
+					@ui.StatusText(dashboardSyncTone(c), syncResultLabel(c.Result), "")
+				</p>
+			} else {
+				<p>bilinmiyor: sonuç kaydı yok.</p>
+			}
+			if c.Summary != "" {
+				<p>{ c.Summary }</p>
+			}
+			<p><a href="/sync">Sync ekranı</a></p>
+		}
+	</div>
+}
+
+// dashboardAlertsCard is the open monitor alert summary with the link to the F4-026 alerts screen.
+// It never sends anything outside the dashboard.
+templ dashboardAlertsCard(c dashboard.AlertsCard) {
+	<div data-card="alerts" data-freshness={ string(c.Freshness) }>
+		@ui.Card(ui.C{Title: "Uyarılar", Right: dashboardFreshness(c.SourceState)}) {
+			if string(c.Freshness) == freshnessUnknown {
+				<p>bilinmiyor: uyarı kaynağı okunamadı.</p>
+			} else {
+				<p>
+					Açık uyarı: { strconv.Itoa(len(c.Alerts)) }
+					if n := acknowledgedCount(c.Alerts); n > 0 {
+						({ strconv.Itoa(n) } okundu)
+					}
+					· <a href="/alerts">Uyarılar</a>
+				</p>
+			}
+		}
+	</div>
+}
+
+// dashboardDriftCard shows only the F4-039 monitor drift rows; the screen never runs a drift check.
+templ dashboardDriftCard(c dashboard.AlertsCard, drift []dashboard.Alert, unknown []dashboard.Alert, held bool, waiting *SetupStep) {
+	<div data-card="drift" data-freshness={ string(c.Freshness) }>
+		@ui.Card(ui.C{Title: "Drift", Desc: "Canlı durumun son apply edilen hâlle karşılaştırması.", Right: dashboardFreshness(c.SourceState)}) {
+			if waiting != nil {
+				@setupWaiting(waiting)
+			} else if string(c.Freshness) == freshnessUnknown {
+				<p>bilinmiyor: drift kaynağı okunamadı.</p>
+			} else if len(drift) == 0 && len(unknown) == 0 && !held {
+				<p>Açık drift uyarısı yok.</p>
+			} else {
+				if held {
+					<p data-drift-held="true">karşılaştırma bekletiliyor (bakım/apply)</p>
+				}
+				if len(drift) > 0 || len(unknown) > 0 {
+					@ui.TableIn() {
+						<thead>
+							<tr><th scope="col">Kaynak</th><th scope="col">Durum</th><th scope="col">Önem</th></tr>
+						</thead>
+						<tbody>
+							for _, a := range unknown {
+								<tr data-drift-unknown-subject={ a.Subject }>
+									<td>{ driftSubjectLabel(a.Subject) }</td>
+									<td data-drift-unknown="true">
+										@ui.Status(ui.Off, "bilinmiyor/temel yok")
+										if a.Subject == "policy" {
+											@ui.Tip("Temel, ilk import tamamlanınca veya tagcess ilk policy'yi yazınca kaydedilir.")
+										}
+									</td>
+									<td>–</td>
+								</tr>
+							}
+							for _, a := range drift {
+								<tr data-drift-subject={ a.Subject } data-drift-state={ a.State }>
+									<td>{ driftSubjectLabel(a.Subject) }</td>
+									if alertAcknowledged(a) {
+										<td>okundu</td>
+										<td>–</td>
+									} else {
+										<td data-freshness={ a.Freshness }>
+											@ui.Status(dashboardFreshnessTone(a.Freshness), driftStateText(a))
+										</td>
+										<td data-severity={ a.Severity }>
+											@ui.StatusText(dashboardSeverityTone(a.Severity), severityLabel(a.Severity), "")
+										</td>
+									}
+								</tr>
+							}
+						</tbody>
+					}
+				}
+			}
+			<p><a href="/alerts">Uyarılar</a></p>
+		}
+	</div>
+}
+
+// dashboardHealthCard is one observation-derived card (target / Caddy gate / TLS / two-gate). It is
+// always rendered, so a failed or empty source stays visible as "bilinmiyor".
+templ dashboardHealthCard(c HealthCard) {
+	<div data-card={ c.Kind } data-freshness={ c.Freshness }>
+		@ui.Card(ui.C{Title: c.Title, Desc: c.Note, Right: dashboardHealthState(c)}) {
+			if c.Err != "" {
+				<p>{ c.Err }</p>
+			}
+			if c.Waiting != nil {
+				@setupWaiting(c.Waiting)
+			} else if c.Kind == cardTwoGate {
+				if len(c.Groups) == 0 {
+					<p>bilinmiyor: iki gate kontrolü yok.</p>
+				} else {
+					@dashboardTwoGateTable(c.Groups)
+				}
+			} else if len(c.Rows) == 0 {
+				<p>bilinmiyor: bu kategori için kontrol yok.</p>
+			} else {
+				@ui.TableIn() {
+					<thead>
+						<tr>
+							<th scope="col">Site</th>
+							<th scope="col">Adres</th>
+							<th scope="col">Durum</th>
+							if c.Kind == obsCategoryTLS {
+								<th scope="col">Sertifika bitişi</th>
+							}
+							<th scope="col">Son kontrol</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, r := range c.Rows {
+							<tr data-freshness={ r.Freshness } data-source={ r.Source }>
+								<td>{ r.Site }</td>
+								<td>
+									{ healthAddress(r.Host, r.Path) }
+									@ui.Tip(healthRowDetail(r))
+								</td>
+								<td>
+									@ui.Status(dashboardHealthTone(r), healthRowText(r))
+								</td>
+								if c.Kind == obsCategoryTLS {
+									<td>
+										if !r.TLSNotAfter.IsZero() {
+											bitiş: { r.TLSNotAfter.Format("2006-01-02 15:04") }
+										} else {
+											–
+										}
+									</td>
+								}
+								<td>{ dashTime(healthRowTime(r)) }</td>
+							</tr>
+						}
+					</tbody>
+				}
+			}
+		}
+	</div>
+}
+
+// dashboardHealthState is a health card's state at the right of its title.
+templ dashboardHealthState(c HealthCard) {
+	@ui.StatusText(dashboardFreshnessTone(c.Freshness), freshnessLabel(c.Freshness), dashTime(c.ObservedAt))
+}
+
+// dashboardTwoGateTable keeps the declared configuration risk and the network measurements of the
+// same route on one row. The risk is always shown, whatever the measurement says.
+templ dashboardTwoGateTable(groups []TwoGateGroup) {
+	@ui.TableIn() {
+		<thead>
+			<tr>
+				<th scope="col">Adres</th>
+				<th scope="col">Config riski</th>
+				<th scope="col">Ağ kontrolü</th>
+				<th scope="col">Son kontrol</th>
+			</tr>
+		</thead>
+		<tbody>
+			for _, g := range groups {
+				for i, m := range twoGateRows(g) {
+					<tr data-two-gate="risk">
+						<td>
+							if i == 0 {
+								{ twoGateAddress(g) }
+							}
+						</td>
+						<td>
+							if i == 0 {
+								if g.Risk != nil {
+									<span data-risk="preserved">
+										@ui.Status(ui.Warn, g.Risk.RiskFinding)
+									</span>
+								} else {
+									kayıt yok
+								}
+								@ui.Tip(joinUntested(g.Untested))
+							}
+						</td>
+						<td>
+							if m == nil {
+								kontrol yok
+							} else {
+								<span data-freshness={ m.Freshness }>
+									@ui.Status(dashboardHealthTone(*m), healthRowText(*m))
+								</span>
+								@ui.Tip(healthRowDetail(*m))
+							}
+						</td>
+						<td>
+							if m != nil {
+								{ dashTime(healthRowTime(*m)) }
+							}
+						</td>
+					</tr>
+				}
+			}
+		</tbody>
+	}
+}
+
+// dashboardSnapshotCard is the k8s inventory state (F4-007). A failed read is "bilinmiyor", never a
+// fresh claim; a stale inventory keeps its last-good time and is never shown as current.
+templ dashboardSnapshotCard(c SnapshotCard) {
+	<div data-card="k8s_snapshot" data-freshness={ c.State() }>
+		@ui.Card(ui.C{Title: "k8s envanteri", Right: dashboardSnapshotState(c)}) {
+			if c.Waiting != nil {
+				@setupWaiting(c.Waiting)
+			} else if !c.Loaded {
+				<p>bilinmiyor: envanter durumu okunamadı.</p>
+			} else {
+				if c.Freshness.Current != nil {
+					<p>Taranan namespace'ler: { namespaceList(c.Freshness.Current.Scope) }</p>
+				}
+				if c.Freshness.Stale {
+					<p>
+						Son okuma başarısız; son başarılı tarama gösteriliyor.
+						if c.Freshness.LastAttempt != nil {
+							Son deneme: { dashTime(c.Freshness.LastAttempt.AttemptedAt) }
+						}
+					</p>
+				}
+				if c.Freshness.Previous != nil && c.Freshness.Current == nil {
+					<p>Önceki tarama ({ namespaceList(c.Freshness.Previous.Scope) }): { dashTime(c.Freshness.Previous.ObservedAt) }</p>
+				}
+			}
+			<p><a href="/k8s/discovery">k8s discovery</a></p>
+		}
+	</div>
+}
+
+// dashboardSnapshotState is the inventory state at the right of the card title, with the time of
+// the last good scan.
+templ dashboardSnapshotState(c SnapshotCard) {
+	if c.Loaded && c.Waiting == nil {
+		@ui.StatusText(dashboardFreshnessTone(c.State()), freshnessLabel(c.State()), snapshotTime(c))
+	}
+}
+
+// matrixSiteLabel names one matrix column.
+func matrixSiteLabel(s dashboard.MatrixSite) string {
+	if len(s.Hosts) == 0 {
+		return "#" + strconv.FormatInt(s.SiteID, 10)
+	}
+	return s.Hosts[0]
+}
+
+// allowedFlag is the data attribute of one matrix cell.
+func allowedFlag(allowed [][]bool, row, col int) string {
+	if cellAllowed(allowed, row, col) {
+		return "1"
+	}
+	return "0"
+}
+
+// allowedLabel is the visible text of one matrix cell.
+func allowedLabel(allowed [][]bool, row, col int) string {
+	if cellAllowed(allowed, row, col) {
+		return "izinli"
+	}
+	return "değil"
+}
+
+func cellAllowed(allowed [][]bool, row, col int) bool {
+	if row < 0 || row >= len(allowed) || col < 0 || col >= len(allowed[row]) {
+		return false
+	}
+	return allowed[row][col]
+}

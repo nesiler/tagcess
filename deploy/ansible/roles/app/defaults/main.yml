@@ -1,0 +1,18 @@
+# app (F6-005): tagcess image, config.yaml + compose rendered from the settings, -check gate, start.
+# Image source [Ö]: host_build (copy this repo's tracked files to the host and docker build there with the host's
+# caddy/headscale GIDs, as deploy/f5/deploy.sh) or archive (a `docker save` archive built on the controller).
+app_image_source: host_build
+app_image_archive: ""
+# `docker build --network <name>` for host_build; empty: Docker's default bridge. The existing VPN host's firewall
+# stops the default bridge's DNS (go mod download times out), so it sets `host`.
+app_build_network: ""
+app_src_dir: /var/lib/tagcess-install/src
+app_config_path: /etc/tagcess/config.yaml
+app_compose_path: /etc/tagcess/compose.yaml
+app_seed_dest: /var/lib/tagcess/seed-sites.json
+app_sync_interval: 5m
+app_hosts_entries: []        # e.g. [{ip: 10.0.0.3, name: auth.lab.example.com}] (F5 step 10)
+app_start_timeout: 60
+# The seed fields tagcess accepts (internal/site/seed.go seedSite json tags; TestAppRole_SeedKeysMatchGo keeps it equal).
+app_seed_keys: [hosts, kind, open_reason, system_template, system_config, roles, target_roles, cert, target, target_url,
+                target_tls_insecure, magicdns, note, owner, api_rules, redirects, headers]

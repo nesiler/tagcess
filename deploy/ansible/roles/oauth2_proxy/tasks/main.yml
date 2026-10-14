@@ -1,0 +1,397 @@
+# oauth2_proxy (F6-006): config from the settings, secrets as 0640 files, service running. Order: backup -> candidates
+# (config, both secret files, compose: never the live files) -> the candidate starts on a scratch port with the candidate
+# secrets and answers /ping -> commit (config + secrets + compose swapped together, today's copies kept) -> restart ->
+# /ping 200; any failure after the commit puts config, both secret files, compose and the service state back as one
+# unit (rule 7, H6). The config's content (an adopted file may carry inline secrets) is never read into Ansible or shown
+# (M3). Never touches a Caddy file (the role snippet stays as it is).
+- name: Cookie profile
+  ansible.builtin.import_tasks: profile.yml
+
+- name: Cookie switch waits for confirmation (cookie settings unchanged)
+  ansible.builtin.debug:
+    msg: "Çerez geçişi (_tagcess_gate, 1 sa) onay bekliyor: herkes bir kez yeniden giriş yapar. Onay: -e confirm_oauth2_cookie=yes. Mevcut çerez ayarları korundu."
+  when: oauth2_proxy_switch_pending
+
+- name: Settings the config needs
+  ansible.builtin.assert:
+    that:
+      - oauth2_proxy_client_id | string != ''
+      - oauth2_proxy_runtime in ['systemd', 'container']
+    fail_msg: "oauth2_proxy: oauth2_proxy_client_id boş (önce zitadel_seed) ya da oauth2_proxy_runtime geçersiz"
+    quiet: true
+
+- name: The systemd binary exists (installing it is out of scope)
+  ansible.builtin.stat:
+    path: "{{ oauth2_proxy_binary }}"
+  register: oauth2_proxy_bin
+  when: oauth2_proxy_runtime == 'systemd'
+
+- name: Stop when the systemd binary is missing
+  ansible.builtin.fail:
+    msg: "oauth2-proxy eksik: {{ oauth2_proxy_binary }} yok (systemd biçimi). Kurulum aracı binary kurmaz; container biçimini seç ya da binary'yi kur."
+  when: oauth2_proxy_runtime == 'systemd' and not oauth2_proxy_bin.stat.exists
+
+- name: Secret file owner
+  ansible.builtin.set_fact:
+    oauth2_proxy_secret_group: "{{ 'oauth2-proxy' if oauth2_proxy_runtime == 'systemd' else oauth2_proxy_container_uid }}"
+    # The copies of today's files a rollback puts back live here (root 0700, outside the backed-up directories).
+    oauth2_proxy_save_dir: "{{ install_state_dir }}/oauth2-proxy-prev-{{ now(utc=true).strftime('%Y%m%dT%H%M%SZ') }}-{{ '%04x' | format(65535 | random) }}"
+
+- name: Service state before
+  ansible.builtin.shell: >-
+    {{ 'systemctl is-active oauth2-proxy' if oauth2_proxy_runtime == 'systemd'
+       else "docker inspect -f '{{ '{{' }}.State.Running{{ '}}' }}' oauth2-proxy" }}
+  register: oauth2_proxy_before
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Enabled before (systemd)
+  ansible.builtin.command: systemctl is-enabled oauth2-proxy  # noqa: command-instead-of-module
+  register: oauth2_proxy_enabled_before
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: oauth2_proxy_runtime == 'systemd'
+
+- name: Service state before this installer touched it (state, for rollback)
+  ansible.builtin.set_fact:
+    state_details:
+      was_running: "{{ (install_state.phases.oauth2_proxy.details.was_running | default(none)) if install_state.phases.oauth2_proxy is defined
+                       else oauth2_proxy_before.stdout in ['active', 'true'] }}"
+      was_enabled: "{{ (install_state.phases.oauth2_proxy.details.was_enabled | default(none)) if install_state.phases.oauth2_proxy is defined
+                       else (oauth2_proxy_enabled_before.stdout | default('') == 'enabled') }}"
+
+- name: Client secret on the host?
+  ansible.builtin.stat:
+    path: "{{ oauth2_proxy_dir }}/client_secret"
+    get_checksum: false
+  register: oauth2_proxy_client_secret_stat
+
+- name: Cookie secret on the host?
+  ansible.builtin.stat:
+    path: "{{ oauth2_proxy_dir }}/cookie_secret"
+    get_checksum: false
+  register: oauth2_proxy_cookie_secret_stat
+
+- name: A client secret comes from secret_files or is already on the host
+  ansible.builtin.assert:
+    that:
+      - (secret_files.oauth2_proxy_client_secret | default('')) != '' or oauth2_proxy_client_secret_stat.stat.exists
+    fail_msg: "oauth2-proxy client secret yok: secret_files.oauth2_proxy_client_secret ver (zitadel_seed yeni uygulama açtıysa onu yazar)"
+    quiet: true
+
+- name: Backup before writing
+  ansible.builtin.include_role:
+    name: backup
+  vars:
+    backup_phase: oauth2_proxy
+
+- name: Config directory
+  ansible.builtin.file:
+    path: "{{ oauth2_proxy_dir }}"
+    state: directory
+    owner: root
+    group: "{{ oauth2_proxy_secret_group }}"
+    mode: "0750"
+
+# --check: the plan only. Nothing is written and no content is shown (the live config may hold inline secrets).
+- name: "Plan only (--check)"
+  ansible.builtin.debug:
+    msg: "--check: oauth2-proxy config, client/cookie secret dosyaları ve (container) compose adayları gerçek çalıştırmada yazılır, aday başlatılıp /ping kontrol edilir; içerik gösterilmez."
+  when: ansible_check_mode
+
+- name: Candidates, check and commit
+  when: not ansible_check_mode
+  block:
+    - name: Candidate client secret from secret_files (byte for byte, never shown)
+      ansible.builtin.copy:
+        src: "{{ secret_files.oauth2_proxy_client_secret | expanduser }}"
+        dest: "{{ oauth2_proxy_dir }}/client_secret.candidate"
+        owner: root
+        group: "{{ oauth2_proxy_secret_group }}"
+        mode: "0640"
+      changed_when: false
+      when: (secret_files.oauth2_proxy_client_secret | default('')) != ''
+      no_log: true
+
+    - name: Candidate client secret kept as it is on the host
+      ansible.builtin.copy:
+        src: "{{ oauth2_proxy_dir }}/client_secret"
+        remote_src: true
+        dest: "{{ oauth2_proxy_dir }}/client_secret.candidate"
+        owner: root
+        group: "{{ oauth2_proxy_secret_group }}"
+        mode: "0640"
+      changed_when: false
+      when: (secret_files.oauth2_proxy_client_secret | default('')) == ''
+      no_log: true
+
+    - name: Candidate cookie secret from secret_files (byte for byte, never shown)
+      ansible.builtin.copy:
+        src: "{{ secret_files.oauth2_proxy_cookie_secret | expanduser }}"
+        dest: "{{ oauth2_proxy_dir }}/cookie_secret.candidate"
+        owner: root
+        group: "{{ oauth2_proxy_secret_group }}"
+        mode: "0640"
+      changed_when: false
+      when: (secret_files.oauth2_proxy_cookie_secret | default('')) != ''
+      no_log: true
+
+    - name: Candidate cookie secret kept as it is on the host
+      ansible.builtin.copy:
+        src: "{{ oauth2_proxy_dir }}/cookie_secret"
+        remote_src: true
+        dest: "{{ oauth2_proxy_dir }}/cookie_secret.candidate"
+        owner: root
+        group: "{{ oauth2_proxy_secret_group }}"
+        mode: "0640"
+      changed_when: false
+      when: (secret_files.oauth2_proxy_cookie_secret | default('')) == '' and oauth2_proxy_cookie_secret_stat.stat.exists
+      no_log: true
+
+    - name: Candidate cookie secret generated when none exists (32 bytes, never shown)  # noqa: risky-shell-pipe
+      ansible.builtin.shell: |
+        set -e
+        umask 027
+        head -c 24 /dev/urandom | base64 | tr -d '\n' > {{ oauth2_proxy_dir }}/cookie_secret.candidate
+        chown root:{{ oauth2_proxy_secret_group }} {{ oauth2_proxy_dir }}/cookie_secret.candidate
+        chmod 0640 {{ oauth2_proxy_dir }}/cookie_secret.candidate
+      changed_when: false
+      when: (secret_files.oauth2_proxy_cookie_secret | default('')) == '' and not oauth2_proxy_cookie_secret_stat.stat.exists
+      no_log: true
+
+    - name: Candidate config
+      ansible.builtin.template:
+        src: oauth2-proxy.cfg.j2
+        dest: "{{ oauth2_proxy_cfg }}.candidate"
+        owner: root
+        group: "{{ oauth2_proxy_secret_group }}"
+        mode: "0640"
+      changed_when: false
+      diff: false
+
+    - name: Check config (the candidate, reading the candidate secret files)
+      ansible.builtin.template:
+        src: oauth2-proxy.cfg.j2
+        dest: "{{ oauth2_proxy_cfg }}.check"
+        owner: root
+        group: "{{ oauth2_proxy_secret_group }}"
+        mode: "0640"
+      vars:
+        oauth2_proxy_secret_ref_suffix: .candidate
+      changed_when: false
+      diff: false
+
+    - name: Candidate compose file (container)
+      ansible.builtin.template:
+        src: compose.yaml.j2
+        dest: "{{ oauth2_proxy_compose }}.candidate"
+        owner: root
+        group: root
+        mode: "0644"
+      changed_when: false
+      diff: false
+      when: oauth2_proxy_runtime == 'container'
+
+    - name: What differs from the files on the host (content, mode or owner; names only)
+      ansible.builtin.shell: |
+        cd {{ oauth2_proxy_dir | quote }}
+        differs() {
+          [ -e "$2" ] || return 0
+          cmp -s "$1" "$2" || return 0
+          [ "$(stat -c '%a %U %G' "$1")" = "$(stat -c '%a %U %G' "$2")" ] || return 0
+          return 1
+        }
+        differs {{ (oauth2_proxy_cfg ~ '.candidate') | quote }} {{ oauth2_proxy_cfg | quote }} && echo config
+        differs client_secret.candidate client_secret && echo client_secret
+        differs cookie_secret.candidate cookie_secret && echo cookie_secret
+        {% if oauth2_proxy_runtime == 'container' %}
+        differs {{ (oauth2_proxy_compose ~ '.candidate') | quote }} {{ oauth2_proxy_compose | quote }} && echo compose
+        {% endif %}
+        true
+      register: oauth2_proxy_diff
+      changed_when: false
+      no_log: true
+
+    - name: Changed files
+      ansible.builtin.set_fact:
+        oauth2_proxy_changed: "{{ oauth2_proxy_diff.stdout_lines | length > 0 }}"
+
+    - name: The candidate starts and answers /ping on a scratch port, with the candidate secrets  # noqa: risky-shell-pipe
+      ansible.builtin.shell: |
+        set -u
+        log=$(mktemp)
+        {% if oauth2_proxy_runtime == 'systemd' %}
+        runuser -u oauth2-proxy -- {{ oauth2_proxy_binary }} --config {{ oauth2_proxy_cfg }}.check --http-address 127.0.0.1:{{ oauth2_proxy_check_port }} >"$log" 2>&1 &
+        pid=$!
+        stop() { kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; }
+        alive() { kill -0 "$pid" 2>/dev/null; }
+        {% else %}
+        docker rm -f oauth2-proxy-check >/dev/null 2>&1
+        docker run -d --name oauth2-proxy-check --network host -v {{ oauth2_proxy_cfg }}.check:/etc/oauth2-proxy/oauth2-proxy.cfg:ro \
+          -v {{ oauth2_proxy_dir }}/client_secret.candidate:/etc/oauth2-proxy/client_secret.candidate:ro \
+          -v {{ oauth2_proxy_dir }}/cookie_secret.candidate:/etc/oauth2-proxy/cookie_secret.candidate:ro \
+          {{ oauth2_proxy_image }} --config=/etc/oauth2-proxy/oauth2-proxy.cfg --http-address=127.0.0.1:{{ oauth2_proxy_check_port }} >/dev/null
+        stop() { docker logs oauth2-proxy-check >"$log" 2>&1; docker rm -f oauth2-proxy-check >/dev/null 2>&1; }
+        alive() { [ "$(docker inspect -f '{{ '{{' }}.State.Running{{ '}}' }}' oauth2-proxy-check 2>/dev/null)" = true ]; }
+        {% endif %}
+        ok=1
+        for _ in $(seq 1 40); do
+          if curl -fs -o /dev/null http://127.0.0.1:{{ oauth2_proxy_check_port }}/ping; then ok=0; break; fi
+          alive || break
+          sleep 0.5
+        done
+        stop
+        [ "$ok" = 0 ] || { grep -v -i -E 'secret|token' "$log" | tail -3 >&2; rm -f "$log"; exit 1; }
+        rm -f "$log"
+      args:
+        executable: /bin/bash
+      register: oauth2_proxy_check
+      changed_when: false
+      failed_when: false
+      when: oauth2_proxy_changed
+      no_log: true
+
+    - name: Stop when the candidate does not start (the running config and secrets stay)
+      ansible.builtin.fail:
+        msg: "Aday oauth2-proxy config'i başlamadı; eski config, secret'lar ve servis durumu korundu: {{ (oauth2_proxy_check.stderr | default('') | trim).splitlines() | last | default('') }}"
+      when: oauth2_proxy_changed and oauth2_proxy_check.rc != 0
+
+    # Keeping today's files is the commit's precondition and sits OUTSIDE the commit block: when it fails nothing has
+    # been committed yet, so the live files and the service stay exactly as they are (no rescue touches them). The save
+    # directory is the journal: one copy per file that existed, a ".absent" marker per file that did not, and ".complete"
+    # written last; only a complete journal is ever used by the rollback below.
+    - name: Today's files, kept for a rollback (mode and owner kept; content never shown)
+      ansible.builtin.shell: |
+        set -eu
+        umask 077
+        mkdir -p {{ oauth2_proxy_save_dir | quote }}
+        chmod 0700 {{ install_state_dir | quote }} {{ oauth2_proxy_save_dir | quote }}
+        for f in {{ oauth2_proxy_cfg | quote }} {{ (oauth2_proxy_dir ~ '/client_secret') | quote }} {{ (oauth2_proxy_dir ~ '/cookie_secret') | quote }}{{ (' ' ~ (oauth2_proxy_compose | quote)) if oauth2_proxy_runtime == 'container' else '' }}; do
+          if [ -e "$f" ]; then
+            cp -p "$f" {{ oauth2_proxy_save_dir | quote }}/"$(basename "$f")"
+          else
+            : >{{ oauth2_proxy_save_dir | quote }}/"$(basename "$f").absent"
+          fi
+        done
+        : >{{ oauth2_proxy_save_dir | quote }}/.complete
+      changed_when: false
+      no_log: true
+      when: oauth2_proxy_changed
+
+    - name: Commit and prove /ping
+      when: oauth2_proxy_changed
+      block:
+        - name: Commit config, secrets and compose together
+          ansible.builtin.shell: |
+            set -eu
+            mv -f {{ (oauth2_proxy_dir ~ '/client_secret.candidate') | quote }} {{ (oauth2_proxy_dir ~ '/client_secret') | quote }}
+            mv -f {{ (oauth2_proxy_dir ~ '/cookie_secret.candidate') | quote }} {{ (oauth2_proxy_dir ~ '/cookie_secret') | quote }}
+            {% if oauth2_proxy_runtime == 'container' %}
+            mv -f {{ (oauth2_proxy_compose ~ '.candidate') | quote }} {{ oauth2_proxy_compose | quote }}
+            {% endif %}
+            mv -f {{ (oauth2_proxy_cfg ~ '.candidate') | quote }} {{ oauth2_proxy_cfg | quote }}
+          changed_when: true
+          no_log: true
+
+        - name: Restart (systemd)
+          ansible.builtin.systemd_service:
+            name: oauth2-proxy
+            state: restarted
+            enabled: "{{ oauth2_proxy_state == 'started' }}"
+          when: oauth2_proxy_runtime == 'systemd' and oauth2_proxy_state == 'started'
+
+        - name: Recreate (container)
+          ansible.builtin.command: "docker compose -f {{ oauth2_proxy_compose }} up -d --force-recreate"
+          changed_when: true
+          when: oauth2_proxy_runtime == 'container' and oauth2_proxy_state == 'started'
+
+        - name: /ping answers 200
+          ansible.builtin.uri:
+            url: "{{ oauth2_proxy_ping_url }}"
+            status_code: 200
+          register: oauth2_proxy_ping
+          until: oauth2_proxy_ping.status == 200
+          retries: 20
+          delay: 1
+          when: oauth2_proxy_state == 'started'
+
+      rescue:
+        - name: Put the previous config, both secrets and compose back (one unit; a file that did not exist is removed)
+          ansible.builtin.shell: |
+            set -u
+            save={{ oauth2_proxy_save_dir | quote }}
+            [ -e "$save/.complete" ] || { echo "journal incomplete: the live files are left as they are" >&2; exit 1; }
+            for f in {{ oauth2_proxy_cfg | quote }} {{ (oauth2_proxy_dir ~ '/client_secret') | quote }} {{ (oauth2_proxy_dir ~ '/cookie_secret') | quote }}{{ (' ' ~ (oauth2_proxy_compose | quote)) if oauth2_proxy_runtime == 'container' else '' }}; do
+              name="$(basename "$f")"
+              if [ -e "$save/$name" ]; then cp -p "$save/$name" "$f.tagcess-restore" && mv -f "$f.tagcess-restore" "$f" || exit 1
+              elif [ -e "$save/$name.absent" ]; then rm -f "$f"
+              else echo "journal entry missing for $name" >&2; exit 1; fi
+            done
+          changed_when: true
+          no_log: true
+
+        - name: Previous service state (systemd)
+          ansible.builtin.systemd_service:
+            name: oauth2-proxy
+            state: "{{ 'restarted' if oauth2_proxy_before.stdout == 'active' else 'stopped' }}"
+          when: oauth2_proxy_runtime == 'systemd'
+          failed_when: false
+
+        - name: Previous service state (container)  # noqa: command-instead-of-shell
+          ansible.builtin.shell: >-
+            {{ ('docker compose -f ' ~ oauth2_proxy_compose ~ ' up -d --force-recreate') if oauth2_proxy_before.stdout == 'true'
+               else 'docker rm -f oauth2-proxy' }}
+          changed_when: true
+          failed_when: false
+          when: oauth2_proxy_runtime == 'container'
+
+        - name: Stop (the previous config and state are back)
+          ansible.builtin.fail:
+            msg: "oauth2-proxy yeni config'le /ping 200 vermedi; eski config ve servis durumu geri konuldu (secret dosyaları ve compose dahil)."
+
+  always:
+    - name: Remove the candidates and the saved copies
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ oauth2_proxy_cfg }}.candidate"
+        - "{{ oauth2_proxy_cfg }}.check"
+        - "{{ oauth2_proxy_dir }}/client_secret.candidate"
+        - "{{ oauth2_proxy_dir }}/cookie_secret.candidate"
+        - "{{ oauth2_proxy_compose }}.candidate"
+        - "{{ oauth2_proxy_save_dir }}"
+      changed_when: false
+      when: not ansible_check_mode
+
+- name: Running and enabled (systemd)
+  ansible.builtin.systemd_service:
+    name: oauth2-proxy
+    state: "{{ oauth2_proxy_state }}"
+    enabled: "{{ oauth2_proxy_state == 'started' }}"
+  when: oauth2_proxy_runtime == 'systemd'
+
+- name: Running (container)
+  ansible.builtin.command: "docker compose -f {{ oauth2_proxy_compose }} up -d"
+  register: oauth2_proxy_up
+  changed_when: "'Started' in oauth2_proxy_up.stderr or 'Created' in oauth2_proxy_up.stderr"
+  when: oauth2_proxy_runtime == 'container' and oauth2_proxy_state == 'started' and not ansible_check_mode
+
+- name: /ping answers 200 (running state)
+  ansible.builtin.uri:
+    url: "{{ oauth2_proxy_ping_url }}"
+    status_code: 200
+  register: oauth2_proxy_final_ping
+  until: oauth2_proxy_final_ping.status == 200
+  retries: 20
+  delay: 1
+  when: oauth2_proxy_state == 'started' and not ansible_check_mode
+
+- name: Guide items of oauth2_proxy
+  ansible.builtin.set_fact:
+    guide_items_oauth2_proxy: >-
+      {{ [] if not oauth2_proxy_switch_pending else [{'id': 'oauth2-proxy-cookie-switch', 'title': 'oauth2-proxy çerez geçişi onay bekliyor (karar 3)', 'blocking': false,
+          'steps': ['Bugün çerez ' ~ (oauth2_proxy_existing.cookie_name | default('?')) ~ ' (' ~ (oauth2_proxy_existing.cookie_expire | default('?')) ~ '); tagcess ayarı tek ortak _tagcess_gate çerezi, 1 sa, yenileme yok.',
+                    'Geçiş herkesi bir kez yeniden girişe zorlar; uygun zamanda install.sh oauth2_proxy fazında çerez sorusuna evet yaz (-e confirm_oauth2_cookie=yes).']}] }}

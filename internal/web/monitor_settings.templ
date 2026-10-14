@@ -1,0 +1,121 @@
+package web
+
+import "github.com/nesiler/tagcess/internal/web/ui"
+
+// The monitoring settings screen (F4-029): the F4-024 durations/thresholds and the target check
+// path/expected status codes. Every value is escaped by templ. A save needs no restart: the F4-024
+// getter is read again on the next measurement cycle.
+
+// MonitorSettingsPage renders the monitoring settings form. Errors lists the refused fields; Error and
+// Notice sit above the form.
+templ MonitorSettingsPage(v MonitorSettingsView, csrfToken string) {
+	@ui.PageHead(ui.H{Title: "İzleme ayarları", Sub: "Kontrol sıklıkları ve uyarı threshold'ları.", Tip: "Kaydetmek yeniden başlatma gerektirmez; değerler bir sonraki kontrolde okunur."})
+	if v.Warning != "" {
+		@ui.Callout(ui.N{Tone: ui.Warn, Title: "Kayıtlı ayarlar okunamadı"}) {
+			<p>{ v.Warning }</p>
+		}
+	}
+	if v.Refusal != "" || v.Error != "" || len(v.Errors) > 0 {
+		@ui.Callout(ui.N{Tone: ui.Err, Title: "Kayıt reddedildi"}) {
+			if v.Refusal != "" {
+				<p>{ v.Refusal }</p>
+			}
+			if v.Error != "" {
+				<p>Değişiklik reddedildi; hiçbir şey kaydedilmedi: <code>{ v.Error }</code></p>
+			}
+			if len(v.Errors) > 0 {
+				<ul>
+					for _, field := range sortedFieldErrors(v.Errors) {
+						<li>{ v.Errors[field] }</li>
+					}
+				</ul>
+			}
+		}
+	}
+	if v.Notice != "" {
+		@ui.Callout(ui.N{Tone: ui.OK}) {
+			<p>{ v.Notice }</p>
+		}
+	}
+	if v.Loaded {
+		<p>
+			if v.Default {
+				<span data-default="1">
+					@ui.StatusText(ui.Off, "varsayılan değerler", "")
+				</span>
+			} else {
+				<span data-override="1">
+					@ui.StatusText(ui.Info, "kaydedilmiş değerler", "")
+				</span>
+			}
+		</p>
+		<form method="post" action="/monitor/settings">
+			@CSRFField(csrfToken)
+			@ui.Card(ui.C{Title: "Kontrol sıklıkları"}) {
+				@monitorField("Hedef kontrolü (sn)", "target_interval", "monitor.target_interval_seconds", v.Form.TargetInterval, v.Errors["target_interval"], "1", "", v.Errors["target_interval"] != "")
+				@monitorField("Kubernetes envanteri (sn)", "inventory_interval", "monitor.inventory_interval_seconds", v.Form.InventoryInterval, v.Errors["inventory_interval"], "1", "", v.Errors["inventory_interval"] != "")
+				@monitorField("Sunulan TLS (sn)", "tls_interval", "monitor.tls_interval_seconds", v.Form.TLSInterval, v.Errors["tls_interval"], "1", "", v.Errors["tls_interval"] != "")
+				@monitorField("Kontrol zaman aşımı (sn)", "timeout", "monitor.timeout_seconds", v.Form.Timeout, v.Errors["timeout"], "1", "5", v.Errors["timeout"] != "")
+				@monitorField("Aynı anda kontrol", "concurrency", "monitor.concurrency", v.Form.Concurrency, v.Errors["concurrency"], "1", "", v.Errors["concurrency"] != "")
+			}
+			@ui.Card(ui.C{Title: "Sağlık uyarısı", Desc: "Kaç ardışık hatada uyarı açılır, kaç ardışık başarıda kapanır."}) {
+				@monitorField("Açılış (ardışık hata)", "health_fail", "monitor.health_fail_threshold", v.Form.HealthFail, v.Errors["health_fail"], "1", "", v.Errors["health_fail"] != "")
+				@monitorField("Çözülme (ardışık başarı)", "health_ok", "monitor.health_success_threshold", v.Form.HealthOK, v.Errors["health_ok"], "1", "", v.Errors["health_ok"] != "")
+			}
+			@ui.Card(ui.C{Title: "Sertifika uyarıları (kalan gün)", Desc: "Sertifikanın bitmesine kaç gün kala hangi önemde uyarı açılır; bilgi > uyarı > kritik olmalı."}) {
+				@monitorField("Bilgi", "tls_info", "monitor.tls_info_days", v.Form.TLSInfo, "", "1", "", v.Errors["tls"] != "")
+				@monitorField("Uyarı", "tls_warn", "monitor.tls_warn_days", v.Form.TLSWarn, "", "1", "", v.Errors["tls"] != "")
+				@monitorField("Kritik", "tls_critical", "monitor.tls_critical_days", v.Form.TLSCritical, "", "1", "", v.Errors["tls"] != "")
+				if v.Errors["tls"] != "" {
+					<div data-error="tls">
+						@ui.Status(ui.Err, v.Errors["tls"])
+					</div>
+				}
+			}
+			@ui.Card(ui.C{Title: "Hedef kontrolü", Desc: "Hedef yalnız bu yolda ve bu HTTP kodlarında sağlıklı sayılır; yanıt gövdesi saklanmaz, redirect takip edilmez."}) {
+				@ui.Field(ui.F{Label: "Kontrol yolu", For: "path", Err: v.Errors["path"]}) {
+					@ui.Input(ui.In{ID: "path", Name: "path", Value: v.Form.Path, Placeholder: "/", Pattern: "/\\S*", Msg: "/ ile başlayan bir yol girin.", Attrs: monitorInputAttrs(templ.Attributes{"data-setting": "monitor.check_path"}, v.Errors["path"] != "")})
+				}
+				@ui.Field(ui.F{Label: "Beklenen HTTP kodları", For: "expected_statuses", Help: "Kod yazıp Enter'a basın.", Err: v.Errors["expected_statuses"]}) {
+					@ui.MultiSelect(ui.MS{ID: "expected_statuses", Name: "expected_statuses", Values: splitList(v.Form.ExpectedStatuses), Sep: ", ",
+						Options: []string{"200", "204", "301", "302", "307", "401", "403"}, Attrs: monitorInputAttrs(templ.Attributes{"data-setting": "monitor.expected_statuses"}, v.Errors["expected_statuses"] != "")})
+				}
+			}
+			@ui.SaveBar("") {
+				@ui.Btn(ui.B{Kind: ui.Primary, Icon: "check"}) {
+					Kaydet
+				}
+			}
+		</form>
+	}
+}
+
+// monitorField is one numeric setting row: its label, the input carrying the stored setting key and
+// range, the field help and the field error.
+templ monitorField(label, id, setting, value, errMsg, min, max string, invalid bool) {
+	@ui.Field(ui.F{Label: label, For: id, Help: monitorFieldHelp(id)}) {
+		@ui.Input(ui.In{ID: id, Name: id, Type: "number", Value: value, Msg: "Geçerli bir sayı girin.", Attrs: monitorInputAttrs(templ.Attributes{"data-setting": setting, "min": min, "max": max}, invalid)})
+		if errMsg != "" {
+			<div data-error={ id }>
+				@ui.Status(ui.Err, errMsg)
+			</div>
+		}
+	}
+}
+
+// monitorFieldHelp is the short help of a numeric setting.
+func monitorFieldHelp(id string) string {
+	if id == "timeout" {
+		return "En çok 5 sn; kontrol aralığından kısa olmalı."
+	}
+	return ""
+}
+
+// monitorInputAttrs marks an input invalid for assistive technology when its field (or, for the
+// certificate thresholds, the shared tls check) failed validation.
+func monitorInputAttrs(a templ.Attributes, invalid bool) templ.Attributes {
+	if invalid {
+		a["aria-invalid"] = "true"
+	}
+	return a
+}

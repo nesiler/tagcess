@@ -1,0 +1,38 @@
+version: "2"
+
+linters:
+  settings:
+    depguard:
+      rules:
+        # security.md §10: Headscale's unix socket is unauthenticated full admin, so only
+        # internal/headscale (and tests that build fixtures, including the test/compose/hsstack
+        # and test/hostlab fixture packages) may touch the generated client.
+        headscale-narrow:
+          files: ["!**/internal/headscale/**", "!**/test/compose/hsstack/**", "!**/test/hostlab/**", "!$test"]
+          deny:
+            - pkg: github.com/juanfont/headscale
+              desc: use internal/headscale, which exposes only the RPCs tagcess needs
+  default: standard
+  enable:
+    - bodyclose
+    - depguard
+    - errorlint
+    - gosec
+    - misspell
+    - noctx
+    - unconvert
+  exclusions:
+    generated: strict
+    rules:
+      # Tests build config from fixtures and temp paths.
+      - path: _test\.go
+        linters: [gosec]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/nesiler/tagcess

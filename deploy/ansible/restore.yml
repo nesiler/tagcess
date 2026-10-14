@@ -1,0 +1,31 @@
+# Restore one installer backup (F6-003): ansible-playbook restore.yml -e backup_id=<id>
+#   -e restore_headscale_db=yes   also copy the Headscale database back (Headscale is stopped meanwhile)
+#   -e restore_tagcess_db=yes     also copy tagcess.db back (the container is restarted)
+# A backup of the current state is taken first (pre-restore), so a restore can itself be undone.
+- name: Restore an installer backup
+  hosts: vpn
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    config_require_mode: false
+  pre_tasks:
+    - name: Settings
+      ansible.builtin.import_role:
+        name: config
+      tags: [always]
+  tasks:
+    - name: Backup of the current state first
+      ansible.builtin.include_role:
+        name: backup
+      vars:
+        backup_phase: pre-restore
+
+    - name: Restore
+      ansible.builtin.include_role:
+        name: backup
+        tasks_from: restore
+      vars:
+        restore_backup_id: "{{ backup_id | default('') }}"
+        restore_sqlite: >-
+          {{ ([headscale_db_path] if (restore_headscale_db | default('') | string) == 'yes' else [])
+             + (['/var/lib/tagcess/tagcess.db'] if (restore_tagcess_db | default('') | string) == 'yes' else []) }}

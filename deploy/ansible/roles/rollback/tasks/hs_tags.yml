@@ -1,0 +1,48 @@
+# hs_tags: only the tags this installer added are removed again (all of them since the first backup, not only the last run's).
+- name: "Rollback hs_tags: which backup, what metadata, backup of today's state first"
+  ansible.builtin.import_tasks: prepare.yml
+
+- name: "Rollback hs_tags: nodes"
+  ansible.builtin.command: headscale nodes list -o json
+  register: rollback_nodes
+  changed_when: false
+  check_mode: false
+  when: (rollback_details.added_tags | default([])) | length > 0
+
+- name: "Rollback hs_tags: remove the added tags"
+  # argv: the -t value is the node's remaining tags as one comma-separated string.
+  ansible.builtin.command:
+    argv: [headscale, nodes, tag, -i, "{{ node.id }}", -t, "{{ remaining | join(',') }}"]
+  vars:
+    node: "{{ (rollback_nodes.stdout | from_json | selectattr('given_name', 'equalto', item[0]) | list + [{}])[0] }}"
+    remaining: "{{ node.tags | default([]) | reject('equalto', item[1]) | list }}"
+  loop: "{{ rollback_details.added_tags | default([]) }}"
+  when: node.id is defined and item[1] in (node.tags | default([])) and remaining | length > 0 and not ansible_check_mode
+  changed_when: true
+
+# Headscale refuses to take the last tag off a tagged node (the node would be user-owned again). A node that had no tag
+# before the installer added one therefore cannot go back by this role: that is NOT reported as a success. Everything
+# else is rolled back first, then the phase stops with the exact manual step (rule 7: nothing is silently left behind).
+- name: "Rollback hs_tags: nodes whose only tag is the installer's (they cannot be untagged)"
+  ansible.builtin.set_fact:
+    rollback_tags_blocked: >-
+      {%- set out = [] -%}
+      {%- for it in rollback_details.added_tags | default([]) -%}
+        {%- set node = (rollback_nodes.stdout | from_json | selectattr('given_name', 'equalto', it[0]) | list + [{}])[0] -%}
+        {%- if node.id is defined and (node.tags | default([])) == [it[1]] -%}
+          {%- set _ = out.append({'name': it[0], 'id': node.id, 'tag': it[1]}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+  when: (rollback_details.added_tags | default([])) | length > 0 and not ansible_check_mode
+
+- name: "Rollback hs_tags: manual step needed (the node had no tag before; Headscale does not allow an untagged result)"
+  ansible.builtin.fail:
+    msg: >-
+      hs_tags geri alınamadı (elle adım gerekli): {% for b in rollback_tags_blocked %}{{ b.name }} (id {{ b.id }}) node'unun tek etiketi {{ b.tag }};
+      kurulumdan önce etiketsizdi ve Headscale son etiketi kaldırmaz, bu yüzden etiket kaldırılmadı.
+      Elle (geliştirici onayıyla): VPN host'ta `headscale nodes delete -i {{ b.id }}` ile node'u sil, sonra node'u etiketsiz bir
+      kullanıcı anahtarıyla yeniden kaydet (`headscale preauthkeys create --user <id> --expiration 10m`, node'da
+      `tailscale up --login-server {{ headscale_login_url | default('<Headscale adresi>') }} --authkey <anahtar> --accept-dns=false`).
+      Diğer eklenen etiketler geri alındı. {% endfor %}
+  when: rollback_tags_blocked | default([]) | length > 0 and not ansible_check_mode

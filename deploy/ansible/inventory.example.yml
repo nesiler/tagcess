@@ -1,0 +1,45 @@
+# Example environment for the tagcess installer (F6-001). Copy NOTHING from here into the repo with real
+# values: install.sh writes the real file to ~/.config/tagcess-install/<env>/inventory.yml (outside the repo).
+# Secrets are only file PATHS (secret_files / *_file), never values. The addresses are documentation addresses.
+#
+# This is an adopt-mode environment: an existing Headscale/Caddy host, and Ansible never connects to the k8s
+# host. For install_mode: fresh, uncomment the k8s group and use the "fresh:" values in the comments.
+prod:
+  children:
+    vpn:
+      hosts:
+        vpn-host:
+          ansible_host: 203.0.113.10
+          ansible_user: root
+    # k8s:  # fresh only: tailscale_join joins it; the installer never touches the cluster otherwise
+    #   hosts:
+    #     k8s-host:
+    #       ansible_host: 203.0.113.20
+    #       ansible_user: root
+  vars:
+    install_env: prod
+    install_mode: adopt                  # fresh: fresh
+    tagcess_domain: example.com
+    cert_names: [example.com]
+    vpn_tailnet_ip: 100.64.0.4
+    k8s_tailnet_ip: 100.64.0.5
+    k8s_target_addr: https://100.64.0.5:8443
+    traefik_entrypoint: internal         # fresh: websecure
+    traefik_port: 8443                   # fresh: 443
+    caddy_sites_dir: /etc/caddy/sites    # fresh: ""
+    oauth2_proxy_runtime: systemd        # fresh: container
+    zitadel_install_enabled: false       # fresh: true installs Zitadel on a lab cluster (zitadel_install role)
+    # fresh only:
+    # vpn_private_cidr: 10.0.0.0/16
+    # zitadel_kube_context: lab-cluster
+    # zitadel_expected_nodes: [lab-k3s]
+    # zitadel_lab_host: tagcess-zitadel.lab.example.com
+    # Kube context words that are never a lab (refused by install.sh and the zitadel_install role):
+    # zitadel_forbidden_context_patterns: [prod, production]
+    site_seed_file: ~/.config/tagcess-install/prod/seed-sites.json
+    secret_files:
+      webhook_signing_key: ~/.config/tagcess-install/prod/secrets/webhook-signing-key
+      groups_signing_key: ~/.config/tagcess-install/prod/secrets/groups-signing-key
+      zitadel_key: ~/.config/tagcess-install/prod/secrets/zitadel-key.json
+      zitadel_admin_key: ~/.config/tagcess-install/prod/secrets/zitadel-admin-key.json
+      # fresh only: cloudflare_token: ~/.config/tagcess-install/prod/secrets/cloudflare-token

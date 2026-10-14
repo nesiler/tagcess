@@ -1,0 +1,19 @@
+// Initial Headscale policy written by the tagcess installer (headscale_install, F6-012; F5 step 8). tagcess takes it
+// over at its first import (G-01) and stores it in the database after G-02. Written only when no policy exists.
+{
+  "groups": {
+    "group:devops": ["devops@tagcess.test"]
+  },
+  "tagOwners": {
+    "tag:vpn-server": ["group:devops"],
+    "tag:k8s": ["group:devops"]
+  },
+  "acls": [
+    // Caddy (VPN host) reaches the cluster's ingress and API.
+    {"action": "accept", "src": ["tag:vpn-server"], "dst": ["tag:k8s:443", "tag:k8s:6443"]},
+    // The Zitadel webhook reaches tagcess's hook (architecture §8 step 3).
+    {"action": "accept", "src": ["tag:k8s"], "dst": ["tag:vpn-server:9443"]},
+    // devops: SSH to both servers and the private network.
+    {"action": "accept", "src": ["group:devops"], "dst": ["tag:vpn-server:22", "tag:k8s:22", "10.0.0.0/16:*"]}
+  ]
+}

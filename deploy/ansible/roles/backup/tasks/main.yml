@@ -1,0 +1,48 @@
+# backup (F6-003): taken before every writing phase (the phase role includes it) and as its own `backup`
+# phase. Consistent SQLite copies, Headscale's database-mode policy export, manifest.json with sha256/mode/owner,
+# directory 0700 root. Nothing leaves the host and nothing is printed but paths and the id (no_log on the copy).
+# Not managed state: changed_when false (F6 öneri 8), and --check writes no backup.
+- name: Backup id
+  ansible.builtin.set_fact:
+    backup_new_id: "{{ now(utc=true).strftime('%Y%m%dT%H%M%SZ') }}-{{ '%04x' | format(65535 | random) }}-{{ backup_phase }}"
+
+- name: Take the backup on the host
+  ansible.builtin.script:
+    cmd: "backup.py {{ backup_args | to_json | b64encode }}"
+    executable: python3
+  vars:
+    backup_args:
+      root: "{{ backup_root }}"
+      id: "{{ backup_new_id }}"
+      phase: "{{ backup_phase }}"
+      paths: "{{ backup_paths | unique }}"
+      probe_paths: "{{ backup_probe_paths }}"
+      sqlite: "{{ backup_sqlite }}"
+      headscale_policy_db: "{{ (preflight_hs_cfg | default({})).policy_mode | default('file') == 'database' }}"
+      keep: "{{ backup_keep }}"
+      protect: >-
+        {{ (install_state | default({})).phases | default({}) | dict2items | map(attribute='value')
+           | map(attribute='first_backup_id', default='') | select | list }}
+  register: backup_raw
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Stop when the backup failed (no phase writes without a backup)
+  ansible.builtin.fail:
+    msg: "Yedek alınamadı, faz durdu: {{ (backup_raw.stderr | default('') | trim).splitlines() | last | default('bilinmeyen hata') }}"
+  when: not ansible_check_mode and backup_raw.rc | default(1) != 0
+
+- name: Backup result
+  ansible.builtin.set_fact:
+    backup_result: "{{ backup_raw.stdout | from_json }}"
+    backup_ids: "{{ backup_ids | combine({backup_phase: backup_new_id}) }}"
+  when: not ansible_check_mode
+
+- name: Backup summary
+  ansible.builtin.debug:
+    msg: >-
+      {{ ('Yedek alındı: ' ~ backup_result.dir ~ ' (' ~ backup_result.files ~ ' dosya; yoktu: '
+         ~ (backup_result.missing | join(', ') or '-') ~ ')') if not ansible_check_mode
+         else 'Yedek --check kipinde alınmaz (' ~ backup_root ~ ')' }}

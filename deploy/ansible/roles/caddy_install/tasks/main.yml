@@ -1,0 +1,35 @@
+# caddy_install (F6-012). See defaults/main.yml.
+- name: Caddy here, and whose
+  ansible.builtin.set_fact:
+    caddy_install_present: "{{ preflight_components.caddy | default(false) }}"
+    caddy_install_owned: "{{ 'caddy' in (install_state.installed | default([])) }}"
+    caddy_install_add_ok: "{{ install_mode == 'fresh' or 'caddy' in (confirm_add_missing | default('') | string).split(',') }}"
+    caddy_install_tagcess_owns: "{{ preflight_report.caddy.tagcess_owned | default(false) | bool }}"
+
+- name: Existing Caddy adopted untouched
+  ansible.builtin.debug:
+    msg: "Caddy zaten kurulu ve bu araçla kurulmadı: devralındı. Caddy dizinindeki dosyalara dokunulmadı, yeniden yüklenmedi."
+  when: caddy_install_present and not caddy_install_owned
+
+- name: Missing Caddy not added without confirmation (adopt)
+  ansible.builtin.debug:
+    msg: "Caddy yok ve adopt kipinde onaysız eklenmez (confirm_add_missing=caddy)."
+  when: not caddy_install_present and not caddy_install_owned and not caddy_install_add_ok
+
+- name: tagcess owns the Caddyfile (first import done)
+  ansible.builtin.debug:
+    msg: "İlk içe aktarma yapılmış: Caddyfile'ın sahibi tagcess; başlangıç Caddyfile'ı yazılmadı."
+  when: caddy_install_owned and caddy_install_tagcess_owns
+
+# The backup is this phase's first mutation, on every run that will write (before the package, the sites directory and
+# the Caddyfile), so a rollback has the state from before whatever this run changes.
+- name: Backup before the first change
+  ansible.builtin.include_role:
+    name: backup
+  vars:
+    backup_phase: caddy_install
+  when: (caddy_install_owned and not caddy_install_tagcess_owns) or (not caddy_install_present and not caddy_install_owned and caddy_install_add_ok)
+
+- name: Install and bootstrap
+  ansible.builtin.include_tasks: install.yml
+  when: (caddy_install_owned and not caddy_install_tagcess_owns) or (not caddy_install_present and not caddy_install_owned and caddy_install_add_ok)

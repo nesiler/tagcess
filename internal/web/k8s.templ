@@ -1,0 +1,240 @@
+package web
+
+import (
+	"strconv"
+	"strings"
+
+	"github.com/nesiler/tagcess/internal/k8s"
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// The k8s discovery screen (F4-011): the read-only view of the F4-010 host-based mapping and the
+// F4-007 inventory state. Every value is escaped by templ. The screen only reads; it renders no form
+// and carries no credential.
+templ K8sDiscoveryPage(v K8sDiscoveryView, csrfToken string) {
+	@ui.PageHead(ui.H{Title: "k8s discovery", Sub: "Cluster'daki Ingress host'ları ve site eşlemeleri.", Tip: "Bu ekran yalnız okur: hiçbir şeyi apply etmez, silmez, erişimi değiştirmez. Yeni bir host'u site yapmak normal site formundan geçer."})
+	if v.Error != "" {
+		@ui.Callout(ui.N{Tone: ui.Err}) {
+			{ v.Error }
+		}
+	}
+	if v.NotSetUp {
+		<div data-setup-pending="k8s_profile">
+			@ui.Callout(ui.N{Tone: ui.Off}) {
+				Kurulum bekleniyor: k8s bağlantısı henüz kaydedilmedi.
+				Sonraki adım: <a href="/k8s/connection">k8s bağlantısı</a> (önce <a href="/k8s/setup">kurulum</a>).
+			}
+		</div>
+	} else if !v.PublicChecked {
+		<div data-public-check="not-performed">
+			@ui.Callout(ui.N{Tone: ui.Off}) {
+				Public listener tanımlı değil; internete açıklık kontrolü yapılmadı.
+				<a href="/k8s/connection">Bağlantı ayarlarına ekleyin</a>.
+			}
+		</div>
+	}
+	<div data-freshness={ freshnessState(v.Freshness) }>
+		@ui.Card(ui.C{Title: "Son tarama", Right: discoveryState(v.Freshness)}) {
+			@ui.KV() {
+				<dt>Namespace'ler</dt>
+				<dd>
+					if s := discoverySnapshotScope(v.Freshness); s != "" {
+						for _, ns := range namespaceItems(s) {
+							@ui.Tag(ns)
+						}
+					} else {
+						henüz taranmadı
+					}
+				</dd>
+				if id := discoverySnapshotID(v.Freshness); id != "" {
+					<dt>Tarama</dt>
+					<dd data-snapshot-id={ id }>#{ id }</dd>
+				}
+				<dt>Taranan</dt>
+				<dd>
+					{ scopeLabels(v.Scope.Scanned) }
+					@ui.Tip(scopeRawNames(v.Scope.Scanned))
+				</dd>
+				<dt>Taranmayan</dt>
+				<dd>
+					{ scopeLabels(v.Scope.Unscanned) }
+					@ui.Tip("Bu yollar taranmadı; onlar için route yokluğu ya da güvenli sonuç çıkarılmaz. " + scopeRawNames(v.Scope.Unscanned))
+				</dd>
+				<dt>Son deneme</dt>
+				<dd>
+					if a := v.Freshness.LastAttempt; a != nil {
+						<time datetime={ fmtUTC(a.AttemptedAt) }>{ fmtUTC(a.AttemptedAt) }</time>
+						· <span data-outcome={ a.Outcome }>{ snapshotOutcomeLabel(a.Outcome) }</span>
+						if a.Class != "" {
+							· <span data-failure={ a.Class }>{ k8sClassLabel(a.Class) }</span>
+						}
+						if a.Message != "" {
+							· { a.Message }
+						}
+					} else {
+						kayıt yok
+					}
+				</dd>
+			}
+			if v.Freshness.Current != nil && v.Freshness.Stale {
+				@ui.Callout(ui.N{Tone: ui.Stale}) {
+					Güncel değil: son tarama başarısız oldu; gösterilen veri son başarılı taramadan.
+				}
+			}
+			if v.Freshness.Current == nil && v.Freshness.Previous != nil {
+				@ui.Callout(ui.N{Tone: ui.Stale}) {
+					Önceki tarama, güncel değil: bu namespace listesiyle başarılı tarama yok; gösterilen veri önceki listeden.
+				}
+			}
+			if v.Freshness.Current == nil && v.Freshness.Previous == nil {
+				<p>Başarılı tarama yok.</p>
+			}
+			if !v.Complete {
+				<p>Tarama eksik; bulunmayan route "yok" sayılmaz.</p>
+			}
+		}
+	</div>
+	@ui.Card(ui.C{Title: "Yeni host adayları", Desc: "Henüz site olmayan Ingress host'ları ve önerilen site ayarları."}) {
+		if len(v.Candidates) == 0 {
+			@ui.Empty("k8s", "Yeni host adayı yok.", "")
+		} else {
+			for _, c := range v.Candidates {
+				@ui.Group(c.Host) {
+					@ui.KV() {
+						<dt>Durum</dt>
+						<dd>
+							if c.Complete {
+								@ui.StatusText(ui.Info, "eklenmeye hazır", "")
+							} else {
+								@ui.StatusText(ui.Warn, "inceleme gerekli", "")
+							}
+						</dd>
+						<dt>Hedef</dt>
+						<dd><code>{ c.Target }</code></dd>
+						<dt>Sertifika</dt>
+						<dd><code>{ c.Cert }</code></dd>
+						<dt>Erişim</dt>
+						<dd>
+							{ accessChoiceLabel(c.AccessChoice) }
+							for _, r := range c.Roles {
+								@ui.Tag(r)
+							}
+						</dd>
+						if c.ReviewReason != "" {
+							<dt>İnceleme nedeni</dt>
+							<dd data-reason={ c.ReviewReason }>{ reviewReasonLabel(c.ReviewReason) }</dd>
+						}
+						if c.ReviewState == k8s.ReviewStateNeeded {
+							<dt>Varsayılan</dt>
+							<dd>bilinmiyor (kanıtlanmış controller kazananı yok)</dd>
+						}
+						if c.Note != "" {
+							<dt>Not</dt>
+							<dd>{ c.Note }</dd>
+						}
+					}
+					if len(c.ReviewCandidates) > 0 {
+						<p>Çelişen adaylar:</p>
+						<ul>
+							for _, cand := range c.ReviewCandidates {
+								<li><code>{ cand }</code></li>
+							}
+						</ul>
+					}
+					if len(c.Routes) > 0 {
+						<p>Route'lar:</p>
+						<ul>
+							for _, r := range c.Routes {
+								<li><code>{ routeProvenance(r) }</code></li>
+							}
+						</ul>
+					}
+					@ui.BtnRow() {
+						@ui.Btn(ui.B{Href: string(siteNewURL(c.Host)), Small: true, Icon: "plus"}) {
+							Site olarak ekle
+						}
+					}
+				}
+			}
+		}
+	}
+	@ui.Card(ui.C{Title: "Mevcut site eşlemeleri", Desc: "Route bulunmasa da kayıtlı site için silme veya otomatik erişim değişikliği başlatılmaz; değişiklik site formundan yapılır."}) {
+		if len(v.Managed) == 0 {
+			@ui.Empty("sites", "Yönetilen site eşlemesi yok.", "")
+		} else {
+			@ui.ListTable(ui.L{Label: "Mevcut site eşlemeleri", Search: true, In: true}) {
+				<thead>
+					<tr>
+						<th scope="col">Site</th>
+						<th scope="col">Durum</th>
+						<th scope="col">Erişim</th>
+						<th scope="col">Roller</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, m := range v.Managed {
+						<tr>
+							<td><a href={ templ.SafeURL("/sites/" + strconv.FormatInt(m.SiteID, 10) + "/edit") }>{ strings.Join(m.Hosts, ", ") }</a></td>
+							<td data-status={ string(m.Status) }>
+								@ui.Status(managedStatusTone(m.Status), managedStatusLabel(m.Status))
+							</td>
+							<td>{ accessChoiceLabel(m.AccessChoice) }</td>
+							<td>
+								for _, r := range m.Roles {
+									@ui.Tag(r)
+								}
+							</td>
+						</tr>
+					}
+				</tbody>
+			}
+		}
+	}
+	@ui.Card(ui.C{Title: "Belirsiz route'lar", Desc: "Hangi controller'a gittiği kesin olmayan route'lar; inceleme gerekir."}) {
+		if len(v.Uncertainties) == 0 {
+			<p>Belirsiz route yok.</p>
+		} else {
+			@ui.ListTable(ui.L{Label: "Belirsiz route'lar", Search: true, In: true}) {
+				<thead>
+					<tr>
+						<th scope="col">Host</th>
+						<th scope="col">Path</th>
+						<th scope="col">Ingress</th>
+						<th scope="col">Neden</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, u := range v.Uncertainties {
+						<tr data-uid={ u.UID }>
+							<td>{ u.Host }</td>
+							<td>{ u.Path }</td>
+							<td>{ u.Namespace }/{ u.Ingress }</td>
+							<td data-reasons={ reasonCodes(u.Reasons) }>{ reasonLabels(u.Reasons) }</td>
+						</tr>
+					}
+				</tbody>
+			}
+		}
+	}
+	@ui.Card(ui.C{Title: "Route çelişkileri", Desc: "Kanıtlanmış controller kazananı yoksa liste sırasına göre seçim yapılmaz; varsayılan bilinmiyor kalır."}) {
+		if len(v.Conflicts) == 0 {
+			<p>Route çelişkisi yok.</p>
+		} else {
+			for _, c := range v.Conflicts {
+				@ui.Group(c.Host) {
+					<p data-uid={ c.UID }>{ c.Namespace }/{ c.Ingress } · Varsayılan: bilinmiyor</p>
+					<ul>
+						for _, cand := range c.Candidates {
+							<li><code>{ routeProvenance(cand) }</code></li>
+						}
+					</ul>
+				}
+			}
+		}
+	}
+}
+
+// discoveryState is the scan state at the right of the "Son tarama" title.
+templ discoveryState(f K8sFreshnessView) {
+	@ui.StatusText(dashboardFreshnessTone(freshnessState(f)), freshnessLabel(freshnessState(f)), discoverySnapshotTime(f))
+}

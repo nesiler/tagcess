@@ -1,0 +1,24 @@
+# Test helper (F6-012): zitadel_install alone on the controller with fake helm/kubectl (zitadel_kubectl/zitadel_helm).
+# The preflight facts it reads are given as variables (zi_test_discovery_status).
+- name: Zitadel install alone
+  hosts: vpn
+  gather_facts: false
+  roles:
+    - role: config
+      tags: [always]
+  tasks:
+    - name: Preflight facts
+      ansible.builtin.set_fact:
+        preflight_probe: {zitadel: {status: "{{ zi_test_discovery_status | default(0) }}"}}
+    - name: Install
+      ansible.builtin.import_role:
+        name: zitadel_install
+    - name: Guide
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: zitadel_install
+        guide_items: "{{ guide_items_zitadel_install | default([]) }}"
+    - name: What the next phase sees
+      ansible.builtin.debug:
+        msg: "NEXT pat={{ zitadel_admin_pat_file }}"

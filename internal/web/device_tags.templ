@@ -1,0 +1,139 @@
+package web
+
+import (
+	"strconv"
+
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// The device tag screens (F3-016, H-01/H-05): /headscale/devices/{id}/tags edits a tagged
+// device's tag set, and walks a personal device through the irreversible conversion to a tagged
+// one in two steps. Every value is escaped by templ.
+
+// DeviceTagsPage renders one state of the tag screen, chosen by view.Mode.
+templ DeviceTagsPage(v deviceTagsView, csrfToken string) {
+	@ui.PageHead(ui.H{
+		Title: "Cihaz tag'leri: " + v.Name,
+		Crumbs: []ui.Crumb{
+			{Label: "Cihazlar", Href: "/headscale/devices"},
+			{Label: "Tag'ler"},
+		},
+	}) {
+		@ui.Btn(ui.B{Href: "/headscale/devices/" + strconv.FormatUint(v.NodeID, 10)}) {
+			Cihaza dön
+		}
+	}
+	@HeadscaleTabs("devices", v.DryRun)
+	if v.Notice != "" {
+		@ui.Callout(ui.N{Tone: ui.Err}) {
+			{ v.Notice }
+		}
+	}
+	switch v.Mode {
+		case tagsModeError:
+			@ui.Callout(ui.N{Tone: ui.Warn}) {
+				Tag işlemi bu sayfada yapılamıyor; hiçbir şey değiştirilmedi.
+			}
+		case tagsModeProtected:
+			@ui.Callout(ui.N{Tone: ui.Warn}) {
+				Bu cihaz korumalı bir sunucu node'u; tag'leri arayüzden değiştirilemez.
+			}
+		case tagsModeEdit:
+			@ui.Card(ui.C{Title: "Tag'ler"}) {
+				@ui.KV() {
+					<dt>Mevcut tag'ler</dt>
+					<dd>@tagBadges(v.Current)</dd>
+				}
+				@MaintenanceWideningGuard() {
+					<form method="post" action={ templ.SafeURL(tagsPath(v.NodeID)) }>
+						@CSRFField(csrfToken)
+						@ui.HiddenFields([]ui.Hidden{{Name: "version", Value: v.Version}})
+						@tagOptions(v.Options)
+						<p>En az bir tag seçilmeli: kişisel cihaza dönüş yok; cihazı silip OIDC ile yeniden kaydedin.</p>
+						@ui.BtnRow() {
+							@ui.Btn(ui.B{Kind: ui.Primary, Icon: "check"}) {
+								Tag'leri apply et
+							}
+						}
+					</form>
+				}
+			}
+		case tagsModeWarn:
+			@ui.Callout(ui.N{Tone: ui.Warn, Title: "Kişisel cihazı tag'li yapmak geri alınamaz."}) {
+				<ul>
+					<li>Tag'li cihazlar rol kaybında expire edilmez: sahibi tüm rollerini kaybetse de cihaz VPN'de kalır.</li>
+					<li>Cihazın ownership türü değişir: kullanıcıdan tag'e geçer; kişisel cihaza dönüş yok, cihazı silip OIDC ile yeniden kaydetmek gerekir.</li>
+					<li>Expire etkisi: dönüşümden sonra Headscale'den geri okunur ve sonuç sayfasında ve audit kaydında gösterilir.</li>
+				</ul>
+			}
+			@MaintenanceWideningGuard() {
+				<form method="post" action={ templ.SafeURL(tagsPath(v.NodeID)) }>
+					@CSRFField(csrfToken)
+					@ui.HiddenFields([]ui.Hidden{{Name: "version", Value: v.Version}})
+					@tagOptions(v.Options)
+					@ui.BtnRow() {
+						@ui.Btn(ui.B{Kind: ui.DangerOutline}) {
+							Devam: onay adımı
+						}
+					}
+				</form>
+			}
+		case tagsModeConfirm:
+			@ui.Callout(ui.N{Tone: ui.Err, Title: "Son adım: bu dönüşüm geri alınamaz."}) {
+				<p>
+					Seçilen tag'ler:
+					@tagBadges(v.Selected)
+				</p>
+			}
+			@MaintenanceWideningGuard() {
+				<form method="post" action={ templ.SafeURL(tagsPath(v.NodeID)) }>
+					@CSRFField(csrfToken)
+					@ui.HiddenFields([]ui.Hidden{{Name: "version", Value: v.Version}, {Name: "step", Value: "convert"}})
+					@ui.HiddenFields(tagHiddenFields(v.Selected))
+					@ui.Field(ui.F{Label: "Onaylamak için cihaz adını yazın: " + v.Name, For: "confirm_name"}) {
+						@ui.Input(ui.In{ID: "confirm_name", Name: "confirm_name"})
+					}
+					@ui.Check(ui.Chk{ID: "confirm", Name: "confirm", Value: "on", Label: "Geri alınamayacağını ve rol kaybında expire edilmeyeceğini anladım."})
+					@ui.BtnRow() {
+						@ui.Btn(ui.B{Kind: ui.Danger}) {
+							Tag'li yap
+						}
+					}
+				</form>
+			}
+		case tagsModeDone:
+			@ui.Callout(ui.N{Tone: ui.OK}) {
+				Tag'ler apply edildi ve Headscale'den geri okunarak doğrulandı.
+			}
+			@ui.Card(ui.C{}) {
+				@ui.KV() {
+					<dt>Tag'ler</dt>
+					<dd>@tagBadges(v.Current)</dd>
+					<dt>Sahiplik</dt>
+					<dd>{ v.OwnerNow }</dd>
+					<dt>Expire (geri okunan)</dt>
+					<dd>{ v.ExpiryNow }</dd>
+				}
+			}
+	}
+}
+
+templ tagBadges(tags []string) {
+	if len(tags) == 0 {
+		yok
+	}
+	for _, tag := range tags {
+		@ui.Tag(tag)
+	}
+}
+
+templ tagOptions(opts []tagOption) {
+	if len(opts) == 0 {
+		<p>Policy'de seçilebilir tag yok (tagOwners boş veya yalnız korumalı tag'ler).</p>
+	}
+	@ui.Checks() {
+		for _, o := range opts {
+			@ui.Check(ui.Chk{Name: "tag", Value: o.Name, Label: o.Name, Checked: o.Checked})
+		}
+	}
+}

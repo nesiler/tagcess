@@ -1,0 +1,28 @@
+# Headscale config (fake values for tests, shaped like the production file).
+server_url: https://hs.example.test
+listen_addr: 127.0.0.1:8080
+grpc_listen_addr: 127.0.0.1:50443
+
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+
+policy:
+  mode: file
+  path: /etc/headscale/policy.hujson
+
+dns:
+  magic_dns: true
+  base_domain: ts.example.test
+  # tagcess owns this file in F2
+  extra_records_path: /etc/headscale/extra-records.json
+
+oidc:
+  issuer: https://auth.example.test
+  client_secret_path: /etc/headscale/oidc_secret
+  allowed_groups: ["devops", "standart"] # who may log in
+  allowed_users: [boss@example.test]
+
+log:
+  level: info

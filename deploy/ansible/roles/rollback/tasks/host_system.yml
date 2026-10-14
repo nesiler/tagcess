@@ -1,0 +1,20 @@
+# host_system: drop-ins removed, the token file back in /etc/caddy, the Caddy directory's owner/mode as before.
+- name: "Rollback host_system: files"
+  ansible.builtin.import_tasks: generic_phase.yml
+
+- name: "Rollback host_system: the Caddy directory's owner and mode before"
+  ansible.builtin.shell: |
+    python3 - "{{ backup_root }}/{{ install_state.phases.host_system.first_backup_id }}/manifest.json" "{{ caddy_dir }}" <<'PY'
+    import json, os, sys
+    m = json.load(open(sys.argv[1]))
+    for e in m["entries"]:
+        if e["path"] == sys.argv[2] and e["type"] == "dir" and e["existed"]:
+            os.chown(e["path"], e["uid"], e["gid"]); os.chmod(e["path"], int(e["mode"], 8)); break
+    PY
+  changed_when: true
+  when: install_state.phases.host_system is defined and (install_state.phases.host_system.first_backup_id | default('')) != '' and not ansible_check_mode
+
+- name: "Rollback host_system: systemd drop-ins"
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: install_state.phases.host_system is defined and not ansible_check_mode

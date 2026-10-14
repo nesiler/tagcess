@@ -1,0 +1,71 @@
+# tagcess read-only access: get/list on Ingresses and Services in the listed namespaces and on
+# IngressClasses. Apply as a cluster administrator. This file creates no credential.
+# A namespace later removed from the profile keeps its RoleBinding: delete it manually.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: "tagcess-reader"
+  namespace: "tagcess"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: "tagcess-ingress-service-reader"
+rules:
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: "tagcess-ingressclass-reader"
+rules:
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingressclasses"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: "tagcess-reader"
+  namespace: "apps"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: "tagcess-ingress-service-reader"
+subjects:
+- kind: ServiceAccount
+  name: "tagcess-reader"
+  namespace: "tagcess"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: "tagcess-reader"
+  namespace: "web"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: "tagcess-ingress-service-reader"
+subjects:
+- kind: ServiceAccount
+  name: "tagcess-reader"
+  namespace: "tagcess"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: "tagcess-reader"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: "tagcess-ingressclass-reader"
+subjects:
+- kind: ServiceAccount
+  name: "tagcess-reader"
+  namespace: "tagcess"

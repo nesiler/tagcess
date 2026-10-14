@@ -1,0 +1,211 @@
+package web
+
+import (
+	"github.com/nesiler/tagcess/internal/hostapply"
+	"github.com/nesiler/tagcess/internal/hostpatch"
+	"github.com/nesiler/tagcess/internal/maintenance"
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// The H-07 config screen (F3b-020): the secret-free status summary, the new-list preview and its
+// explicit approval, the failure next steps and the maintenance close. Every value is escaped by
+// templ; no raw or masked config content is part of the view.
+
+// HSConfigPage renders the screen. The maintenance band comes from HeadscaleTabs; Error is a
+// refusal, Notice a result.
+templ HSConfigPage(v hsConfigView, csrfToken string) {
+	@ui.PageHead(ui.H{Title: "Headscale config (VPN girişi)", Sub: "VPN giriş şartı oidc.allowed_groups olarak yazılır.", Crumbs: []ui.Crumb{{Label: "Headscale", Href: "/headscale/devices"}, {Label: "Config"}}})
+	@HeadscaleTabs("config", v.DryRun)
+	if v.Error != "" {
+		@ui.Callout(ui.N{Tone: ui.Err, Title: "Değişiklik reddedildi; hiçbir şey yazılmadı"}) {
+			<pre><code>{ v.Error }</code></pre>
+			if len(v.Unknowns) > 0 {
+				<p>Açılmayı engelleyen belirsiz sonuçlar:</p>
+				<ul>
+					for _, u := range v.Unknowns {
+						<li><code>{ u.Kind }</code>: { u.Detail }</li>
+					}
+				</ul>
+			}
+		}
+	}
+	if v.Notice != "" {
+		@ui.Callout(ui.N{Tone: ui.OK}) {
+			{ v.Notice }
+		}
+	}
+	@HSConfigStatusRegion(v)
+	if v.WriteError != "" {
+		@ui.Callout(ui.N{Tone: ui.Err}) {
+			{ v.WriteError }
+		}
+	}
+	if !v.WriteEnabled {
+		@ui.Callout(ui.N{Tone: ui.Info}) {
+			Config yazma switch'i kapalı; sayfa read-only'dir. Lab groups-claim kabul/ret matrisi
+			geçmeden bu switch üretimde açılmaz.
+		}
+	}
+	@HSConfigCloseForm(v, csrfToken)
+	if v.canStartPatch() {
+		@HSConfigPatchForm(v, csrfToken)
+	}
+	if v.Preview != nil {
+		@HSConfigPreview(*v.Preview, csrfToken)
+	}
+}
+
+// HSConfigStatusRegion is the htmx-refreshed status panel. While the maintenance is open it reloads
+// every two seconds (F3b-020 [Ö]); the UI losing the connection never cancels the host operation.
+templ HSConfigStatusRegion(v hsConfigView) {
+	if v.statusPollTrigger() != "" {
+		<div id="hs-config-status" hx-get="/headscale/config/status" hx-trigger={ v.statusPollTrigger() } hx-swap="outerHTML">
+			@HSConfigStatus(v)
+		</div>
+	} else {
+		<div id="hs-config-status">
+			@HSConfigStatus(v)
+		</div>
+	}
+}
+
+// HSConfigStatus is the secret-free summary: the current list and base_rev, and the last request's
+// state, phase and time. It never carries config content.
+templ HSConfigStatus(v hsConfigView) {
+	@ui.Card(ui.C{Title: "Güncel durum"}) {
+		if v.MaintUnreadable {
+			@ui.Callout(ui.N{Tone: ui.Err}) {
+				Bakım durumu okunamadı; yazmalar güvenli tarafta durdurulur: { v.MaintError }
+			}
+		} else if v.MaintState == maintenance.Active {
+			<p>Bakım açık: istek <code>{ v.MaintID }</code>, başlangıçtan beri { v.MaintElapsed }.</p>
+		} else if v.MaintState == maintenance.ReconcilePending {
+			<p>Bakım kapanıyor: reconcile sürüyor, istek <code>{ v.MaintID }</code>.</p>
+		} else if v.dryRunSkipped() {
+			<p>{ dryRunSkippedNote }</p>
+		}
+		if v.HostUnreadable {
+			@ui.Callout(ui.N{Tone: ui.Warn}) {
+				Host durumu (status.json) okunamadı; yeni patch sunulmuyor: { v.HostError }
+			}
+		} else {
+			@ui.KV() {
+				<dt>Güncel allowed_groups</dt>
+				<dd><code>{ v.currentLabel() }</code></dd>
+				<dt>base_rev</dt>
+				<dd><code>{ v.BaseRev }</code></dd>
+				<dt>Son işlem</dt>
+				<dd>
+					if v.HostRequestID == "" {
+						<span>henüz işlem yok</span>
+					} else {
+						<code>{ v.HostRequestID }</code>
+						{ " " }durum <code>{ string(v.HostState) }</code>
+						{ " " }aşama <code>{ string(v.HostPhase) }</code>
+						{ " " }zaman { v.lastResultClock() }
+					}
+				</dd>
+			}
+		}
+		if v.hasFailure() {
+			@ui.Callout(ui.N{Tone: ui.Err}) {
+				<p>Son işlem <code>{ v.LastResult.Status }</code> ile bitti (aşama <code>{ v.LastResult.Phase }</code>,
+					kod <code>{ v.LastResult.ErrorCode }</code>). Bu bir başarı değildir.</p>
+				<p>{ v.configChangedText() }. Otomatik rollback yoktur; devam yeni bir patch veya bakımı kapatmaktır.</p>
+			}
+		}
+	}
+}
+
+// HSConfigPatchForm is the new-list form: devops is mandatory (and locked), the other groups are
+// selectable; it posts to the preview, which writes nothing.
+templ HSConfigPatchForm(v hsConfigView, csrfToken string) {
+	@ui.Card(ui.C{Title: "Yeni liste (yeni patch)", Desc: "VPN giriş şartı oidc.allowed_groups olarak yazılır. Varsayılan hedef devops, developer, standart; devops kaldırılamaz."}) {
+		<form method="post" action="/headscale/config/preview">
+			@CSRFField(csrfToken)
+			<input type="hidden" name="group" value={ hostpatch.GroupDevops }/>
+			@ui.Checks() {
+				@ui.Check(ui.Chk{Name: "group", Value: hostpatch.GroupDevops, Label: hostpatch.GroupDevops + " (zorunlu)", Checked: true, Disabled: true})
+				for _, g := range hsConfigGroupsForm {
+					if g != hostpatch.GroupDevops {
+						@ui.Check(ui.Chk{Name: "group", Value: g, Label: g, Checked: v.currentHas(g)})
+					}
+				}
+			}
+			@ui.BtnRow() {
+				@ui.Btn(ui.B{Kind: ui.Primary, Icon: "eye"}) {
+					Preview
+				}
+			}
+		</form>
+	}
+}
+
+// HSConfigPreview shows the old/new difference, the restart warning and the approval form carrying
+// the previewed base_rev.
+templ HSConfigPreview(p hostapply.Preview, csrfToken string) {
+	@ui.Card(ui.C{Title: "Preview: apply edilecek fark"}) {
+		@ui.Callout(ui.N{Tone: ui.Warn, Title: "Kontrol düzlemi kesintisi"}) {
+			{ hsConfigRestartWarning }
+		}
+		@ui.KV() {
+			<dt>Eklenecek</dt>
+			<dd><code>{ joinGroups(p.Added) }</code></dd>
+			<dt>Çıkarılacak</dt>
+			<dd><code>{ joinGroups(p.Removed) }</code></dd>
+			<dt>Eski → yeni</dt>
+			<dd><code>{ joinGroups(p.Current) }</code> → <code>{ joinGroups(p.Wanted) }</code></dd>
+		}
+		<form method="post" action="/headscale/config/apply">
+			@CSRFField(csrfToken)
+			for _, g := range p.Wanted {
+				<input type="hidden" name="group" value={ g }/>
+			}
+			<input type="hidden" name="base_rev" value={ p.BaseRev }/>
+			<input type="hidden" name="confirm" value="1"/>
+			@ui.BtnRow() {
+				@ui.Btn(ui.B{Kind: ui.Danger, Icon: "check"}) {
+					{ confirmApplyLabel }
+				}
+				@ui.Btn(ui.B{Href: "/headscale/config"}) {
+					Vazgeç
+				}
+			}
+		</form>
+	}
+}
+
+// HSConfigCloseForm is "close the maintenance" (F3b-019): it shows the host state, warns while a
+// request is still applying, and posts the seen request ID with an explicit confirmation.
+templ HSConfigCloseForm(v hsConfigView, csrfToken string) {
+	if v.Close != nil {
+		@ui.Callout(ui.N{Tone: ui.Info, Title: "Bakım kapatma istendi"}) {
+			<p>Reconcile genişleten yazmalardan önce çalışır. Host durumu: <code>{ string(v.Close.HostState) }</code> aşama <code>{ string(v.Close.HostPhase) }</code>.</p>
+			if v.Close.Warning != "" {
+				@ui.Callout(ui.N{Tone: ui.Warn}) {
+					{ v.Close.Warning }
+				}
+			}
+		}
+	}
+	if v.closeAvailable() {
+		@ui.Card(ui.C{Title: "Bakımı kapat", Desc: "Bakımı kapatmak yeni bir istek yazmaz; önce güncel Zitadel reconcile'ı çalışır. Recovery yine yeni bir patch'tir."}) {
+			<p>Host durumu: <code>{ string(v.HostState) }</code>.</p>
+			if v.hostApplying() {
+				@ui.Callout(ui.N{Tone: ui.Warn}) {
+					Host işlemi hâlâ sürüyor ({ string(v.HostState) }); config yarım kalmış olabilir.
+				}
+			}
+			<form method="post" action="/headscale/config/close">
+				@CSRFField(csrfToken)
+				<input type="hidden" name="request_id" value={ v.MaintID }/>
+				<input type="hidden" name="confirm" value="1"/>
+				@ui.BtnRow() {
+					@ui.Btn(ui.B{Kind: ui.Danger}) {
+						Bakımı kapat
+					}
+				}
+			</form>
+		}
+	}
+}

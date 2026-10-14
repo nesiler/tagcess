@@ -1,0 +1,15 @@
+package web
+
+import "github.com/nesiler/tagcess/internal/web/ui"
+
+// previewMissing is the preview server's page for a path that has no sample yet.
+templ previewMissing(path string) {
+	@ui.PageHead(ui.H{Title: "Preview yok", Sub: path})
+	@ui.Card(ui.C{Flush: true}) {
+		@ui.Empty("file", "Bu sayfanın örneği yok", "Sayfa ailesi taşınırken internal/web/preview.go içindeki previewPages listesine örnek eklenir.") {
+			@ui.Btn(ui.B{Href: "/_ui"}) {
+				Bileşen galerisi
+			}
+		}
+	}
+}

@@ -1,0 +1,165 @@
+# hs_dns_path (F6-007, ADR 0013 / G-01.2): points dns.extra_records_path at tagcess's DNS file, once. The new file must
+# hold the same records as today's (host phase seeded it); the candidate config must pass configtest; Headscale
+# restarts and must be healthy, otherwise the previous config is put back. Needs confirm_hs_dns_path=yes.
+- name: Today's records path
+  ansible.builtin.set_fact:
+    hs_dns_current: "{{ (preflight_hs_cfg | default({})).extra_records_path | default('') }}"
+    hs_dns_confirmed: "{{ (confirm_hs_dns_path | default('') | string) == 'yes' }}"
+
+- name: Already the tagcess file (no change)
+  ansible.builtin.debug:
+    msg: "Headscale DNS kayıt yolu zaten {{ tagcess_dns_records_path }}; değişiklik yok."
+  when: hs_dns_current == tagcess_dns_records_path
+
+- name: Waiting for confirmation (the config is unchanged)
+  ansible.builtin.debug:
+    msg: "hs_dns_path onay bekliyor: {{ hs_dns_current or '(yok)' }} → {{ tagcess_dns_records_path }} (configtest + Headscale restart). -e confirm_hs_dns_path=yes"
+  when: hs_dns_current != tagcess_dns_records_path and not hs_dns_confirmed
+
+- name: tagcess DNS file present? (in --check before a real host phase it is only planned)
+  ansible.builtin.stat:
+    path: "{{ tagcess_dns_records_path }}"
+  register: hs_dns_target_stat
+  when: hs_dns_current != tagcess_dns_records_path and hs_dns_confirmed and ansible_check_mode
+
+- name: Plan only (the tagcess DNS file does not exist yet)
+  ansible.builtin.debug:
+    msg: "--check: {{ hs_dns_current }} → {{ tagcess_dns_records_path }}; dosyayı host fazı oluşturur, kayıt karşılaştırması ve configtest gerçek çalıştırmada yapılır."
+  when: hs_dns_current != tagcess_dns_records_path and hs_dns_confirmed and ansible_check_mode and not hs_dns_target_stat.stat.exists
+
+- name: Scratch names of this run (never a fixed name, so a file of someone else at the old name stays untouched)
+  ansible.builtin.set_fact:
+    hs_dns_run: "{{ now(utc=true).strftime('%Y%m%dT%H%M%S') ~ '-' ~ '%04x' | format(65535 | random) }}"
+
+- name: Candidate and saved copy of this run
+  ansible.builtin.set_fact:
+    hs_dns_cand: "{{ hs_dns_candidate | regex_replace('[.]yaml$', '') }}-{{ hs_dns_run }}.yaml"
+    hs_dns_prev: "{{ headscale_config }}.tagcess-prev-{{ hs_dns_run }}"
+
+- name: Switch the records path
+  when: hs_dns_current != tagcess_dns_records_path and hs_dns_confirmed
+        and not (ansible_check_mode and not hs_dns_target_stat.stat.exists)
+  block:
+    - name: The config has an extra_records_path line to change
+      ansible.builtin.command: "grep -Eq '^[[:space:]]+extra_records_path:' {{ headscale_config }}"
+      changed_when: false
+      check_mode: false
+      register: hs_dns_line
+      failed_when: false
+
+    - name: Stop when there is no extra_records_path line (inline records are moved by hand)
+      ansible.builtin.fail:
+        msg: "Headscale config'inde dns.extra_records_path satırı yok (kayıtlar config içinde olabilir); yol elle taşınmalı, hiçbir şey değişmedi."
+      when: hs_dns_line.rc != 0
+
+    - name: Both files hold the same records
+      ansible.builtin.shell: |
+        python3 - "{{ hs_dns_current }}" "{{ tagcess_dns_records_path }}" <<'PY'
+        import json, sys
+        norm = lambda p: sorted(json.dumps(r, sort_keys=True) for r in json.load(open(p)))
+        sys.exit(0 if norm(sys.argv[1]) == norm(sys.argv[2]) else 1)
+        PY
+      register: hs_dns_same
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Stop when the records differ (the path is not switched)
+      ansible.builtin.fail:
+        msg: "{{ tagcess_dns_records_path }} kayıtları {{ hs_dns_current }} ile aynı değil; yol çevrilmedi (host fazı dosyayı tohumlar)."
+      when: hs_dns_same.rc != 0
+
+    - name: The run in --check stops here (nothing is written, not even a candidate)
+      ansible.builtin.debug:
+        msg: "--check: dns.extra_records_path {{ hs_dns_current }} → {{ tagcess_dns_records_path }} planı: yedek, aday config, configtest, restart ve sağlık denetimi gerçek çalıştırmada yapılır; hedefte hiçbir dosya yazılmadı."
+      when: ansible_check_mode
+
+    - name: Backup, candidate, configtest, install
+      when: not ansible_check_mode
+      block:
+        - name: Backup before writing (the first thing this phase does)
+          ansible.builtin.include_role:
+            name: backup
+          vars:
+            backup_phase: hs_dns_path
+
+        - name: Candidate config  # noqa: risky-shell-pipe
+          ansible.builtin.shell: |
+            set -e
+            cp -p {{ headscale_config }} {{ hs_dns_cand }}
+            sed -i -E 's|^([[:space:]]+extra_records_path:).*$|\1 {{ tagcess_dns_records_path }}|' {{ hs_dns_cand }}
+          changed_when: false
+
+        - name: The candidate passes configtest
+          ansible.builtin.command: "runuser -u headscale -- headscale -c {{ hs_dns_cand }} configtest"
+          register: hs_dns_configtest
+          changed_when: false
+          failed_when: false
+
+        - name: Stop when configtest fails (the config stays)
+          ansible.builtin.fail:
+            msg: "Aday config configtest'ten geçmedi; config değişmedi, restart yok: {{ (hs_dns_configtest.stderr | default('') | trim).splitlines() | last | default('') }}"
+          when: hs_dns_configtest.rc != 0
+
+        - name: Today's config, kept with its mode and owner (for a rollback)
+          ansible.builtin.command: "cp -p {{ headscale_config }} {{ hs_dns_prev }}"
+          changed_when: false
+
+        - name: Install the config, restart, prove health
+          block:
+            - name: Install the checked config
+              ansible.builtin.command: "mv {{ hs_dns_cand }} {{ headscale_config }}"
+              changed_when: true
+
+            - name: Restart Headscale
+              ansible.builtin.systemd_service:
+                name: headscale
+                state: restarted
+
+            - name: Headscale healthy
+              ansible.builtin.uri:
+                url: "{{ headscale_health_url }}"
+                status_code: 200
+              register: hs_dns_health
+              until: hs_dns_health.status == 200
+              retries: 20
+              delay: 1
+
+            - name: Headscale reads the new file
+              ansible.builtin.command: "runuser -u headscale -- cat {{ tagcess_dns_records_path }}"
+              changed_when: false
+              no_log: true
+
+          rescue:
+            - name: Put the previous config back (mode and owner kept)
+              ansible.builtin.command: "cp -p {{ hs_dns_prev }} {{ headscale_config }}"
+              changed_when: true
+
+            - name: Restart with the previous config
+              ansible.builtin.systemd_service:
+                name: headscale
+                state: restarted
+
+            - name: Stop (the previous config is back)
+              ansible.builtin.fail:
+                msg: "Headscale yeni DNS yoluyla sağlıklı açılmadı; eski config geri konup yeniden başlatıldı."
+
+      always:
+        - name: Remove this run's candidate and saved copy (only these two names)
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop: ["{{ hs_dns_cand }}", "{{ hs_dns_prev }}"]
+          changed_when: false
+
+# Headscale was restarted: tagcess reconnects with a clean start.
+- name: tagcess sees the change (container restart)
+  ansible.builtin.include_tasks: refresh_tagcess.yml
+  when: hs_dns_current != tagcess_dns_records_path and hs_dns_confirmed and not ansible_check_mode
+
+- name: Guide items of hs_dns_path
+  ansible.builtin.set_fact:
+    guide_items_hs_dns_path: >-
+      {{ [] if hs_dns_current == tagcess_dns_records_path or hs_dns_confirmed else [{'id': 'hs-dns-path-confirm', 'title': 'Headscale DNS kayıt yolu onay bekliyor',
+          'steps': ['dns.extra_records_path ' ~ (hs_dns_current or '(yok)') ~ ' → ' ~ tagcess_dns_records_path ~ ' (aynı kayıtlar; configtest + restart).',
+                    'Onay: install.sh hs_dns_path fazında evet (-e confirm_hs_dns_path=yes).']}] }}

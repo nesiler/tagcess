@@ -1,0 +1,193 @@
+package web
+
+import "github.com/nesiler/tagcess/internal/web/ui"
+
+// The alerts screen (F4-026): the monitor-alert lifecycle, the acknowledgement action and the
+// per-site monitoring maintenance toggle. Every value is escaped by templ.
+
+// AlertsPage shows the open and resolved monitor alerts, the acknowledgement action and the
+// maintenance toggle. Open rows carry the two mutations; resolved rows stay read-only.
+templ AlertsPage(v AlertsView, csrfToken string) {
+	@ui.PageHead(ui.H{Title: "Uyarılar", Sub: "Uyarılar yalnız bu ekranda gösterilir; dışarıya bildirim gönderilmez.", Tip: alertsHelp})
+	if v.Notice != "" {
+		@ui.Callout(ui.N{Tone: ui.OK}) {
+			<p>{ v.Notice }</p>
+		}
+	}
+	if v.Err != "" {
+		@ui.Callout(ui.N{Tone: ui.Err}) {
+			<p>{ v.Err }</p>
+		}
+	}
+
+	if v.Loaded {
+		@ui.Card(ui.C{Title: "Bakımdaki siteler", Desc: "Bu sitelerin kontrolleri sürer; yalnız uyarıları sessize alınır."}) {
+			if len(v.Maintenance) == 0 {
+				<p>Bakımda site yok.</p>
+			} else {
+				@ui.TableIn() {
+					<thead>
+						<tr>
+							<th scope="col">Site</th>
+							<th scope="col" aria-label="İşlemler"></th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, site := range v.Maintenance {
+							<tr data-maintenance={ site }>
+								<td>{ site }</td>
+								@ui.Actions() {
+									<form method="post" action="/alerts/maintenance">
+										@CSRFField(csrfToken)
+										<input type="hidden" name="subject" value={ site }/>
+										<input type="hidden" name="muted" value="0"/>
+										@ui.Btn(ui.B{Small: true, Kind: ui.WarnOutline}) {
+											Bakımı kapat
+										}
+									</form>
+								}
+							</tr>
+						}
+					</tbody>
+				}
+			}
+		}
+
+		@ui.Card(ui.C{Title: "Açık uyarılar"}) {
+			if len(v.Open) == 0 {
+				<p>Açık uyarı yok.</p>
+			} else {
+				@ui.ListTable(ui.L{Label: "Açık uyarılar", Search: true, In: true}) {
+					<thead>
+						<tr>
+							<th scope="col">Konu</th>
+							<th scope="col">Tür</th>
+							<th scope="col">Kaynak</th>
+							<th scope="col">Durum</th>
+							<th scope="col">Önem</th>
+							<th scope="col">Son kontrol</th>
+							<th scope="col" data-nosort>İşlem</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, r := range v.Open {
+							@alertRow(r, csrfToken)
+						}
+					</tbody>
+				}
+			}
+		}
+
+		@ui.Card(ui.C{Title: "Çözülmüş uyarılar"}) {
+			if len(v.Resolved) == 0 {
+				<p>Çözülmüş uyarı yok.</p>
+			} else {
+				@ui.ListTable(ui.L{Label: "Çözülmüş uyarılar", Search: true, In: true, Foot: alertsResolvedPager(v.ResolvedPage)}) {
+					<thead>
+						<tr>
+							<th scope="col">Konu</th>
+							<th scope="col">Tür</th>
+							<th scope="col">Kaynak</th>
+							<th scope="col">Durum</th>
+							<th scope="col">Önem</th>
+							<th scope="col">Son kontrol</th>
+							<th scope="col">Çözülme</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, r := range v.Resolved {
+							@alertRow(r, csrfToken)
+						}
+					</tbody>
+				}
+			}
+		}
+	}
+}
+
+// alertsResolvedPager pages the resolved list; it is drawn only when there is more than one page.
+templ alertsResolvedPager(p AlertsPager) {
+	if p.Pages > 1 {
+		@ui.Pager(ui.P{Label: "Çözülmüş uyarı sayfaları", Info: p.info(), Prev: p.prev(), Next: p.next()})
+	}
+}
+
+// alertRow renders one alert on one line: subject (evidence in a tooltip), kind, source, state
+// (with "bakımda" and a not-current note when they apply), severity, last check and the actions.
+// The stored codes stay in data-* attributes.
+templ alertRow(r AlertRow, csrfToken string) {
+	<tr data-state={ r.State }>
+		<td data-subject={ r.Subject }>
+			{ alertSubjectLabel(r.Kind, r.Source, r.Subject) }
+			if r.Evidence != "" {
+				@ui.Tip(alertEvidenceText(r.Evidence))
+			}
+		</td>
+		<td data-kind={ r.Kind }>{ alertKindLabel(r.Kind) }</td>
+		<td data-source={ r.Source }>{ alertSourceLabel(r.Source) }</td>
+		<td data-freshness={ r.Freshness } data-muted={ mutedFlag(r.Muted) }>
+			@ui.Status(alertStateTone(r.State), alertStateCellText(r))
+		</td>
+		<td data-severity={ r.Severity }>
+			@ui.StatusText(dashboardSeverityTone(r.Severity), severityLabel(r.Severity), "")
+		</td>
+		<td data-sort={ r.LastSeen.UTC().Format("2006-01-02T15:04:05Z") }><time datetime={ r.LastSeen.UTC().Format("2006-01-02T15:04:05Z") }>{ r.LastSeen.Format("2006-01-02 15:04:05") }</time></td>
+		@ui.Actions() {
+			if r.Resolved {
+				<time>{ r.ResolvedAt.Format("2006-01-02 15:04:05") }</time>
+			} else {
+				<form method="post" action="/alerts/ack">
+					@CSRFField(csrfToken)
+					<input type="hidden" name="kind" value={ r.Kind }/>
+					<input type="hidden" name="subject" value={ r.Subject }/>
+					<input type="hidden" name="source" value={ r.Source }/>
+					@ui.Btn(ui.B{Small: true, Icon: "check"}) {
+						Okundu
+					}
+				</form>
+				if r.SiteMaintenance {
+					<form method="post" action="/alerts/maintenance">
+						@CSRFField(csrfToken)
+						<input type="hidden" name="subject" value={ r.Subject }/>
+						if r.Muted {
+							<input type="hidden" name="muted" value="0"/>
+							@ui.Btn(ui.B{Small: true, Kind: ui.WarnOutline}) {
+								Bakımı kapat
+							}
+						} else {
+							<input type="hidden" name="muted" value="1"/>
+							@ui.Btn(ui.B{Small: true, Kind: ui.WarnOutline}) {
+								Bakımı aç
+							}
+						}
+					</form>
+				}
+			}
+		}
+	</tr>
+}
+
+// alertsHelp is the page tooltip: how an alert ends.
+const alertsHelp = "Okundu işaretlemek uyarıyı çözmez; uyarı, nedeni giderilip kontrol yeniden başarılı olunca çözülür. " +
+	"Kaynak okunamıyorsa uyarı \"güncel değil\" olarak kalır. Bakımdaki sitelerin kontrolleri sürer, yalnız uyarıları sessize alınır."
+
+// alertStateCellText is the state with the notes that change how to read it: in maintenance
+// (silenced) and not current. One line, one cell.
+func alertStateCellText(r AlertRow) string {
+	text := r.StateLabel
+	if r.Muted {
+		text += ", bakımda"
+	}
+	if r.Freshness != "" && r.Freshness != freshnessFresh {
+		text += ", " + freshnessLabel(r.Freshness)
+	}
+	return text
+}
+
+// mutedFlag is the data-muted value of a row: "1" in maintenance, empty otherwise.
+func mutedFlag(muted bool) string {
+	if muted {
+		return "1"
+	}
+	return ""
+}

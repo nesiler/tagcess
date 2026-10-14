@@ -1,0 +1,142 @@
+# host_system (F6-005, öneri 10 exception): Headscale socket directory survives restarts (drop-in, daemon-reload,
+# NO restart: effective at the next restart), /etc/caddy owned 10001:caddy 0755 (tagcess renames files there)
+# and a Cloudflare token file found in /etc/caddy moved, unread, to /etc/caddy-secrets (0600) with a Caddy
+# EnvironmentFile drop-in. Without confirm_host_system=yes it only shows the plan.
+- name: What the phase would change
+  ansible.builtin.set_fact:
+    host_system_confirmed: "{{ (confirm_host_system | default('') | string) == 'yes' }}"
+
+- name: Token files in the Caddy directory
+  ansible.builtin.stat:
+    path: "{{ caddy_dir }}/{{ item }}"
+    get_checksum: false
+  loop: "{{ host_system_token_candidates }}"
+  register: host_system_tokens
+  check_mode: false
+
+- name: Plan (no confirmation, nothing changes)
+  ansible.builtin.debug:
+    msg:
+      - "host_system onay bekliyor: -e confirm_host_system=yes ile koş."
+      - "Yapılacak: /etc/systemd/system/headscale.service.d/preserve.conf (RuntimeDirectoryPreserve=yes) + daemon-reload; Headscale yeniden başlatılmaz."
+      - "Yapılacak: {{ caddy_dir }} dizini {{ tagcess_uid }}:caddy 0755 (dosya modları değişmez)."
+      - "Yapılacak: {{ caddy_dir }} içindeki token dosyaları ({{ host_system_tokens.results | selectattr('stat.exists') | map(attribute='item') | join(', ') or 'yok' }}) {{ host_system_secrets_dir }} altına 0600 taşınır."
+  when: not host_system_confirmed
+
+- name: Confirmed host steps
+  when: host_system_confirmed
+  block:
+    - name: Backup before writing
+      ansible.builtin.include_role:
+        name: backup
+      vars:
+        backup_phase: host_system
+
+    - name: Headscale drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/headscale.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Headscale socket directory survives restarts (F5 K1)
+      ansible.builtin.copy:
+        src: headscale-preserve.conf
+        dest: /etc/systemd/system/headscale.service.d/preserve.conf
+        owner: root
+        group: root
+        mode: "0644"
+      register: host_system_dropin
+
+    - name: Caddy directory writable by tagcess (renames only)
+      ansible.builtin.file:
+        path: "{{ caddy_dir }}"
+        state: directory
+        owner: "{{ tagcess_uid }}"
+        group: caddy
+        mode: "0755"
+
+    - name: Secrets directory outside the Caddy directory
+      ansible.builtin.file:
+        path: "{{ host_system_secrets_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      when: host_system_tokens.results | selectattr('stat.exists') | list | length > 0
+
+    - name: Move token files out of the Caddy directory (content never read)
+      ansible.builtin.command: "mv -n {{ caddy_dir }}/{{ item.item }} {{ host_system_secrets_dir }}/{{ item.item }}"
+      args:
+        creates: "{{ host_system_secrets_dir }}/{{ item.item }}"
+        removes: "{{ caddy_dir }}/{{ item.item }}"
+      loop: "{{ host_system_tokens.results | selectattr('stat.exists') | list }}"
+      loop_control:
+        label: "{{ item.item }}"
+      register: host_system_moved
+
+    - name: Moved tokens stay root 0600
+      ansible.builtin.file:
+        path: "{{ host_system_secrets_dir }}/{{ item.item }}"
+        owner: root
+        group: root
+        mode: "0600"
+      loop: "{{ host_system_tokens.results | selectattr('stat.exists') | list }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: not ansible_check_mode
+
+    - name: Caddy drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/caddy.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: host_system_tokens.results | selectattr('stat.exists') | map(attribute='item') | select('match', '.*\\.env$') | list | length > 0
+
+    - name: Caddy reads the moved env file
+      ansible.builtin.copy:
+        content: |
+          # tagcess installer (host_system): the Cloudflare token lives outside the tagcess-writable Caddy directory.
+          [Service]
+          {% for t in host_system_tokens.results | selectattr('stat.exists') | map(attribute='item') | select('match', '.*\.env$') %}
+          EnvironmentFile={{ host_system_secrets_dir }}/{{ t }}
+          {% endfor %}
+        dest: /etc/systemd/system/caddy.service.d/tagcess-secrets.conf
+        owner: root
+        group: root
+        mode: "0644"
+      register: host_system_caddy_dropin
+      when: host_system_tokens.results | selectattr('stat.exists') | map(attribute='item') | select('match', '.*\.env$') | list | length > 0
+
+    - name: systemd picks up the drop-ins (no service restart)
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: (host_system_dropin is changed or host_system_caddy_dropin is changed) and not ansible_check_mode
+
+    - name: Caddy still validates with the moved token
+      ansible.builtin.shell: |
+        set -a
+        {% for t in host_system_tokens.results | selectattr('stat.exists') | map(attribute='item') | select('match', '.*\.env$') %}
+        . {{ host_system_secrets_dir }}/{{ t }}
+        {% endfor %}
+        set +a
+        caddy validate --config {{ caddyfile_path }} --adapter caddyfile >/dev/null 2>&1
+      changed_when: false
+      when: host_system_moved is changed and not ansible_check_mode
+      no_log: true
+
+    - name: Caddy reloads with the moved token
+      ansible.builtin.systemd_service:
+        name: caddy
+        state: reloaded
+      when: host_system_moved is changed and not ansible_check_mode
+
+- name: Guide items of host_system
+  ansible.builtin.set_fact:
+    guide_items_host_system: >-
+      {{ [] if host_system_confirmed else [{'id': 'host-system-confirm', 'title': 'host_system onay bekliyor',
+          'steps': ['Bu faz mevcut servislere dokunur (Headscale drop-in, /etc/caddy sahipliği, token taşıma). Planı okuyup onaylarsan: install.sh host_system fazında evet yaz (-e confirm_host_system=yes).',
+                    'Headscale yeniden başlatılmaz; drop-in bir sonraki restart\'ta etkinleşir.']}] }}

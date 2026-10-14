@@ -1,0 +1,33 @@
+# F1-020 test variant used by `make ui` to show the real tagcess web UI locally. It is the same
+# Caddy -> oauth2-proxy -> upstream path as Caddyfile (test/compose/caddy/Caddyfile), with two
+# local-only differences:
+#   - the upstream is the tagcess UI unix socket (mounted at /run/tagcess/ui.sock) instead of
+#     oauth2-proxy's `static://200`, so the real UI is served behind the login;
+#   - oauth2-proxy's `allowed_groups=devops` is dropped and Caddy injects a fixed
+#     `X-Auth-Request-Groups: devops` after the real Zitadel login. The lab Zitadel's groups-claim
+#     Action (F1-026) calls the developer's Tailscale address, which a Docker container cannot
+#     serve, so the group cannot be read here; this dev-only shim is what makes the UI reachable.
+#     The production Caddyfile (deploy/caddy/tagcess.caddy) is untouched.
+:8080 {
+	handle {
+		handle /oauth2/* {
+			reverse_proxy oauth2-proxy:4180
+		}
+
+		route {
+			request_header -X-Auth-Request-User
+			request_header -X-Auth-Request-Email
+			request_header -X-Auth-Request-Groups
+			forward_auth oauth2-proxy:4180 {
+				uri /oauth2/auth
+				copy_headers X-Auth-Request-User X-Auth-Request-Email
+				@unauthenticated status 401
+				handle_response @unauthenticated {
+					redir * /oauth2/start?rd={http.request.uri}
+				}
+			}
+			request_header X-Auth-Request-Groups devops
+			reverse_proxy unix//run/tagcess/ui.sock
+		}
+	}
+}

@@ -1,0 +1,13 @@
+# Which cookie settings the config carries (decision 3 [K]): see defaults/main.yml.
+- name: Cookie profile inputs
+  ansible.builtin.set_fact:
+    oauth2_proxy_existing: "{{ ((preflight_probe | default({})).oauth2_proxy | default({})).settings | default(none) or {} }}"
+    oauth2_proxy_switch_pending: >-
+      {{ install_mode == 'adopt' and oauth2_proxy_cookie_profile == 'tagcess'
+         and (confirm_oauth2_cookie | default('') | string) != 'yes' }}
+
+- name: Effective profile
+  ansible.builtin.set_fact:
+    oauth2_proxy_effective_profile: >-
+      {{ 'existing' if (oauth2_proxy_switch_pending or (oauth2_proxy_cookie_profile == 'existing' and oauth2_proxy_existing.cookie_name is defined))
+         else 'tagcess' }}

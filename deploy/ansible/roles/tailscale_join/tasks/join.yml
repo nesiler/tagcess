@@ -1,0 +1,140 @@
+# One node: install, then join with a fresh one-time key unless it is already joined.
+- name: "Tailscale repository key ({{ ts_node }})"
+  ansible.builtin.get_url:
+    url: "{{ tailscale_repo_keyring_url }}"
+    dest: "{{ tailscale_repo_keyring_path }}"
+    mode: "0644"
+  delegate_to: "{{ ts_node }}"
+
+- name: "Tailscale repository ({{ ts_node }})"
+  ansible.builtin.copy:
+    content: "{{ tailscale_repo_line }}\n"
+    dest: "{{ tailscale_repo_list_path }}"
+    mode: "0644"
+  delegate_to: "{{ ts_node }}"
+
+- name: "Tailscale package ({{ ts_node }})"
+  ansible.builtin.apt:
+    name: tailscale
+    update_cache: true
+  delegate_to: "{{ ts_node }}"
+  when: not ansible_check_mode
+
+- name: Mark the package as this installer's (the VPN host)
+  ansible.builtin.include_role:
+    name: state
+    tasks_from: installed.yml
+  vars:
+    state_component: tailscale
+  when: not ansible_check_mode and ts_node == inventory_hostname
+
+- name: "tailscaled running ({{ ts_node }})"
+  ansible.builtin.systemd_service:
+    name: tailscaled
+    state: started
+    enabled: true
+  delegate_to: "{{ ts_node }}"
+  when: not ansible_check_mode
+
+- name: "Joined already? ({{ ts_node }})"
+  ansible.builtin.command: tailscale status --json
+  register: ts_status
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  delegate_to: "{{ ts_node }}"
+  when: not ansible_check_mode
+
+- name: "Join state ({{ ts_node }})"
+  ansible.builtin.set_fact:
+    ts_joined: "{{ not ansible_check_mode and ts_status.rc == 0 and (ts_status.stdout | from_json).BackendState | default('') == 'Running' }}"
+
+- name: "Join with a one-time key ({{ ts_node }})"
+  when: not ts_joined and not ansible_check_mode
+  block:
+    - name: The key owner exists in Headscale  # noqa: risky-shell-pipe
+      ansible.builtin.shell: |
+        set -e
+        headscale users list -o json | python3 -c 'import json,sys; sys.exit(0 if any(u["name"] == sys.argv[1] for u in json.load(sys.stdin) or []) else 1)' '{{ tailscale_join_user }}' \
+          || { headscale users create '{{ tailscale_join_user }}' >/dev/null; echo created; }
+        headscale users list -o json | python3 -c 'import json,sys; print([u["id"] for u in json.load(sys.stdin) if u["name"] == sys.argv[1]][0])' '{{ tailscale_join_user }}'
+      register: ts_user
+      changed_when: "'created' in ts_user.stdout"
+
+    - name: One-time pre-auth key (memory only)
+      ansible.builtin.command:
+        argv: [headscale, preauthkeys, create, --user, "{{ ts_user.stdout_lines | last }}", --reusable=false,
+               --expiration, "{{ tailscale_preauth_expiration }}", --tags, "{{ ts_tag }}", -o, json]
+      register: ts_key
+      changed_when: true
+      no_log: true
+
+    - name: tailscale up (the key goes through a 0600 file on tmpfs, never argv; removed right after)
+      block:
+        - name: One-time key file (memory-backed /run)
+          ansible.builtin.copy:
+            content: "{{ (ts_key.stdout | from_json).key }}"
+            dest: /run/tagcess-ts-authkey
+            owner: root
+            group: root
+            mode: "0600"
+          delegate_to: "{{ ts_node }}"
+          no_log: true
+
+        - name: Join
+          ansible.builtin.command:
+            argv: "{{ ['tailscale', 'up', '--login-server', headscale_login_url, '--auth-key=file:/run/tagcess-ts-authkey', '--accept-dns=false']
+                      + (['--advertise-routes', ts_routes] if ts_routes else [])
+                      + (['--hostname', ts_hostname] if ts_hostname else []) }}"
+          delegate_to: "{{ ts_node }}"
+          changed_when: true
+      always:
+        - name: Remove the key file
+          ansible.builtin.file:
+            path: /run/tagcess-ts-authkey
+            state: absent
+          delegate_to: "{{ ts_node }}"
+
+- name: "Node id in Headscale ({{ ts_node }})"
+  ansible.builtin.command: tailscale status --json
+  register: ts_self
+  changed_when: false
+  check_mode: false
+  delegate_to: "{{ ts_node }}"
+  when: ts_routes != '' and not ansible_check_mode
+
+- name: "Route approved ({{ ts_node }})"  # noqa: risky-shell-pipe
+  ansible.builtin.shell: |
+    set -e
+    ip='{{ (ts_self.stdout | from_json).Self.TailscaleIPs | first }}'
+    headscale nodes list -o json | python3 -c '
+    import json, sys
+    ip, route = sys.argv[1], sys.argv[2]
+    for n in json.load(sys.stdin):
+        if ip in (n.get("ip_addresses") or []):
+            print(n["id"], "yes" if route in (n.get("approved_routes") or []) else "no")
+            break
+    ' "$ip" '{{ ts_routes }}'
+  register: ts_route
+  changed_when: false
+  check_mode: false
+  when: ts_routes != '' and not ansible_check_mode
+
+- name: "Approve the private network route ({{ ts_node }})"
+  ansible.builtin.command:
+    argv: [headscale, nodes, approve-routes, --identifier, "{{ ts_route.stdout.split()[0] }}", --routes, "{{ ts_routes }}"]
+  changed_when: true
+  when: ts_routes != '' and not ansible_check_mode and ts_route.stdout.split() | length == 2 and ts_route.stdout.split()[1] == 'no'
+
+- name: "Tailnet address ({{ ts_node }})"
+  ansible.builtin.command: tailscale ip -4
+  register: ts_ip
+  changed_when: false
+  check_mode: false
+  delegate_to: "{{ ts_node }}"
+  when: ts_node == inventory_hostname and not ansible_check_mode
+
+- name: Later phases of this run use the VPN host's tailnet address
+  ansible.builtin.set_fact:
+    vpn_tailnet_ip_effective: "{{ vpn_tailnet_ip or ts_ip.stdout_lines | first }}"
+  when: ts_node == inventory_hostname and not ansible_check_mode

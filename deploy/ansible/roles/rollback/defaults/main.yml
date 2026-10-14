@@ -1,0 +1,25 @@
+# rollback (F6-008): what each writing phase owns. A phase is rolled back from the backup it took before it ran
+# (host state), restoring these paths and moving aside the ones that did not exist then. Existing
+# components are never removed; packages installed by the fresh phases stay (closing a fresh host = deleting it).
+rollback_phase_paths:
+  app: ["{{ app_config_path | default('/etc/tagcess/config.yaml') }}", /etc/tagcess/compose.yaml]
+  caddy_ui: ["{{ caddy_sites_dir or (caddy_dir ~ '/sites') }}/tagcess.caddy", "{{ caddyfile_path }}"]
+  oauth2_proxy: ["{{ oauth2_proxy_dir }}", /etc/systemd/system/oauth2-proxy.service.d]
+  hshelper: [/usr/local/bin/tagcess-hshelper, /etc/systemd/system/tagcess-hshelper.path, /etc/systemd/system/tagcess-hshelper.service,
+             /etc/systemd/system/tagcess-hshelper-boot.service, /var/lib/tagcess-headscale]
+  hs_dns_path: ["{{ headscale_config }}"]
+  hs_hook_acl: ["{{ headscale_policy_path }}"]
+  headscale_oidc: ["{{ headscale_config }}", "{{ headscale_oidc_secret_path | default('/etc/headscale/oidc_client_secret') }}"]
+  host_system: [/etc/systemd/system/headscale.service.d, /etc/systemd/system/caddy.service.d, /etc/caddy-secrets,
+                "{{ caddy_dir }}/cf.env", "{{ caddy_dir }}/cloudflare.env", "{{ caddy_dir }}/cloudflare.ini", "{{ caddy_dir }}/cf-token.env"]
+  host: [/etc/tagcess, /etc/tmpfiles.d/tagcess.conf, "{{ tagcess_dns_records_path }}"]
+# host data directories: moved aside only with confirm_remove_data=yes (the tagcess database and history live here).
+rollback_host_data: [/var/lib/tagcess, /var/lib/tagcess-credentials]
+# Fresh install phases: the component is not removed (report only).
+rollback_report_only:
+  certbot: certbot ve sertifikalar
+  headscale_install: Headscale paketi ve config'i
+  caddy_install: Caddy paketi ve başlangıç Caddyfile'ı
+  tailscale_join: tailscale paketi ve tailnet üyeliği
+  zitadel_install: kümedeki Zitadel (helm)
+  zitadel_seed: Zitadel'deki vpn projesi, roller, uygulamalar ve Actions v2 nesneleri (araç hiçbir şey silmez)

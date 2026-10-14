@@ -1,0 +1,44 @@
+# headscale_oidc (F6-012): the second Headscale pass. Once zitadel_seed has made the Headscale app (its client id and
+# secret file come from <env>/zitadel.json), the config gets the OIDC block through the same candidate/configtest/
+# restart flow. An adopted Headscale is never touched: its OIDC block is reported.
+- name: Headscale here, and whose
+  ansible.builtin.set_fact:
+    hs_install_present: "{{ preflight_components.headscale | default(false) or 'headscale' in (install_state.installed | default([])) }}"
+    hs_install_owned: "{{ 'headscale' in (install_state.installed | default([])) }}"
+    hs_install_oidc_ready: "{{ headscale_oidc_client_id | default('') != '' and (secret_files.headscale_oidc_client_secret | default('')) != '' }}"
+
+- name: Adopted Headscale's OIDC block
+  ansible.builtin.command: "grep -Eq '^oidc:' {{ headscale_config }}"
+  register: hs_oidc_adopted
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: hs_install_present and not hs_install_owned
+
+- name: Adopted untouched
+  ansible.builtin.debug:
+    msg: "Headscale bu araçla kurulmadı: OIDC bloğu {{ 'var' if hs_oidc_adopted.rc | default(1) == 0 else 'yok' }}; config'e dokunulmadı."
+  when: hs_install_present and not hs_install_owned
+
+- name: OIDC client not made yet
+  ansible.builtin.debug:
+    msg: "Headscale OIDC istemcisi yok (zitadel_seed çıktısı: headscale_oidc_client_id, secret_files.headscale_oidc_client_secret); config değişmedi."
+  when: hs_install_owned and not hs_install_oidc_ready
+
+- name: Backup before the first change (config, OIDC secret file, DNS directory)
+  ansible.builtin.include_role:
+    name: backup
+  vars:
+    backup_phase: headscale_oidc
+  when: hs_install_owned and hs_install_oidc_ready
+
+- name: Config with the OIDC block
+  ansible.builtin.include_tasks: configure.yml
+  when: hs_install_owned and hs_install_oidc_ready
+
+- name: Guide items of headscale_oidc
+  ansible.builtin.set_fact:
+    guide_items_headscale_oidc: >-
+      {{ [{'id': 'headscale-oidc-client', 'title': 'Headscale OIDC istemcisi eksik',
+           'steps': ['zitadel_seed fazını uygula (Headscale uygulaması ve istemci secret dosyası <ortam>/zitadel.json\'a yazılır), sonra headscale_oidc fazını yeniden çalıştır.']}]
+         if hs_install_owned and not hs_install_oidc_ready else [] }}

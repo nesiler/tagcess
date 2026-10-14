@@ -1,0 +1,8 @@
+projects.c.example.test {
+	# /setup slash redirect problemi
+	redir /setup https://projects.c.example.test/setup/ 308
+
+	# Project API
+	@api expression `header({'Authorization': '*'}) || header({'X-Api-Key': '*'})`
+	import vpn_site_api c.example.test devops,developer,standart
+}

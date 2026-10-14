@@ -1,0 +1,103 @@
+package web
+
+import "github.com/nesiler/tagcess/internal/web/ui"
+
+// The personal-device reopen screens (F3-021): the confirm page with the eligibility evidence and
+// the outcome screen that names the reconcile. The pages compose internal/web/ui components only
+// (docs/ui-guide.md).
+
+// DeviceReopenConfirmPage shows the owner's fresh eligibility result (user id, account state,
+// roles) and the confirm form with the new expiry date. With Err the reason is shown instead and
+// no form is drawn: the reopen may not proceed.
+templ DeviceReopenConfirmPage(view DeviceReopenConfirmView, csrf string) {
+	@ui.PageHead(ui.H{Title: "Yeniden açma onayı", Crumbs: []ui.Crumb{{Label: "Cihazlar", Href: "/headscale/devices"}, {Label: view.Row.Name, Href: deviceActionPath(view.Row.ID, "")}, {Label: "Yeniden açma onayı"}}})
+	@HeadscaleTabs("devices", false)
+	if view.Err != nil {
+		@ui.Callout(ui.N{Tone: ui.Warn, Title: view.Row.Name + " yeniden açılamaz"}) {
+			Neden: { view.Err.Error() }
+		}
+		@ui.Btn(ui.B{Href: deviceActionPath(view.Row.ID, "")}) {
+			Cihaza dön
+		}
+	} else {
+		@ui.Callout(ui.N{Tone: ui.Warn}) {
+			<strong>{ view.Row.Name }</strong> süresi geçmiş bir kişisel cihaz. Yeniden açmak sahibinin uygunluğunu şimdi Zitadel&#39;den doğrular ve expire süresini ileri alır. Sahip rolünü kaybederse cihaz yine otomatik expire edilir.
+		}
+		@ui.KV() {
+			<dt>Sahip</dt>
+			<dd>{ view.Row.Owner }</dd>
+			<dt>Zitadel kullanıcısı</dt>
+			<dd><code>{ view.Evidence.UserID }</code></dd>
+			<dt>Hesap durumu</dt>
+			<dd>
+				@ui.Status(accountStateTone(view.Evidence.State.String()), view.Evidence.State.String())
+			</dd>
+			<dt>Roller</dt>
+			<dd>
+				if len(view.Evidence.Roles) == 0 {
+					—
+				}
+				for _, r := range view.Evidence.Roles {
+					@ui.Tag(r)
+				}
+			</dd>
+		}
+		@MaintenanceWideningGuard() {
+			<form method="post" action={ templ.SafeURL(deviceActionPath(view.Row.ID, "/reopen/apply")) }>
+				@CSRFField(csrf)
+				@ui.HiddenFields([]ui.Hidden{
+					{Name: "expected", Value: view.Version},
+					{Name: "current_name", Value: view.Row.Name},
+					{Name: "current_expiry", Value: view.Row.ExpiryRaw},
+					{Name: "confirm", Value: confirmWord},
+				})
+				@ui.Field(ui.F{Label: "Yeni expire (UTC, zorunlu)", For: "reopen-expiry"}) {
+					@ui.Input(ui.In{ID: "reopen-expiry", Name: "expiry", Type: "datetime-local", Required: true})
+				}
+				@ui.BtnRow() {
+					@ui.Btn(ui.B{Kind: ui.Primary}) {
+						Yeniden aç
+					}
+				}
+			</form>
+		}
+		@ui.Btn(ui.B{Href: deviceActionPath(view.Row.ID, "")}) {
+			Vazgeç
+		}
+	}
+}
+
+// DeviceReopenResultPage names the outcome explicitly and, on success, the queued reconcile.
+templ DeviceReopenResultPage(view DeviceReopenResultView) {
+	@ui.PageHead(ui.H{Title: "İşlem sonucu", Crumbs: []ui.Crumb{{Label: "Cihazlar", Href: "/headscale/devices"}, {Label: "İşlem sonucu"}}})
+	@HeadscaleTabs("devices", false)
+	@ui.Callout(ui.N{Tone: deviceActionTone(view.Status), Title: deviceActionStatusLabel(view.Status)}) {
+		{ view.Action }
+		if view.DeviceName != "" {
+			 (cihaz: { view.DeviceName })
+		}
+		if view.Note != "" {
+			<p>{ view.Note }</p>
+		}
+		if view.ReconcileTriggered {
+			<p>Elle reconcile tetiklendi; sonucu Sync sayfasında izleyebilirsiniz.</p>
+		}
+	}
+	@ui.BtnRow() {
+		@ui.Btn(ui.B{Href: deviceActionPath(view.DeviceID, "")}) {
+			Cihaza dön
+		}
+		@ui.Btn(ui.B{Href: "/headscale/devices"}) {
+			Listeye dön
+		}
+	}
+}
+
+// accountStateTone is the eligibility account state's dot tone: only "active" is OK, everything
+// else warns (fail safe).
+func accountStateTone(state string) ui.Tone {
+	if state == "active" {
+		return ui.OK
+	}
+	return ui.Warn
+}

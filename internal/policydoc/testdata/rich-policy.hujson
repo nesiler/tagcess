@@ -1,0 +1,62 @@
+// Rich policy fixture (F3-011): every section the form does not own, comments in odd places,
+// trailing commas and an unknown metadata member. Anonymised; no real users.
+{
+  "#note": "kept as is",
+  "groups": {
+    // Zitadel owns this section
+    "group:devops": [],
+    "group:developer": [], // trailing comment
+  },
+  "hosts": {
+    "lab-net": "10.20.0.0/16", // lab network
+    "lab-host": "10.20.0.7",
+  },
+  "tagOwners": {
+    // vpn-host: Caddy, Headscale
+    "tag:vpn-server": ["group:devops"], // owner note
+    /* k8s node */
+    "tag:k8s": [],
+  },
+  "acls": [ // access rules
+    // everyone reaches the gate
+    { "action": "accept", "src": ["autogroup:member"], "dst": ["tag:vpn-server:80,443"] }, // gate
+    // Caddy to k8s only on the internal port
+    { "action": "accept", "src": ["tag:vpn-server"], "dst": ["tag:k8s:8443"] },
+
+    // devops ssh and icmp
+    // (two comment lines)
+    {
+      "action": "accept",
+      "proto": "tcp",
+      "src": ["group:devops"],
+      "dst": ["tag:vpn-server:22", "tag:k8s:22"],
+    },
+  ],
+  "grants": [
+    { "src": ["group:devops"], "dst": ["tag:k8s"], "ip": ["*"] },
+  ],
+  "ssh": [
+    {
+      "action": "accept",
+      "src": ["group:devops"],
+      "dst": ["tag:k8s"],
+      "users": ["root"],
+    },
+  ],
+  "autoApprovers": {
+    // subnet routes
+    "routes": {
+      "10.20.0.0/16": ["group:devops"], // lab
+      "192.168.1.0/24": ["tag:vpn-server"],
+    },
+    "exitNode": ["tag:vpn-server"],
+  },
+  "nodeAttrs": [
+    { "target": ["tag:k8s"], "attr": ["admin"] },
+  ],
+  "tests": [
+    { "src": "100.64.9.9", "deny": ["lab-host:443"] },
+  ],
+  "sshTests": [],
+  "randomizeClientPort": true,
+}

@@ -1,0 +1,107 @@
+[
+  {
+    "name": "auth.example.com",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "issues.internal.example.org",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "blog-staging.internal.example.org",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "blog.internal.example.org",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "blog-admin.internal.example.org",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "docs.example.com",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "sandbox.example.net",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "k8s-api.example.com",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "monitor.example.com",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "dashboard-staging.internal.example.org",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "dashboard.internal.example.org",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "dbmetrics.example.com",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "dbadmin.example.com",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "projects-auth.example.com",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "projects.example.com",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "store-staging.internal.example.org",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "store.internal.example.org",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "storage-api.example.com",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "errors.example.com",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "partner-api.example.com",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "tickets.example.com",
+    "type": "A",
+    "value": "100.64.0.4"
+  }
+]

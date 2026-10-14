@@ -1,0 +1,12 @@
+# tailscale_join (F6-012): fresh installs Tailscale from its official apt repository and joins the VPN host (and,
+# only with a `k8s` inventory group, the k8s host) to this Headscale with a one-time 10-minute pre-auth key per node,
+# created on the VPN host and kept only in Ansible's memory (no_log). VPN host: hs_vpn_tag + the private network route
+# (approved in Headscale); k8s host: hs_k8s_tag. A node that is already joined is left alone.
+tailscale_repo_keyring_url: https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg
+tailscale_repo_line: "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main"
+tailscale_repo_keyring_path: /usr/share/keyrings/tailscale-archive-keyring.gpg   # in the backup scope (roles/backup/defaults)
+tailscale_repo_list_path: /etc/apt/sources.list.d/tailscale.list
+headscale_login_url: "https://{{ hs_host }}"   # the --login-server the nodes use
+tailscale_join_user: tagcess-infra             # the Headscale user that owns the tagged pre-auth keys
+tailscale_preauth_expiration: 10m
+tailscale_vpn_hostname: ""                     # empty: the host's own name

@@ -1,0 +1,7 @@
+# Test helper: proves Ansible reaches a target (ssh + Python 3).
+- name: Reach the target
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Ping
+      ansible.builtin.ping:

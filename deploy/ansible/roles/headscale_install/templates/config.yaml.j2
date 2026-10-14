@@ -1,0 +1,84 @@
+# Headscale {{ headscale_version }} config written by the tagcess installer (headscale_install, F6-012).
+# tagcess manages it afterwards through the ADR 0008 candidate flow; the installer rewrites it only while it owns Headscale.
+server_url: {{ headscale_server_url }}
+listen_addr: {{ headscale_health_url | urlsplit('netloc') }}
+metrics_listen_addr: 127.0.0.1:9090
+grpc_listen_addr: 127.0.0.1:50443
+grpc_allow_insecure: false
+trusted_proxies:
+  - 127.0.0.1/32
+  - ::1/128
+
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+
+prefixes:
+  v4: {{ headscale_prefix_v4 }}
+  v6: {{ headscale_prefix_v6 }}
+  allocation: sequential
+
+derp:
+  server:
+    enabled: true
+    region_id: 999
+    region_code: "headscale"
+    region_name: "Headscale Embedded DERP"
+    verify_clients: true
+    stun_listen_addr: "0.0.0.0:3478"
+    private_key_path: /var/lib/headscale/derp_server_private.key
+    automatically_add_embedded_derp_region: true
+{% if headscale_derp_ipv4 %}
+    ipv4: {{ headscale_derp_ipv4 }}
+{% endif %}
+  urls: []
+  paths: []
+  auto_update_enabled: false
+
+disable_check_updates: true
+
+database:
+  type: sqlite
+  sqlite:
+    path: {{ headscale_db_path }}
+    write_ahead_log: true
+
+policy:
+  mode: file
+  path: {{ hs_install_policy_ref }}
+
+dns:
+  magic_dns: true
+  base_domain: {{ headscale_base_domain }}
+  override_local_dns: true
+  nameservers:
+    global:
+{% for ns in headscale_nameservers %}
+      - {{ ns }}
+{% endfor %}
+  search_domains: []
+  extra_records_path: {{ tagcess_dns_records_path }}
+
+unix_socket: {{ headscale_socket }}
+unix_socket_permission: "0770"
+{% if hs_install_oidc %}
+
+oidc:
+  only_start_if_oidc_is_available: {{ headscale_oidc_only_start_if_available | bool | lower }}
+  issuer: "{{ zitadel_issuer }}"
+  client_id: "{{ headscale_oidc_client_id }}"
+  client_secret_path: {{ headscale_oidc_secret_path }}
+  scope: {{ headscale_oidc_scope | to_json }}
+  pkce:
+    enabled: true
+    method: S256
+{% endif %}
+
+logtail:
+  enabled: false
+
+taildrop:
+  enabled: true
+
+log:
+  level: info
+  format: text

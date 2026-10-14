@@ -1,0 +1,88 @@
+# Label set for tagcess issues and PRs. Process: docs/development.md section 4.
+# The coordinator creates or updates each entry with:
+#   gh label create "<name>" --color "<color>" --description "<description>" --force
+
+# --- type: exactly one per issue ---
+- name: type:feature
+  color: "1d76db"
+  description: New behaviour
+- name: type:bug
+  color: "d73a4a"
+  description: Something does not work as specified
+- name: type:chore
+  color: "c5def5"
+  description: Tooling, CI, dependencies, refactoring without behaviour change
+- name: type:docs
+  color: "0075ca"
+  description: Docs, specs and ADRs
+
+# --- risk ---
+- name: risk:auth
+  color: "b60205"
+  description: Authn/authz, webhooks, policy/ACL writes, generated config, node expiry or secrets; security review and developer approval required
+
+# --- area: package groups ---
+- name: area:web
+  color: "fef2c0"
+  description: UI and HTTP handlers (internal/web, cmd/tagcess-ui)
+- name: area:sync
+  color: "fef2c0"
+  description: Role sync and reconcile (internal/sync, vpnuser, groupsclaim, hook)
+- name: area:idp
+  color: "fef2c0"
+  description: Identity provider clients and drivers (internal/zitadel, zitadeladopt)
+- name: area:policy
+  color: "fef2c0"
+  description: Headscale policy document, writer and revisions (policydoc, policywriter, policyrev, netpolicy)
+- name: area:headscale
+  color: "fef2c0"
+  description: Headscale client, admin actions and host helper (headscale, hsadmin, hshelper, hostapply, hostpatch)
+- name: area:caddy
+  color: "fef2c0"
+  description: Sites, Caddy and DNS rendering (caddy, render, site, dns)
+- name: area:k8s
+  color: "fef2c0"
+  description: Read-only Kubernetes discovery (internal/k8s)
+- name: area:store
+  color: "fef2c0"
+  description: Database, audit, change and git history (store, audit, change, gitlog, config)
+- name: area:monitoring
+  color: "fef2c0"
+  description: Health checks, alerts, monitor loops, maintenance, dashboard
+- name: area:deploy
+  color: "fef2c0"
+  description: Installer, container image, compose and deploy files (deploy/)
+- name: area:tooling
+  color: "fef2c0"
+  description: Scripts, Makefile, agent files, CI and test harness
+
+# --- model overrides (profile names, see .agents/roles.conf) ---
+- name: model:deepseek
+  color: "e4e669"
+  description: Worker model override for this issue
+- name: model:sonnet
+  color: "e4e669"
+  description: Worker model override for this issue
+- name: model:opus
+  color: "e4e669"
+  description: Worker model override for this issue
+- name: model:codex
+  color: "e4e669"
+  description: Worker model override for this issue
+- name: reviewer:deepseek
+  color: "bfd4f2"
+  description: Reviewer model override for this issue
+- name: reviewer:sonnet
+  color: "bfd4f2"
+  description: Reviewer model override for this issue
+- name: reviewer:codex
+  color: "bfd4f2"
+  description: Reviewer model override for this issue
+- name: reviewer:opus
+  color: "bfd4f2"
+  description: Reviewer model override for this issue
+
+# --- flow ---
+- name: needs-developer
+  color: "fbca04"
+  description: Waits for a decision or an approval from the developer

@@ -1,0 +1,5 @@
+# headscale_adopt has one task file per phase (site.yml imports them with tasks_from): tags.yml (hs_tags),
+# hook_acl.yml (hs_hook_acl), dns_path.yml (hs_dns_path), g02.yml (g02).
+- name: Headscale adopt phases are imported one by one
+  ansible.builtin.debug:
+    msg: "headscale_adopt: use tasks_from tags|hook_acl|dns_path|g02"

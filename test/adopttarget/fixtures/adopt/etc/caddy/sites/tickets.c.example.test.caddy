@@ -1,0 +1,5 @@
+tickets.c.example.test {
+	# Ticket API
+	@api expression `header({'Authorization': '*'}) || header({'X-Tracker-Api-Key': '*'})`
+	import vpn_site_api c.example.test devops,developer,standart
+}

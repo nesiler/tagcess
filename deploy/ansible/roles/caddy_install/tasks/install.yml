@@ -1,0 +1,172 @@
+- name: Package architecture
+  ansible.builtin.command: dpkg --print-architecture
+  register: caddy_install_arch_cmd
+  changed_when: false
+  check_mode: false
+
+- name: Installed Caddy version
+  ansible.builtin.command: dpkg-query -W -f=${Version} caddy
+  register: caddy_install_dpkg
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Package plan
+  ansible.builtin.set_fact:
+    caddy_install_arch: "{{ caddy_install_arch_cmd.stdout | trim }}"
+    caddy_install_need_pkg: "{{ caddy_install_dpkg.rc != 0 or caddy_install_dpkg.stdout | trim != caddy_install_version }}"
+    # A name of this run next to the Caddyfile (never a fixed name; --check writes no candidate at all).
+    caddy_install_cand: "{{ caddyfile_path ~ '.candidate-' ~ now(utc=true).strftime('%Y%m%dT%H%M%S') ~ '-' ~ '%04x' | format(65535 | random) }}"
+
+- name: Pinned package
+  when: caddy_install_need_pkg
+  block:
+    - name: Download directory
+      ansible.builtin.file:
+        path: "{{ caddy_download_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Download the pinned .deb (kept only when its sha256 matches)
+      ansible.builtin.get_url:
+        url: "{{ caddy_deb_url }}"
+        dest: "{{ caddy_download_dir }}/caddy_{{ caddy_install_version }}_linux_{{ caddy_install_arch }}.deb"
+        checksum: "sha256:{{ caddy_deb_sha256[caddy_install_arch] }}"
+        mode: "0644"
+
+    - name: Install the package
+      ansible.builtin.apt:
+        deb: "{{ caddy_download_dir }}/caddy_{{ caddy_install_version }}_linux_{{ caddy_install_arch }}.deb"
+      when: not ansible_check_mode
+
+- name: Mark the package as this installer's
+  ansible.builtin.include_role:
+    name: state
+    tasks_from: installed.yml
+  vars:
+    state_component: caddy
+  when: not ansible_check_mode
+
+- name: tagcess binary on the controller (renders the bootstrap)
+  ansible.builtin.command:
+    cmd: "go build -trimpath -o {{ install_env_dir }}/bin/tagcess ./cmd/tagcess"
+    chdir: "{{ tagcess_repo_root }}"
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  check_mode: false
+  when: caddy_bootstrap_tool == ''
+
+- name: Bootstrap Caddyfile (tagcess's own render of the seed, read-only)
+  ansible.builtin.command:
+    argv:
+      - "{{ caddy_bootstrap_tool or (install_env_dir ~ '/bin/tagcess') }}"
+      - -bootstrap-caddyfile
+      - -seed
+      - "{{ site_seed_file | expanduser }}"
+      - -acme-email
+      - "{{ acme_email }}"
+      - -certs
+      - "{{ cert_names | join(',') }}"
+      - -zitadel-internal-sources
+      - "{{ app_zitadel_internal_sources | join(',') }}"
+      - -sites-import
+      - "{{ caddy_bootstrap_sites_import }}"
+  delegate_to: localhost
+  become: false
+  register: caddy_install_render
+  changed_when: false
+  check_mode: false
+
+- name: Bootstrap text
+  ansible.builtin.set_fact:
+    caddy_install_text: "{{ caddy_install_render.stdout ~ '\n' ~ ((caddy_bootstrap_extra ~ '\n') if caddy_bootstrap_extra else '') }}"
+
+- name: Plan only (--check, Caddy is not installed yet)
+  ansible.builtin.debug:
+    msg: "--check: Caddy {{ caddy_install_version }} kurulur; {{ caddyfile_path }} başlangıç Caddyfile'ı ({{ caddy_install_text | length }} bayt) gerçek çalıştırmada yazılır."
+  when: ansible_check_mode and caddy_install_need_pkg
+
+- name: Write, validate, start
+  when: not (ansible_check_mode and caddy_install_need_pkg)
+  block:
+    - name: Sites directory (caddy_ui's block lives here)
+      ansible.builtin.file:
+        path: "{{ caddy_dir }}/sites"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Certificates readable by Caddy (this installer's certbot)
+      ansible.builtin.command: "{{ certbot_deploy_hook | default('/etc/letsencrypt/renewal-hooks/deploy/tagcess-caddy.sh') }}"
+      environment:
+        TAGCESS_NO_RELOAD: "1"
+      register: caddy_install_certperm
+      changed_when: false
+      when: "'certbot' in (install_state.installed | default([]))"
+
+    - name: Candidate
+      ansible.builtin.copy:
+        content: "{{ caddy_install_text }}"
+        dest: "{{ caddy_install_cand }}"
+        owner: root
+        group: root
+        mode: "0644"
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: The candidate passes caddy validate
+      ansible.builtin.command: "caddy validate --adapter caddyfile --config {{ caddy_install_cand }}"
+      register: caddy_install_validate
+      changed_when: false
+      failed_when: false
+      when: not ansible_check_mode
+
+    - name: Stop when the candidate fails (nothing replaced, no start or reload)
+      ansible.builtin.fail:
+        msg: "Aday Caddyfile caddy validate'ten geçmedi; {{ caddyfile_path }} değişmedi, Caddy başlatılmadı/yeniden yüklenmedi: {{ (caddy_install_validate.stderr | default('') | trim).splitlines() | last | default('') }}"
+      when: not ansible_check_mode and caddy_install_validate.rc != 0
+
+    - name: The run in --check writes no candidate and runs no validate
+      ansible.builtin.debug:
+        msg: "--check: {{ caddyfile_path }} için aday yazılıp caddy validate'ten geçirilmesi gerçek çalıştırmada yapılır; hedefte aday dosya yazılmadı."
+      when: ansible_check_mode
+
+    - name: Bootstrap Caddyfile in place
+      ansible.builtin.copy:
+        content: "{{ caddy_install_text }}"
+        dest: "{{ caddyfile_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+      register: caddy_install_written
+
+    - name: Caddy reloads a changed file
+      ansible.builtin.systemd_service:
+        name: caddy
+        state: reloaded
+      when: caddy_install_written is changed and not ansible_check_mode and not caddy_install_need_pkg
+
+    - name: Caddy restarts after the first install (the package started it with its sample file)
+      ansible.builtin.systemd_service:
+        name: caddy
+        state: restarted
+      when: caddy_install_written is changed and not ansible_check_mode and caddy_install_need_pkg
+
+    - name: Caddy enabled and running
+      ansible.builtin.systemd_service:
+        name: caddy
+        state: started
+        enabled: true
+  always:
+    - name: Remove this run's candidate (that name only)
+      ansible.builtin.file:
+        path: "{{ caddy_install_cand }}"
+        state: absent
+      changed_when: false
+      when: not ansible_check_mode
+
+- name: Installed by this installer
+  ansible.builtin.set_fact:
+    state_installed: [caddy]

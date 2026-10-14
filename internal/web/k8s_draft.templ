@@ -1,0 +1,196 @@
+package web
+
+import (
+	"strconv"
+
+	"github.com/nesiler/tagcess/internal/k8s"
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// The k8s draft screen (F4-012): save and resume one host's incomplete draft. Every value is escaped
+// by templ. Saving writes only the draft store; the page applies nothing (S-04 apply is F4-013).
+templ K8sDraftPage(v K8sDraftView, csrfToken string) {
+	@ui.PageHead(ui.H{Title: "k8s draft'ı · " + v.Host, Sub: "Yarım kalan site önerisi; kaydedip sonra devam edebilirsiniz.", Tip: "Kaydetmek hiçbir siteyi, Caddy/DNS/URI ayarını veya k8s kaynağını değiştirmez; erişim tercihi apply onayına kadar yalnız draft'tadır.", Crumbs: []ui.Crumb{{Label: "k8s discovery", Href: "/k8s/discovery"}, {Label: v.Host}}})
+	if v.Error != "" {
+		@ui.Callout(ui.N{Tone: ui.Err}) {
+			{ v.Error }
+		}
+	}
+	if v.Notice != "" {
+		@ui.Callout(ui.N{Tone: ui.Info}) {
+			{ v.Notice }
+		}
+	}
+	if v.PublicNotChecked {
+		<div data-public-check="not-performed">
+			@ui.Callout(ui.N{Tone: ui.Off}) {
+				Public listener tanımlı değil; internete açıklık kontrolü yapılmadı (güvenli sonuç değildir).
+			}
+		</div>
+	}
+	<div data-source={ v.Source }>
+		@ui.Card(ui.C{Title: "Kaynak", Desc: "Draft'ın hangi k8s taramasından ve bağlantı ayarından hazırlandığı.", Right: draftSourceState(v.Source)}) {
+			@ui.KV() {
+				<dt>Draft</dt>
+				<dd>
+					if v.Saved {
+						tarama #{ strconv.FormatInt(v.Provenance.SnapshotID, 10) }
+						· ayar <code>{ v.Provenance.ProfileVersion }</code>
+						if !v.Provenance.ObservedAt.IsZero() {
+							· <time datetime={ fmtUTC(v.Provenance.ObservedAt) }>{ fmtUTC(v.Provenance.ObservedAt) }</time>
+						}
+					} else {
+						henüz kaydedilmedi; öneri güncel discovery'den
+					}
+				</dd>
+				if v.Current != nil {
+					<dt>Güncel discovery</dt>
+					<dd>
+						tarama #{ strconv.FormatInt(v.Current.ID, 10) }
+						· ayar <code>{ v.Current.ProfileVersion }</code>
+						· <time datetime={ fmtUTC(v.Current.ObservedAt) }>{ fmtUTC(v.Current.ObservedAt) }</time>
+					</dd>
+				}
+				if v.LastAttempt != nil {
+					<dt>Son deneme</dt>
+					<dd>
+						<time datetime={ fmtUTC(v.LastAttempt.AttemptedAt) }>{ fmtUTC(v.LastAttempt.AttemptedAt) }</time>
+						· <span data-outcome={ v.LastAttempt.Outcome }>{ snapshotOutcomeLabel(v.LastAttempt.Outcome) }</span>
+						if v.LastAttempt.Class != "" {
+							· <span data-failure={ v.LastAttempt.Class }>{ k8sClassLabel(v.LastAttempt.Class) }</span>
+						}
+						if v.LastAttempt.Message != "" {
+							· { v.LastAttempt.Message }
+						}
+					</dd>
+				}
+			}
+			if v.Source != "current" {
+				@ui.Callout(ui.N{Tone: draftSourceTone(v.Source)}) {
+					Kaynak güncel değil:
+					<ul>
+						for _, r := range v.StaleReason {
+							<li>{ r }</li>
+						}
+						if v.Source == "unknown" && len(v.StaleReason) == 0 {
+							<li>güncel discovery okunamadı</li>
+						}
+					</ul>
+					Kullanıcı seçimleriniz korunur; kaynak yalnız aşağıdaki açık yenileme ile güncellenir.
+				}
+			}
+			if !v.Diff.Empty() {
+				<p>Route farkları:</p>
+				<ul>
+					for _, r := range v.Diff.Added {
+						<li>yeni route: <code>{ draftRouteDiffLabel(r) }</code></li>
+					}
+					for _, r := range v.Diff.Changed {
+						<li>değişen route: <code>{ draftRouteDiffLabel(r) }</code></li>
+					}
+					for _, r := range v.Diff.Removed {
+						<li>kalkan route: <code>{ draftRouteDiffLabel(r) }</code></li>
+					}
+				</ul>
+			}
+			if v.Saved && v.Source != "unknown" && v.Current != nil && (v.Source == "stale" || !v.Diff.Empty()) {
+				<form method="post" action={ templ.SafeURL("/k8s/drafts/" + v.Host + "/refresh") }>
+					@CSRFField(csrfToken)
+					@ui.Btn(ui.B{Small: true, Icon: "sync"}) {
+						Kaynağı yenile (seçimler korunur)
+					}
+				</form>
+			}
+		}
+	</div>
+	if v.Draft.ReviewState == k8s.ReviewStateNeeded {
+		@ui.Card(ui.C{Title: "İnceleme isteği"}) {
+			<p data-reason={ v.Draft.ReviewReason }>
+				Bu host için inceleme isteği sürüyor: { reviewReasonLabel(v.Draft.ReviewReason) }.
+				Draft incelenmeden tamamlanmış sayılmaz; beklemek erişimi değiştirmez.
+			</p>
+			if len(v.Draft.ReviewCandidates) > 0 {
+				<p>Aday hedefler:</p>
+				<ul>
+					for _, cand := range v.Draft.ReviewCandidates {
+						<li><code>{ cand }</code></li>
+					}
+				</ul>
+			}
+			<p>Varsayılan hedef: bilinmiyor (kanıtlanmış controller kazananı yok).</p>
+		}
+	}
+	@ui.Card(ui.C{Title: "Draft"}) {
+		@ui.KV() {
+			<dt>Durum</dt>
+			<dd>
+				if v.Complete {
+					@ui.StatusText(ui.Info, "tamamlanabilir", "")
+				} else {
+					@ui.StatusText(ui.Warn, "tamamlanmadı", "")
+				}
+			</dd>
+			<dt>Hedef</dt>
+			<dd><code>{ v.Draft.Target }</code></dd>
+			<dt>Sertifika</dt>
+			<dd><code>{ v.Draft.Cert }</code></dd>
+		}
+		if v.Draft.AccessChoice == k8s.AccessChoiceRole && len(v.Draft.Roles) == 0 {
+			@ui.Callout(ui.N{Tone: ui.Warn}) {
+				Seçili roller için en az bir rol gerekli; boş liste açık erişime çevrilmez.
+			}
+		}
+		<form method="post" action={ templ.SafeURL("/k8s/drafts/" + v.Host) }>
+			@CSRFField(csrfToken)
+			@ui.Field(ui.F{Label: "Erişim"}) {
+				@ui.RadioGroup(ui.RG{Name: "access_choice", Selected: v.Draft.AccessChoice, Options: []ui.Radio{
+					{ID: "ac-none", Value: "", Label: "seçilmedi"},
+					{ID: "ac-open", Value: k8s.AccessChoiceOpen, Label: "tüm VPN kullanıcıları", Hint: "Rolsüz site (neden: intentional); roller temizlenir."},
+					{ID: "ac-role", Value: k8s.AccessChoiceRole, Label: "seçili roller", Hint: "en az bir rol gerekir"},
+				}})
+			}
+			@ui.Field(ui.F{Label: "Roller", For: "roles", Help: "Rol adını yazıp Enter'a basın; rol apply anında Zitadel'de doğrulanır."}) {
+				@ui.MultiSelect(ui.MS{ID: "roles", Name: "roles", Values: v.Draft.Roles, Options: v.KnownRoles, Placeholder: "Rol seçin ya da yazın"})
+			}
+			@ui.Field(ui.F{Label: "Not", For: "note"}) {
+				@ui.Textarea(ui.TA{ID: "note", Name: "note", Rows: 2, Value: v.Draft.Note})
+			}
+			@ui.SaveBar("Kaydetmek yalnız draft'ı saklar; erişim değişmez.") {
+				@ui.Btn(ui.B{Href: "/k8s/discovery"}) {
+					Geri
+				}
+				@ui.Btn(ui.B{Kind: ui.Primary}) {
+					Draft'ı kaydet
+				}
+			}
+		</form>
+	}
+	@ui.Card(ui.C{Title: "Route'lar", Desc: "Bu host için bulunan Ingress route'ları."}) {
+		if len(v.Draft.Routes) == 0 {
+			<p>Route kanıtı yok.</p>
+		} else {
+			<ul>
+				for _, r := range v.Draft.Routes {
+					<li><code>{ routeProvenance(r) }</code></li>
+				}
+			</ul>
+		}
+	}
+}
+
+// draftSourceState is the source state at the right of the "Kaynak" title.
+templ draftSourceState(source string) {
+	if source == "current" {
+		@ui.StatusText(ui.OK, "güncel", "")
+	} else {
+		@ui.StatusText(draftSourceTone(source), "güncel değil", "")
+	}
+}
+
+// draftSourceTone distinguishes stale evidence from unavailable evidence.
+func draftSourceTone(source string) ui.Tone {
+	if source == "stale" {
+		return ui.Stale
+	}
+	return ui.Off
+}

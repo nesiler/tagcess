@@ -1,0 +1,19 @@
+# Adopt-shaped oauth2-proxy unit. Stopped and disabled in the adopt target, as in the
+# existing installation since 2026-09-30.
+[Unit]
+Description=oauth2-proxy (Zitadel role check for Caddy forward_auth)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=oauth2-proxy
+Group=oauth2-proxy
+ExecStart=/usr/local/bin/oauth2-proxy --config=/etc/oauth2-proxy/oauth2-proxy.cfg
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

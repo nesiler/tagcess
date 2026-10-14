@@ -1,0 +1,74 @@
+# Postgres for the lab Zitadel: a small own StatefulSet (the bitnami chart's old images are gone).
+# Same pinned image as test/compose/compose.yaml. The password comes from Secret `zitadel-db`,
+# created by lab-up at runtime; nothing secret lives in this file.
+apiVersion: v1
+kind: Service
+metadata:
+  name: zitadel-db
+  namespace: tagcess-lab
+spec:
+  clusterIP: None
+  selector:
+    app: zitadel-db
+  ports:
+    - name: postgres
+      port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: zitadel-db
+  namespace: tagcess-lab
+spec:
+  serviceName: zitadel-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zitadel-db
+  template:
+    metadata:
+      labels:
+        app: zitadel-db
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16.13-alpine
+          env:
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_DB
+              value: zitadel
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: zitadel-db
+                  key: password
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "zitadel"]
+            periodSeconds: 3
+            failureThreshold: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 2Gi

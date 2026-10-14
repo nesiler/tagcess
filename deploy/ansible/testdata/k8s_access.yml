@@ -1,0 +1,17 @@
+# Test helper (F6-007): the k8s_access role alone, then its guide file.
+- name: K8s access alone
+  hosts: vpn
+  gather_facts: false
+  roles:
+    - role: config
+      tags: [always]
+  tasks:
+    - name: K8s access
+      ansible.builtin.import_role:
+        name: k8s_access
+    - name: Guide
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: k8s_access
+        guide_items: "{{ guide_items_k8s_access | default([]) }}"

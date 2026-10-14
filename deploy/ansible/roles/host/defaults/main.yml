@@ -1,0 +1,15 @@
+# host (F6-005): tagcess's own directories, tmpfiles entry, secret files and the MagicDNS file seed
+# (architecture §8 mount table; deploy/f5/prep-host.sh). Modes are prep-host.sh's, zitadel-key.json 0400 (ADR 0009).
+host_dirs:
+  - {path: /var/lib/tagcess, owner: "{{ tagcess_uid }}", group: "{{ tagcess_uid }}", mode: "0711"}
+  - {path: /var/lib/tagcess/dns, owner: "{{ tagcess_uid }}", group: headscale, mode: "2750"}
+  - {path: /var/lib/tagcess-credentials, owner: "{{ tagcess_uid }}", group: "{{ tagcess_uid }}", mode: "0700"}
+  - {path: /run/tagcess, owner: "{{ tagcess_uid }}", group: caddy, mode: "0750"}
+  - {path: /etc/tagcess, owner: root, group: "{{ tagcess_uid }}", mode: "0750"}
+  - {path: /etc/tagcess/secrets, owner: root, group: "{{ tagcess_uid }}", mode: "0750"}
+# secret_files key -> host file. required: the phase stops before any change when the controller file is missing.
+host_secret_files:
+  - {key: webhook_signing_key, dest: /etc/tagcess/secrets/webhook-signing-key, owner: root, group: "{{ tagcess_uid }}", mode: "0640", required: true}
+  - {key: groups_signing_key, dest: /etc/tagcess/secrets/groups-signing-key, owner: root, group: "{{ tagcess_uid }}", mode: "0640", required: false}
+  - {key: zitadel_key, dest: /etc/tagcess/secrets/zitadel-key.json, owner: "{{ tagcess_uid }}", group: "{{ tagcess_uid }}", mode: "0400", required: true}
+host_docker_packages: [docker.io, docker-compose-v2]

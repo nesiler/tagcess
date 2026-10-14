@@ -1,0 +1,36 @@
+# The site seed (controller file) must match tagcess's seed schema before anything is copied (G-01.1 [K]: the seed
+# is a hand-made JSON; no Caddyfile reader). tagcess re-validates every record when it loads the seed.
+- name: Read the site seed (controller)
+  ansible.builtin.set_fact:
+    app_seed: "{{ lookup('ansible.builtin.file', site_seed_file | expanduser) | from_json }}"
+
+- name: Seed schema problems
+  ansible.builtin.set_fact:
+    app_seed_problems: >-
+      {%- set p = [] -%}
+      {%- if app_seed is not mapping or app_seed.keys() | list != ['sites'] -%}
+        {%- set _ = p.append('top level must be exactly {"sites": [...]}') -%}
+      {%- elif app_seed.sites is not sequence or app_seed.sites is string or app_seed.sites | length == 0 -%}
+        {%- set _ = p.append('sites must be a non-empty list') -%}
+      {%- else -%}
+        {%- for s in app_seed.sites -%}
+          {%- set n = loop.index -%}
+          {%- if s is not mapping -%}{%- set _ = p.append('site ' ~ n ~ ': not an object') -%}{%- else -%}
+          {%- set unknown = s.keys() | reject('in', app_seed_keys) | list -%}
+          {%- if unknown -%}{%- set _ = p.append('site ' ~ n ~ ': unknown fields ' ~ (unknown | join(','))) -%}{%- endif -%}
+          {%- if s.hosts is not defined or s.hosts is string or s.hosts | length == 0 -%}{%- set _ = p.append('site ' ~ n ~ ': hosts missing') -%}{%- endif -%}
+          {%- if s.kind | default('') not in ['role', 'open', 'system'] -%}{%- set _ = p.append('site ' ~ n ~ ': kind must be role, open or system') -%}{%- endif -%}
+          {%- if s.kind | default('') == 'role' and (s.roles | default([])) | length == 0 -%}{%- set _ = p.append('site ' ~ n ~ ': a role site needs roles') -%}{%- endif -%}
+          {%- if s.kind | default('') == 'open' and s.open_reason | default('') not in ['intentional', 'transition'] -%}{%- set _ = p.append('site ' ~ n ~ ': an open site needs open_reason intentional or transition') -%}{%- endif -%}
+          {%- if s.kind | default('') == 'system' and s.system_template | default('') not in ['zitadel', 'headscale', 'wireguard_ui', 'tagcess'] -%}{%- set _ = p.append('site ' ~ n ~ ': unknown system_template') -%}{%- endif -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endif -%}
+      {{ p }}
+
+- name: The seed matches tagcess's seed schema (checked before anything is copied)
+  ansible.builtin.assert:
+    that:
+      - app_seed_problems | length == 0
+    fail_msg: "Seed dosyası tagcess şemasına uymuyor ({{ site_seed_file }}): {{ app_seed_problems | join('; ') }}; host'a hiçbir şey kopyalanmadı"
+    quiet: true

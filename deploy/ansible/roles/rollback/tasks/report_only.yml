@@ -1,0 +1,13 @@
+# Fresh install phases and Zitadel: nothing is removed; the report says what stays.
+- name: "Rollback: not removed ({{ rollback_phase }})"
+  ansible.builtin.debug:
+    msg: >-
+      {{ rollback_phase }}: {{ rollback_report_only[rollback_phase] }} kaldırılmadı{{
+         ' (Zitadel nesnelerini gerekirse konsoldan elle sil).' if rollback_phase == 'zitadel_seed'
+         else "; tamamen kaldırmak host'u kapatmaktır." }}
+  when: install_state.phases[rollback_phase] is defined
+
+- name: "Rollback: report line ({{ rollback_phase }})"
+  ansible.builtin.set_fact:
+    rollback_not_removed: "{{ rollback_not_removed | default([]) + [rollback_phase ~ ': ' ~ rollback_report_only[rollback_phase] ~ \" kaldırılmadı, host'u kapat\"] }}"
+  when: install_state.phases[rollback_phase] is defined and rollback_phase != 'zitadel_seed'

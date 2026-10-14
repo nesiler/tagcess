@@ -1,0 +1,36 @@
+{
+  // Ağ katmanı. Hangi rolün hangi servise girdiği burada değil, Caddy + oauth2-proxy'de (Zitadel rolleri).
+  // Gruplar Zitadel "vpn" projesindeki rollerin elle kopyası; sync servisi gelince otomatik olacak.
+  // Cihazlar arası erişim kapalı: yalnız aşağıdaki kurallar geçerli.
+  "groups": {
+    "group:devops": [
+      "user01@example.com",
+      "user02@example.com",
+      "user03@example.com"
+    ],
+    "group:developer": [
+      "user04@example.com",
+      "user05@example.com",
+      "user06@example.com",
+      "user07@example.com",
+      "user08@example.com",
+      "user09@example.com",
+      "user10@example.com"
+    ],
+    "group:standart": []
+  },
+  "tagOwners": {
+    // vpn-host: Caddy (iç servislerin giriş kapısı), Headscale
+    "tag:vpn-server": [],
+    // k8s-host: k8s node'u
+    "tag:k8s": []
+  },
+  "acls": [
+    // Giriş yapmış herkes iç servislere yalnız Caddy üzerinden ulaşır
+    { "action": "accept", "src": ["autogroup:member"], "dst": ["tag:vpn-server:80,443"] },
+    // Caddy → k8s: yalnız Traefik iç kapısı (internal, 8443)
+    { "action": "accept", "src": ["tag:vpn-server"], "dst": ["tag:k8s:8443"] },
+    // SSH: yalnız devops, iki sunucuya
+    { "action": "accept", "src": ["group:devops"], "dst": ["tag:vpn-server:22", "tag:k8s:22"] }
+  ]
+}

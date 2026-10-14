@@ -1,0 +1,47 @@
+[
+  {
+    "name": "auth.example.com",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "errors.example.com",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "gitlab.internal.example.org",
+    "type": "A",
+    "value": "100.64.0.5"
+  },
+  {
+    "name": "grafana.example.com",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "hs.example.com",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "monitor.example.com",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "tagcess.example.com",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "wg.example.com",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "wiki.example.net",
+    "type": "AAAA",
+    "value": "fd7a:115c:a1e0::1"
+  }
+]

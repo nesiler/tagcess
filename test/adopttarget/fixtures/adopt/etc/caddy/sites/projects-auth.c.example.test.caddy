@@ -1,0 +1,3 @@
+projects-auth.c.example.test {
+	import vpn_only c.example.test
+}

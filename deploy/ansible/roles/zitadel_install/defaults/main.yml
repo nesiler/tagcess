@@ -1,0 +1,24 @@
+# zitadel_install (F6-012): fresh lab only. Installs Zitadel into an existing cluster with the lab's own files
+# (test/lab: namespace, quota, Postgres, values; ADR 0014) through helm, on the controller with an explicit kube
+# context, then puts the bootstrap PAT into a 0600 file. Runs only when install_mode is fresh AND
+# zitadel_install_enabled AND Zitadel's discovery does not answer; never for an existing installation.
+zitadel_lab_dir: "{{ tagcess_repo_root }}/test/lab"   # the single source; no value is copied into the role
+zitadel_chart: zitadel/zitadel
+zitadel_chart_repo: https://charts.zitadel.com
+zitadel_chart_version: "10.0.6"         # = test/lab/up.sh (TestZitadelInstall_UsesLabValuesSingleSource)
+zitadel_bootstrap_credential_name: tagcess-seed-pat    # = test/lab/lib.sh LAB_PAT_SECRET (the chart writes <machine user>-pat)
+zitadel_tls_copy_from: ""           # "<namespace>/<name>" of a TLS Secret copied in for the Ingress (lab wildcard)
+zitadel_ingress_tls_name: tagcess-zitadel-tls # the Ingress's secret name in the values
+# The lab Zitadel host (ExternalDomain and Ingress host). The values file names the placeholder; set your own host in
+# the environment's vars.yml and the role installs a copy of the values with it (test/lab/lib.sh does the same).
+zitadel_values_placeholder_host: tagcess-zitadel.lab.example.com
+zitadel_lab_host: "{{ zitadel_values_placeholder_host }}"
+# A context containing any of these words (case-insensitive) is refused before helm/kubectl run. Set your own
+# production context names in the environment's vars.yml; install.sh refuses the same list (same default).
+zitadel_forbidden_context_patterns: [prod, production]
+# The positive check (as test/lab's lab_guard): the context's nodes must be exactly these (e.g. [lab-k8s]); empty stops.
+zitadel_expected_nodes: []
+zitadel_kubectl: kubectl
+zitadel_helm: helm
+zitadel_wait_timeout: 15m
+zitadel_install_pat_path: "{{ install_env_dir }}/secrets/zitadel-admin.pat"

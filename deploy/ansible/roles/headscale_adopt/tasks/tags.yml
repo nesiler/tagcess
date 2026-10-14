@@ -1,0 +1,78 @@
+# hs_tags (F6-007): verifies that the VPN node carries tag:vpn-server and (when named) the k8s node tag:k8s. A missing
+# tag is only reported, with the command; it is applied only with confirm_hs_tags=yes, and only the missing tag is
+# added (the node's other tags stay). What was added is recorded for rollback.
+- name: The VPN node's name
+  ansible.builtin.command: tailscale status --json
+  register: hs_tags_self
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: hs_vpn_node == ''
+
+- name: Nodes to check
+  ansible.builtin.set_fact:
+    hs_tags_expected: >-
+      {%- set e = [] -%}
+      {%- set vpn = hs_vpn_node or ((hs_tags_self.stdout | default('{}') | from_json).Self | default({})).HostName | default('') -%}
+      {%- if vpn -%}{%- set _ = e.append({'node': vpn, 'tag': hs_vpn_tag}) -%}{%- endif -%}
+      {%- if hs_k8s_node -%}{%- set _ = e.append({'node': hs_k8s_node, 'tag': hs_k8s_tag}) -%}{%- endif -%}
+      {{ e }}
+
+- name: Headscale nodes
+  ansible.builtin.command: headscale nodes list -o json
+  register: hs_tags_nodes
+  changed_when: false
+  check_mode: false
+
+- name: Tag report
+  ansible.builtin.set_fact:
+    hs_tags_report: >-
+      {%- set nodes = hs_tags_nodes.stdout | from_json -%}
+      {%- set r = [] -%}
+      {%- for e in hs_tags_expected -%}
+        {%- set n = nodes | selectattr('given_name', 'equalto', e.node) | list or nodes | selectattr('name', 'equalto', e.node) | list -%}
+        {%- if n -%}
+          {%- set _ = r.append({'node': e.node, 'id': n[0].id, 'tag': e.tag, 'tags': n[0].tags | default([]), 'ok': e.tag in (n[0].tags | default([]))}) -%}
+        {%- else -%}
+          {%- set _ = r.append({'node': e.node, 'id': none, 'tag': e.tag, 'tags': [], 'ok': false, 'absent': true}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ r }}
+
+- name: Tags
+  ansible.builtin.debug:
+    msg: "{{ hs_tags_report | map(attribute='node') | zip(hs_tags_report | map(attribute='tag'), hs_tags_report | map(attribute='ok')) | map('join', ' ') | list }}"
+
+- name: Missing tags wait for confirmation
+  ansible.builtin.debug:
+    msg: "hs_tags: eksik etiketler yalnız raporlandı; uygulama onay bekliyor (-e confirm_hs_tags=yes)"
+  when: hs_tags_report | rejectattr('ok') | list | length > 0 and (confirm_hs_tags | default('') | string) != 'yes'
+
+- name: Backup before the first tag change (the Headscale database holds the tags)
+  ansible.builtin.include_role:
+    name: backup
+  vars:
+    backup_phase: hs_tags
+  when: (confirm_hs_tags | default('') | string) == 'yes' and (hs_tags_report | rejectattr('ok') | selectattr('id') | list | length) > 0
+
+- name: Add a missing tag (confirmed)
+  ansible.builtin.command: "headscale nodes tag -i {{ item.id }} -t {{ (item.tags + [item.tag]) | unique | join(',') }}"
+  loop: "{{ hs_tags_report | rejectattr('ok') | selectattr('id') | list }}"
+  loop_control:
+    label: "{{ item.node }} +{{ item.tag }}"
+  when: (confirm_hs_tags | default('') | string) == 'yes' and not ansible_check_mode
+  changed_when: true
+
+- name: Added tags (state, for rollback)
+  ansible.builtin.set_fact:
+    state_details:
+      added_tags: "{{ hs_tags_report | rejectattr('ok') | selectattr('id') | map(attribute='node') | zip(hs_tags_report | rejectattr('ok') | selectattr('id') | map(attribute='tag')) | list }}"
+  when: (confirm_hs_tags | default('') | string) == 'yes'
+
+- name: Guide items of hs_tags
+  ansible.builtin.set_fact:
+    guide_items_hs_tags: >-
+      {%- set missing = hs_tags_report | rejectattr('ok') | list -%}
+      {{ [] if not missing or (confirm_hs_tags | default('') | string) == 'yes' else [{'id': 'hs-tags-missing', 'title': 'Sunucu etiketleri eksik',
+          'steps': ['Eksik: ' ~ (missing | map(attribute='node') | zip(missing | map(attribute='tag')) | map('join', ' → ') | join(', ')) ~ '.',
+                    'Uygulamak için install.sh hs_tags fazında evet yaz (-e confirm_hs_tags=yes) ya da elle: headscale nodes tag -i <id> -t <mevcut etiketler>,<etiket>.']}] }}

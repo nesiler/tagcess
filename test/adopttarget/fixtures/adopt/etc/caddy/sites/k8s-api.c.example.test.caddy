@@ -1,0 +1,5 @@
+k8s-api.c.example.test {
+	# Cluster API token'ları
+	@api header Authorization *
+	import vpn_site_api c.example.test devops,developer
+}

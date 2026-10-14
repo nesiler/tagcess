@@ -1,0 +1,232 @@
+{
+	email admin@example.invalid
+}
+
+# --- Ortak parçalar ---------------------------------------------------------
+
+# k8s (k8s-host) Traefik'e Tailscale üzerinden
+(k8s) {
+	reverse_proxy https://100.64.0.5 {
+		header_up Host {http.request.host}
+		header_up X-Forwarded-Host {http.request.host}
+		header_up X-Forwarded-Proto https
+		header_up X-Forwarded-Port 443
+
+		transport http {
+			tls_insecure_skip_verify
+		}
+	}
+}
+
+# İç site: Tailscale'den gelene Zitadel rol kontrolü, diğerlerine (WireGuard) bugünkü gibi serbest.
+# Kullanım: import vpn_site <sertifika-adı> <rol1,rol2,...>
+(vpn_site) {
+	tls /etc/letsencrypt/live/{args[0]}/fullchain.pem /etc/letsencrypt/live/{args[0]}/privkey.pem
+
+	@tailnet remote_ip 100.64.0.0/10
+	handle @tailnet {
+		handle /oauth2/* {
+			reverse_proxy 127.0.0.1:4180
+		}
+		handle {
+			forward_auth 127.0.0.1:4180 {
+				uri /oauth2/auth?allowed_groups={args[1]}
+				@giris_yok status 401
+				handle_response @giris_yok {
+					redir * /oauth2/start?rd={scheme}://{host}{uri}
+				}
+			}
+			import k8s
+		}
+	}
+
+	handle {
+		import k8s
+	}
+}
+
+# vpn_site ile aynı; ek olarak @api'ye uyan istekler (makine/API) rol kontrolüne girmez,
+# uygulamanın kendi token kontrolüne gider. Kullanım: sitede @api tanımla, sonra
+# import vpn_site_api <sertifika-adı> <rol1,rol2,...>
+(vpn_site_api) {
+	tls /etc/letsencrypt/live/{args[0]}/fullchain.pem /etc/letsencrypt/live/{args[0]}/privkey.pem
+
+	handle @api {
+		import k8s
+	}
+
+	@tailnet remote_ip 100.64.0.0/10
+	handle @tailnet {
+		handle /oauth2/* {
+			reverse_proxy 127.0.0.1:4180
+		}
+		handle {
+			forward_auth 127.0.0.1:4180 {
+				uri /oauth2/auth?allowed_groups={args[1]}
+				@giris_yok status 401
+				handle_response @giris_yok {
+					redir * /oauth2/start?rd={scheme}://{host}{uri}
+				}
+			}
+			import k8s
+		}
+	}
+
+	handle {
+		import k8s
+	}
+}
+
+# --- Rol kontrollü iç siteler (site → roller) --------------------------------
+
+monitor.example.com {
+	import vpn_site example.com devops,developer
+}
+
+dbadmin.example.com {
+	import vpn_site example.com devops,developer
+}
+
+dbmetrics.example.com {
+	import vpn_site example.com devops,developer
+}
+
+partner-api.example.com {
+	import vpn_site example.com devops,developer
+}
+
+k8s-api.example.com {
+	# Cluster API token'ları
+	@api header Authorization *
+	import vpn_site_api example.com devops,developer
+}
+
+errors.example.com {
+	# Hata izleyici: SDK'ların hata gönderdiği yollar ve API token'ları
+	@api expression `header({'Authorization': '*'}) || path_regexp('^/api/[0-9]+/(envelope|store|security)/')`
+	import vpn_site_api example.com devops,developer
+}
+
+docs.example.com {
+	# Docs API
+	@api header Authorization *
+	import vpn_site_api example.com devops,developer,standart
+}
+
+tickets.example.com {
+	# Ticket API
+	@api expression `header({'Authorization': '*'}) || header({'X-Tracker-Api-Key': '*'})`
+	import vpn_site_api example.com devops,developer,standart
+}
+
+projects.example.com {
+	# /setup slash redirect problemi
+	redir /setup https://projects.example.com/setup/ 308
+
+	# Project API
+	@api expression `header({'Authorization': '*'}) || header({'X-Api-Key': '*'})`
+	import vpn_site_api example.com devops,developer,standart
+}
+
+blog.internal.example.org {
+	import vpn_site internal.example.org devops,developer,standart
+}
+
+dashboard.internal.example.org {
+	import vpn_site internal.example.org devops,developer,standart
+}
+
+dashboard-staging.internal.example.org {
+	import vpn_site internal.example.org devops,developer,standart
+}
+
+issues.internal.example.org {
+	import vpn_site internal.example.org devops,developer,standart
+}
+
+blog-staging.internal.example.org {
+	import vpn_site internal.example.org devops,developer,standart
+}
+
+store.internal.example.org {
+	import vpn_site internal.example.org devops,developer,standart
+}
+
+sandbox.example.net {
+	import vpn_site example.net devops,developer,standart
+}
+
+# Zitadel: dışarıya yalnız giriş akışı açık. Konsol ve API yalnız VPN'den
+# (Tailscale + WireGuard) ve kendi sunucularımızdan (vpn-host, k8s-host).
+auth.example.com {
+	tls /etc/letsencrypt/live/example.com/fullchain.pem /etc/letsencrypt/live/example.com/privkey.pem
+
+	@tailnet remote_ip 100.64.0.0/10
+	@serbest remote_ip 198.51.100.0/24 127.0.0.1/32 ::1/128 192.0.2.10/32 2001:db8:10::/64 192.0.2.20/32 2001:db8:20::/64
+	handle @tailnet {
+		import k8s
+	}
+	handle @serbest {
+		import k8s
+	}
+
+	@giris path /.well-known/* /oauth/v2/* /oidc/v1/* /ui/v2/login /ui/v2/login/* /ui/login /ui/login/* /assets/v1/*
+	handle @giris {
+		import k8s
+	}
+
+	handle {
+		respond "Forbidden" 403
+	}
+}
+
+vpn.example.com {
+	reverse_proxy [::1]:5000
+}
+
+projects-auth.example.com,
+storage-api.example.com {
+
+
+	tls /etc/letsencrypt/live/example.com/fullchain.pem /etc/letsencrypt/live/example.com/privkey.pem
+
+	reverse_proxy https://100.64.0.5 {
+		header_up Host {http.request.host}
+		header_up X-Forwarded-Host {http.request.host}
+		header_up X-Forwarded-Proto https
+		header_up X-Forwarded-Port 443
+
+		transport http {
+			tls_insecure_skip_verify
+		}
+	}
+}
+
+# k8s'te Ingress'i olmayan adlar (şimdilik bırakıldı)
+store-staging.internal.example.org,
+blog-admin.internal.example.org {
+
+	tls /etc/letsencrypt/live/internal.example.org/fullchain.pem /etc/letsencrypt/live/internal.example.org/privkey.pem
+
+	reverse_proxy https://100.64.0.5 {
+		header_up Host {http.request.host}
+		header_up X-Forwarded-Host {http.request.host}
+		header_up X-Forwarded-Proto https
+		header_up X-Forwarded-Port 443
+
+		transport http {
+			tls_insecure_skip_verify
+		}
+	}
+}
+
+hs.example.com {
+	# Headplane is intentionally exposed at Headscale's supported /admin prefix.
+	handle /admin* {
+		reverse_proxy 127.0.0.1:3000
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8080
+	}
+}

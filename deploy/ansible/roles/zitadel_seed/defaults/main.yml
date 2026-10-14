@@ -1,0 +1,11 @@
+# zitadel_seed (F6-006): runs cmd/tagcess-zitadel-adopt on the controller. Plan only unless zitadel_seed_apply is
+# true (install.sh shows the plan, asks, then applies). Admin credential: a file path only.
+zitadel_seed_apply: false
+zitadel_seed_create_actions: false      # lab: true; adopt: only after install.sh's extra question
+zitadel_groups_execution: false         # lab: true; adopt: never (decision 2)
+zitadel_seed_service_user: tagcess
+zitadel_seed_roles: [devops, developer, standart]
+zitadel_seed_insecure: false
+zitadel_seed_headscale_redirect: "https://{{ hs_host }}/oidc/callback"
+zitadel_seed_oauth2_proxy_redirect: "https://{{ tagcess_host }}/oauth2/callback"
+zitadel_seed_oauth2_proxy_post_logout: "https://{{ tagcess_host }}/"

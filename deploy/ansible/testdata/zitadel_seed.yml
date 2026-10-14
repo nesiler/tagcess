@@ -1,0 +1,20 @@
+# Test helper (F6-006): the zitadel_seed role alone on the controller, then what the next phase would see.
+- name: Zitadel seed alone
+  hosts: vpn
+  gather_facts: false
+  roles:
+    - role: config
+      tags: [always]
+  tasks:
+    - name: Seed
+      ansible.builtin.import_role:
+        name: zitadel_seed
+    - name: Guide
+      ansible.builtin.import_role:
+        name: guide
+      vars:
+        guide_phase: zitadel_seed
+        guide_items: "{{ guide_items_zitadel_seed | default([]) }}"
+    - name: What the next phase sees
+      ansible.builtin.debug:
+        msg: "NEXT project={{ zitadel_project_id }} op={{ oauth2_proxy_client_id }} hs={{ headscale_oidc_client_id }} hssecret={{ secret_files.headscale_oidc_client_secret | default('-') }} webhook={{ secret_files.webhook_signing_key | default('-') }} groups={{ secret_files.groups_signing_key | default('-') }}"

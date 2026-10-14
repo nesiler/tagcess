@@ -1,0 +1,69 @@
+package web
+
+import (
+	"strconv"
+
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// The personal pre-auth key screen (F3-022, H-03): one form, the eligible users only, and the
+// warning that the key bypasses the OIDC sign-in. The result page is KeyResultPage (F3-017).
+
+// PersonalKeyPage renders the form. A refused request shows its reason above the form, which stays
+// on the page.
+templ PersonalKeyPage(view PersonalKeyView, csrfToken string) {
+	@ui.PageHead(ui.H{Title: "Kişisel pre-auth key", Sub: "Eşleşmiş, aktif ve vpn rolü olan bir kullanıcı için tek kullanımlık key."})
+	@HeadscaleTabs("keys", view.DryRun)
+	@KeysSubNav("personal")
+	@BypassWarning()
+	if view.FormError != "" {
+		@ui.Callout(ui.N{Tone: ui.Err}) {
+			Key üretilmedi; hiçbir şey yazılmadı: { view.FormError }
+		}
+	}
+	if view.Err != nil {
+		@ui.Callout(ui.N{Tone: ui.Err, Title: "Kullanıcılar okunamadı"}) {
+			key üretilemez. Neden: { view.Err.Error() }
+		}
+	} else if view.ZitadelErr != nil {
+		@ui.Callout(ui.N{Tone: ui.Err, Title: "Zitadel okunamadı"}) {
+			kullanıcıların uygunluğu doğrulanamıyor, key üretilemez. Neden: { view.ZitadelErr.Error() }
+		}
+	} else if len(view.Options) == 0 {
+		<p>Key üretilebilecek kullanıcı yok (eşleşmiş, aktif ve vpn rolü olan kullanıcı gerekir).</p>
+	} else {
+		@ui.Card(ui.C{Title: "Kişisel pre-auth key", Desc: "Key tek kullanımlıktır, tag'sizdir ve kullanıcıya bağlıdır; uygunluk üretim anında Zitadel'den yeniden okunur."}) {
+			@MaintenanceWideningGuard() {
+				<form method="post" action="/headscale/keys/personal">
+					@CSRFField(csrfToken)
+					@ui.Field(ui.F{Label: "Kullanıcı", For: "user"}) {
+						@ui.Select(ui.Sel{ID: "user", Name: "user", Attrs: templ.Attributes{"required": true}, Options: personalUserOptions(view.Options)})
+					}
+					@ui.Field(ui.F{Label: "Geçerlilik süresi", For: "expires_in", Help: "Boşsa 1 saat. Üst sınır yok; ör. 90m, 24h, 7d, 1y. Headscale süresiz key desteklemez."}) {
+						@ui.Input(ui.In{ID: "expires_in", Name: "expires_in", Placeholder: "1h", Options: []string{"1h", "24h", "7d", "30d", "90d", "1y"},
+							Pattern: personalExpiryPattern, Msg: "Süreyi sayı ve birimle yazın: 90m, 24h, 7d, 2w veya 1y."})
+					}
+					@ui.BtnRow() {
+						@ui.Btn(ui.B{Kind: ui.Primary}) {
+							Key üret
+						}
+					}
+				</form>
+			}
+		}
+	}
+}
+
+// personalExpiryPattern is the browser-side shape of the expiry (Go durations or n d/w/y); the
+// server parses it again (parseKeyExpiry).
+const personalExpiryPattern = `\s*([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+\s*|\s*[0-9]+[dwy]\s*`
+
+// personalUserOptions maps the eligible users to form options, with the empty prompt first.
+func personalUserOptions(opts []PersonalUserOption) []ui.Opt {
+	out := make([]ui.Opt, 0, len(opts)+1)
+	out = append(out, ui.Opt{Value: "", Label: "Seçin…"})
+	for _, o := range opts {
+		out = append(out, ui.Opt{Value: strconv.FormatUint(o.ID, 10), Label: o.Label})
+	}
+	return out
+}

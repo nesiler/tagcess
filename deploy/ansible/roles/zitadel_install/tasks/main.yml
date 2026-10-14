@@ -1,0 +1,198 @@
+# zitadel_install (F6-012). See defaults/main.yml. Everything runs on the controller (delegate_to localhost).
+- name: Install wanted?
+  ansible.builtin.set_fact:
+    zi_wanted: >-
+      {{ install_mode == 'fresh' and zitadel_install_enabled | bool and (preflight_probe.zitadel.status | default(0) | int) != 200 }}
+
+- name: Skipped
+  ansible.builtin.debug:
+    msg: >-
+      zitadel_install atlandı:
+      {{ 'kip adopt (mevcut Zitadel kurulmaz)' if install_mode != 'fresh'
+         else ('zitadel_install_enabled false' if not zitadel_install_enabled | bool else 'Zitadel discovery zaten yanıt veriyor') }}
+  when: not zi_wanted
+
+- name: Install on the lab cluster
+  when: zi_wanted
+  delegate_to: localhost
+  become: false
+  run_once: true
+  block:
+    - name: The kube context is set and is not production (checked before any helm/kubectl call)
+      ansible.builtin.assert:
+        that:
+          - zitadel_kube_context | trim != ''
+          - zitadel_forbidden_context_patterns | map('lower') | select('in', zitadel_kube_context | lower) | list | length == 0
+        fail_msg: "zitadel_kube_context '{{ zitadel_kube_context }}' boş ya da üretim desenine uyuyor; helm/kubectl çağrılmadı"
+        quiet: true
+
+    - name: The context's nodes (read-only)
+      ansible.builtin.command:
+        argv: ["{{ zitadel_kubectl }}", --context, "{{ zitadel_kube_context }}", get, nodes, -o, name]
+      register: zi_nodes
+      changed_when: false
+      check_mode: false
+
+    - name: The cluster is the expected lab cluster (before any write)
+      ansible.builtin.assert:
+        that:
+          - zitadel_expected_nodes | length > 0
+          - zi_nodes.stdout_lines | map('regex_replace', '^node/', '') | sort | list == zitadel_expected_nodes | sort | list
+        fail_msg: >-
+          '{{ zitadel_kube_context }}' bağlamının düğümleri ({{ zi_nodes.stdout_lines | join(', ') or '-' }})
+          zitadel_expected_nodes ({{ zitadel_expected_nodes | join(', ') or 'boş' }}) değil; lab kümesi olduğu doğrulanmadı, hiçbir şey yazılmadı
+        quiet: true
+
+    - name: Lab namespace (from test/lab/namespace.yaml)
+      ansible.builtin.set_fact:
+        zi_ns: "{{ (lookup('ansible.builtin.file', zitadel_lab_dir ~ '/namespace.yaml') | from_yaml).metadata.name }}"
+        zi_k: ["{{ zitadel_kubectl }}", --context, "{{ zitadel_kube_context }}"]
+
+    - name: Namespace, quota (test/lab)
+      ansible.builtin.command:
+        argv: "{{ zi_k + ['apply', '-f', zitadel_lab_dir ~ '/' ~ item] + ([] if item == 'namespace.yaml' else ['-n', zi_ns]) }}"
+      loop: [namespace.yaml, quota.yaml]
+      register: zi_apply
+      changed_when: "'unchanged' not in zi_apply.stdout"
+
+    - name: Generated secrets (once; an existing Secret is never replaced)
+      ansible.builtin.shell: |
+        set -eu
+        set -o pipefail
+        new_secret() {
+          if {{ zi_k | map('quote') | join(' ') }} -n {{ zi_ns | quote }} get secret "$1" >/dev/null 2>&1; then cat >/dev/null; return; fi
+          {{ zi_k | map('quote') | join(' ') }} -n {{ zi_ns | quote }} create secret generic "$1" --from-env-file=/dev/stdin >/dev/null
+          echo "created $1"
+        }
+        if {{ zi_k | map('quote') | join(' ') }} -n {{ zi_ns | quote }} get secret zitadel-db >/dev/null 2>&1; then
+          dbpw="$({{ zi_k | map('quote') | join(' ') }} -n {{ zi_ns | quote }} get secret zitadel-db -o go-template='{{ '{{' }}index .data "password"{{ '}}' }}' | base64 -d)"
+        else
+          dbpw="$(openssl rand -hex 16)"
+          printf 'password=%s\n' "$dbpw" | new_secret zitadel-db
+        fi
+        printf 'ZITADEL_DATABASE_POSTGRES_USER_PASSWORD=%s\nZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD=%s\n' "$dbpw" "$dbpw" | new_secret zitadel-db-env
+        printf 'masterkey=%s\n' "$(openssl rand -hex 16)" | new_secret zitadel-masterkey
+      args:
+        executable: /bin/bash   # set -o pipefail: dash (a Linux controller's /bin/sh) refuses it
+      register: zi_secrets
+      changed_when: "'created' in zi_secrets.stdout"
+      no_log: true
+
+    - name: Postgres (test/lab/postgres.yaml)
+      ansible.builtin.command:
+        argv: "{{ zi_k + ['-n', zi_ns, 'apply', '-f', zitadel_lab_dir ~ '/postgres.yaml'] }}"
+      register: zi_pg
+      changed_when: "'unchanged' not in zi_pg.stdout"
+
+    - name: TLS Secret for the Ingress (copied, key material only through a pipe)
+      ansible.builtin.shell: |
+        set -eu
+        set -o pipefail
+        {{ zi_k | map('quote') | join(' ') }} -n {{ zitadel_tls_copy_from.split('/')[0] | quote }} get secret {{ zitadel_tls_copy_from.split('/')[1] | quote }} -o json \
+          | python3 -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps({"apiVersion":"v1","kind":"Secret","type":"kubernetes.io/tls","metadata":{"name":sys.argv[1]},"data":{k:d["data"][k] for k in ("tls.crt","tls.key")}}))' {{ zitadel_ingress_tls_name | quote }} \
+          | {{ zi_k | map('quote') | join(' ') }} -n {{ zi_ns | quote }} apply -f -
+      args:
+        executable: /bin/bash   # set -o pipefail: dash (a Linux controller's /bin/sh) refuses it
+      register: zi_tls
+      changed_when: "'unchanged' not in zi_tls.stdout"
+      when: zitadel_tls_copy_from != ''
+      no_log: true
+
+    - name: Postgres ready
+      ansible.builtin.command:
+        argv: "{{ zi_k + ['-n', zi_ns, 'rollout', 'status', 'statefulset/zitadel-db', '--timeout=180s'] }}"
+      changed_when: false
+
+    - name: Chart repository
+      ansible.builtin.shell: |
+        {{ zitadel_helm | quote }} repo add zitadel {{ zitadel_chart_repo | quote }} >/dev/null 2>&1 || true
+        {{ zitadel_helm | quote }} repo update zitadel >/dev/null
+      changed_when: false
+
+    - name: Environment directory for the values copy
+      ansible.builtin.file:
+        path: "{{ install_env_dir }}"
+        state: directory
+        mode: "0700"
+      when: zitadel_lab_host != zitadel_values_placeholder_host
+
+    - name: Values with this environment's Zitadel host (test/lab/zitadel-values.yaml names a placeholder host)
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.file', zitadel_lab_dir ~ '/zitadel-values.yaml') | replace(zitadel_values_placeholder_host, zitadel_lab_host) }}\n"
+        dest: "{{ install_env_dir }}/zitadel-values.yaml"
+        mode: "0600"
+      when: zitadel_lab_host != zitadel_values_placeholder_host
+
+    - name: Zitadel with test/lab/zitadel-values.yaml, chart {{ zitadel_chart_version }}
+      ansible.builtin.command:
+        argv:
+          - "{{ zitadel_helm }}"
+          - --kube-context
+          - "{{ zitadel_kube_context }}"
+          - --namespace
+          - "{{ zi_ns }}"
+          - upgrade
+          - --install
+          - zitadel
+          - "{{ zitadel_chart }}"
+          - --version
+          - "{{ zitadel_chart_version }}"
+          - -f
+          - "{{ (zitadel_lab_dir ~ '/zitadel-values.yaml') if zitadel_lab_host == zitadel_values_placeholder_host else (install_env_dir ~ '/zitadel-values.yaml') }}"
+          - --wait
+          - --timeout
+          - "{{ zitadel_wait_timeout }}"
+      changed_when: true
+
+    - name: Zitadel discovery answers
+      ansible.builtin.uri:
+        url: "{{ zitadel_discovery_url }}"
+        validate_certs: "{{ zitadel_validate_certs }}"
+        status_code: 200
+      register: zi_disc
+      until: zi_disc.status == 200
+      retries: 90
+      delay: 5
+      check_mode: false
+      when: not ansible_check_mode
+
+    - name: PAT directory
+      ansible.builtin.file:
+        path: "{{ zitadel_install_pat_path | dirname }}"
+        state: directory
+        mode: "0700"
+
+    - name: Bootstrap PAT into a 0600 file (never shown)
+      ansible.builtin.shell: |
+        set -eu
+        set -o pipefail
+        umask 077
+        tmp="$(mktemp "{{ zitadel_install_pat_path }}.XXXXXX")"
+        {{ zi_k | map('quote') | join(' ') }} -n {{ zi_ns | quote }} get secret {{ zitadel_bootstrap_credential_name | quote }} \
+          -o go-template='{{ '{{' }}range $k, $v := .data{{ '}}' }}{{ '{{' }}$v{{ '}}' }}{{ '{{' }}end{{ '}}' }}' | base64 -d >"$tmp"
+        [ -s "$tmp" ] || { rm -f "$tmp"; echo "empty PAT secret" >&2; exit 1; }
+        if [ -f "{{ zitadel_install_pat_path }}" ] && cmp -s "$tmp" "{{ zitadel_install_pat_path }}"; then rm -f "$tmp"; exit 0; fi
+        mv "$tmp" "{{ zitadel_install_pat_path }}" && chmod 0600 "{{ zitadel_install_pat_path }}" && echo written
+      args:
+        executable: /bin/bash   # set -o pipefail: dash (a Linux controller's /bin/sh) refuses it
+      register: zi_pat
+      changed_when: "'written' in zi_pat.stdout"
+      when: not ansible_check_mode
+      no_log: true
+
+    - name: Later phases use the PAT file
+      ansible.builtin.set_fact:
+        zitadel_admin_pat_file: "{{ zitadel_install_pat_path }}"
+      when: zitadel_admin_key_file == ''
+
+- name: Where the administrator credential went (guide text names the place, not the variable)
+  ansible.builtin.set_fact:
+    zi_cred_location: "{{ zitadel_install_pat_path }}"
+
+- name: Guide items of zitadel_install
+  ansible.builtin.set_fact:
+    guide_items_zitadel_install: >-
+      {{ [{'id': 'zitadel-admin-pat', 'title': 'Zitadel yönetici PAT dosyası',
+           'steps': ['Lab Zitadel\'inin yönetici PAT\'i ' ~ zi_cred_location ~ ' dosyasında (0600). Repoya ve lab dışına taşıma; zitadel_seed onu kullanır.'],
+           'check': {'cmd': 'test -s ' ~ (zi_cred_location | quote)}}]
+         if zi_wanted else [] }}

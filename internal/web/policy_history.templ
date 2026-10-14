@@ -1,0 +1,142 @@
+package web
+
+import (
+	"strconv"
+
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// The policy history pages (F3-025, A-03): the revision list, one revision with its difference from
+// the live policy, and the rollback candidate. Every value is escaped by templ.
+
+func revID(id int64) string { return strconv.FormatInt(id, 10) }
+
+func revStamp(r policyRevRow) string { return r.At.UTC().Format("2006-01-02 15:04:05") }
+
+// RollbackNote is the scope note every rollback page shows.
+templ RollbackNote() {
+	@ui.Callout(ui.N{Tone: ui.Info}) {
+		{ rollbackScopeNote }
+	}
+}
+
+// RollbackLink offers "Bu sürüme dön" for an applied revision.
+templ RollbackLink(r policyRevRow) {
+	if r.CanRollback {
+		@MaintenanceWideningLink("/headscale/policy/history/"+revID(r.ID)+"/rollback", "Bu sürüme dön", ui.B{Small: true})
+	}
+}
+
+templ PolicyHistoryPage(v policyHistoryView) {
+	@ui.PageHead(ui.H{Title: "ACL / policy", Sub: "Revision geçmişi"})
+	@HeadscaleTabs("policy", v.DryRun)
+	@PolicySubNav("history")
+	if len(v.Rows) == 0 {
+		@ui.Card(ui.C{}) {
+			@ui.Empty("history", "Henüz policy revision'ı yok.", "Policy değişiklikleri ve apply sonuçları burada görünür.")
+		}
+	} else {
+		@ui.ListTable(ui.L{Label: "Policy revision'ları", Search: true}) {
+			<thead>
+				<tr><th scope="col">#</th><th scope="col">Zaman (UTC)</th><th scope="col">Actor</th><th scope="col">Kaynak</th><th scope="col">Durum</th><th scope="col">Neden</th><th scope="col" aria-label="İşlemler"></th></tr>
+			</thead>
+			<tbody>
+				for _, row := range v.Rows {
+					<tr>
+						<td><a href={ templ.SafeURL("/headscale/policy/history/" + revID(row.ID)) }>#{ revID(row.ID) }</a></td>
+						<td><time datetime={ row.At.UTC().Format("2006-01-02T15:04:05Z07:00") }>{ revStamp(row) }</time></td>
+						<td>{ row.Actor }</td>
+						<td>
+							<code>{ row.Source }</code>
+							if row.RollbackOf > 0 {
+								@ui.StatusText(ui.Info, "revision #"+revID(row.RollbackOf)+" geri yüklendi", "")
+							}
+						</td>
+						<td>@ui.Status(policyStatusTone(row.Status), row.Status)</td>
+						<td>{ row.Reason }</td>
+						@ui.Actions() {
+							@RollbackLink(row)
+						}
+					</tr>
+				}
+			</tbody>
+		}
+	}
+}
+
+templ PolicyRevisionPage(v policyRevisionView) {
+	@ui.PageHead(ui.H{Title: "ACL / policy", Sub: "Revision #" + revID(v.Row.ID), Crumbs: []ui.Crumb{{Label: "Geçmiş", Href: "/headscale/policy/history"}, {Label: "revision #" + revID(v.Row.ID)}}}) {
+		@RollbackLink(v.Row)
+	}
+	@HeadscaleTabs("policy", v.DryRun)
+	@PolicySubNav("history")
+	@ui.Card(ui.C{Title: "Revision"}) {
+		@ui.KV() {
+			<dt>Zaman (UTC)</dt>
+			<dd>{ revStamp(v.Row) }</dd>
+			<dt>Actor</dt>
+			<dd>{ v.Row.Actor }</dd>
+			<dt>Kaynak</dt>
+			<dd><code>{ v.Row.Source }</code></dd>
+			<dt>Durum</dt>
+			<dd>@ui.Status(policyStatusTone(v.Row.Status), v.Row.Status)</dd>
+			<dt>Neden</dt>
+			<dd>{ v.Row.Reason }</dd>
+			if v.Row.Detail != "" {
+				<dt>Ayrıntı</dt>
+				<dd>{ v.Row.Detail }</dd>
+			}
+			if v.Row.RollbackOf > 0 {
+				<dt>Geri alınan</dt>
+				<dd><a href={ templ.SafeURL("/headscale/policy/history/" + revID(v.Row.RollbackOf)) }>#{ revID(v.Row.RollbackOf) }</a></dd>
+			}
+		}
+	}
+	if v.Row.CanRollback {
+		@RollbackNote()
+	} else {
+		@ui.Callout(ui.N{Tone: ui.Off}) {
+			{ rollbackOnlyApplied }
+		}
+	}
+	if v.HeadscaleErr != "" {
+		@ui.Callout(ui.N{Tone: ui.Err}) {
+			<strong>Headscale okunamıyor;</strong> canlı policy ile fark gösterilemiyor. { v.HeadscaleErr }
+		}
+	} else {
+		@PolicyRawDiffPanel("Fark (ham metin): canlı policy → bu revision", v.Raw2Live)
+		@PolicySemanticDiffPanel(v.Semantic, false)
+	}
+	@ui.Card(ui.C{Title: "Ham metin (bayt bayt)"}) {
+		@ui.Code("", v.Raw)
+	}
+}
+
+// PolicyRollbackPage is the rollback candidate: the scope note, the stored text (read only), the
+// writer's preview and the approval form.
+templ PolicyRollbackPage(v policyRollbackView, csrfToken string) {
+	@ui.PageHead(ui.H{Title: "ACL / policy", Sub: "Revision #" + revID(v.Row.ID) + " sürümüne dön", Crumbs: []ui.Crumb{{Label: "Geçmiş", Href: "/headscale/policy/history"}, {Label: "revision #" + revID(v.Row.ID), Href: "/headscale/policy/history/" + revID(v.Row.ID)}, {Label: "geri alma"}}})
+	@HeadscaleTabs("policy", v.DryRun)
+	@PolicySubNav("history")
+	@ui.Callout(ui.N{Tone: ui.Info}) {
+		Bu adım hiçbir şey yazmaz. Revision'ın metni aday olarak yüklenir; gruplar bugünkü Zitadel'den, kilitli testler bugünkü ayarlardan yeniden kurulur, doğrulanır ve onayınızla yeni bir revision olarak apply edilir.
+	}
+	@RollbackNote()
+	if v.Blocked != "" {
+		@ui.Callout(ui.N{Tone: ui.Err}) {
+			{ v.Blocked }
+		}
+	}
+	@PolicyBanners(v.Page)
+	if v.Report != nil {
+		@PolicyReportPanel(*v.Report)
+	}
+	if v.Preview != nil {
+		@PolicyPreviewPanel(*v.Preview, v.Page.BaseHash, csrfToken)
+	}
+	@ui.Card(ui.C{Title: "Aday"}) {
+		@ui.Field(ui.F{Label: "Aday: revision #" + revID(v.Row.ID) + " ham metni (read-only, bayt bayt)", For: "rollback-text"}) {
+			@ui.Textarea(ui.TA{ID: "rollback-text", Value: "\n" + v.Raw, Rows: 20, Code: true, ReadOnly: true})
+		}
+	}
+}

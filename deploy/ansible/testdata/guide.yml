@@ -1,0 +1,11 @@
+# Test helper (F6-001 guide tests): runs the guide role alone with guide_phase/guide_items from -e.
+- name: Guide role alone
+  hosts: vpn
+  gather_facts: false
+  roles:
+    - role: config
+      tags: [always]
+  tasks:
+    - name: Guide
+      ansible.builtin.import_role:
+        name: guide

@@ -1,0 +1,14 @@
+# {{ guide_phase }}: elle yapılacaklar
+{% if guide_rendered | length == 0 %}
+
+Bu fazda elle yapılacak adım yok.
+{% endif %}
+{% for it in guide_rendered %}
+
+## {{ it.title }}
+Durum: {{ {'done': 'yapıldı', 'pending': 'bekliyor', 'unknown': 'bilinmiyor', 'manual': 'elle kontrol et'}[it.status] }}{% if it.blocking %} (önemli){% endif %} · `{{ it.id }}`
+
+{% for s in it.steps %}
+{{ loop.index }}. {{ s }}
+{% endfor %}
+{% endfor %}

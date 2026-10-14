@@ -1,0 +1,12 @@
+# Test helper (F6-012): the headscale_install templates rendered on the controller (golden files).
+- name: Headscale render
+  hosts: vpn
+  gather_facts: false
+  roles:
+    - role: config
+      tags: [always]
+  tasks:
+    - name: Render
+      ansible.builtin.import_role:
+        name: headscale_install
+        tasks_from: render_only.yml

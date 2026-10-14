@@ -1,0 +1,10 @@
+# Secret files already on the host that preflight stats (existence, mode, owner; never content).
+preflight_host_secret_paths:
+  - /etc/tagcess/secrets/webhook-signing-key
+  - /etc/tagcess/secrets/groups-signing-key
+  - /etc/tagcess/secrets/zitadel-key.json
+  - /etc/headscale/oidc_client_secret
+  - "{{ oauth2_proxy_dir }}/client_secret"
+  - "{{ oauth2_proxy_dir }}/cookie_secret"
+  - /etc/caddy/cf.env
+  - /etc/caddy-secrets/cf.env

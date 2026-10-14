@@ -1,0 +1,8 @@
+# hshelper (F6-005, ADR 0008/0021). The binary is a static linux build: give hshelper_binary (+ hshelper_sha256)
+# or leave it empty and the role builds it on the controller from this repo (CGO_ENABLED=0, the host's arch).
+hshelper_binary: ""
+hshelper_sha256: ""
+hshelper_request_uid: "{{ tagcess_uid }}"
+hshelper_health_url: "{{ headscale_health_url }}"
+hshelper_units: [tagcess-hshelper.path, tagcess-hshelper.service, tagcess-hshelper-boot.service]
+hshelper_stage_dir: /var/lib/tagcess-install/hshelper-stage   # not /tmp: often noexec

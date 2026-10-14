@@ -1,0 +1,9 @@
+guide_phase: ""
+guide_items: []
+# Values that look like a secret never reach a guide file (fail safe; the templates carry no secret either,
+# TestGuide_NoSecretInTemplates). Hashes (lowercase hex) are allowed: g02 shows the policy sha256.
+guide_secret_patterns:
+  - "-----BEGIN [A-Z ]*PRIVATE KEY-----"
+  - "(?i)(client_secret|cookie_secret|password|passwd|token|api_key|apikey|private_key)\\s*[:=]\\s*[^\\s<{]{8,}"
+  # A long mixed-case token that is not a path component (those follow a '/').
+  - "(?<![/A-Za-z0-9_.+-])(?=[A-Za-z0-9+_-]*[A-Z])(?=[A-Za-z0-9+_-]*[a-z])(?=[A-Za-z0-9+_-]*[0-9])[A-Za-z0-9+_-]{32,}"

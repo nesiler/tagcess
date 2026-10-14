@@ -1,0 +1,32 @@
+# headscale_install (F6-012): fresh installs the pinned .deb (sha256 checked before it is kept), writes the config and,
+# when there is none, the initial policy; both pass `headscale configtest` as candidates before they replace anything.
+# A Headscale this installer did not install is adopted untouched (adopt adds a missing one only with
+# confirm_add_missing=headscale).
+- name: Headscale here, and whose
+  ansible.builtin.set_fact:
+    hs_install_present: "{{ preflight_components.headscale | default(false) }}"
+    hs_install_owned: "{{ 'headscale' in (install_state.installed | default([])) }}"
+    hs_install_add_ok: "{{ install_mode == 'fresh' or 'headscale' in (confirm_add_missing | default('') | string).split(',') }}"
+
+- name: Existing Headscale adopted untouched
+  ansible.builtin.debug:
+    msg: "Headscale zaten kurulu ve bu araçla kurulmadı: devralındı. Paket, config ve policy'ye dokunulmadı, yeniden başlatılmadı."
+  when: hs_install_present and not hs_install_owned
+
+- name: Missing Headscale not added without confirmation (adopt)
+  ansible.builtin.debug:
+    msg: "Headscale yok ve adopt kipinde onaysız eklenmez (confirm_add_missing=headscale)."
+  when: not hs_install_present and not hs_install_owned and not hs_install_add_ok
+
+# The backup is this phase's first mutation, on every run that will write (before the package, the directories, the DNS
+# file, the OIDC secret and the config), so a rollback has the state from before whatever this run changes.
+- name: Backup before the first change
+  ansible.builtin.include_role:
+    name: backup
+  vars:
+    backup_phase: headscale_install
+  when: hs_install_owned or (not hs_install_present and hs_install_add_ok)
+
+- name: Install and configure
+  ansible.builtin.include_tasks: install.yml
+  when: hs_install_owned or (not hs_install_present and hs_install_add_ok)

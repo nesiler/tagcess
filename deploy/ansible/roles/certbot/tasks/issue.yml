@@ -1,0 +1,103 @@
+- name: Certificate names are host names (they go into paths and commands)
+  ansible.builtin.assert:
+    that:
+      - "item is match('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?([.][a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$')"
+    fail_msg: "Geçersiz sertifika adı: {{ item }}"
+    quiet: true
+  loop: "{{ cert_names }}"
+
+# The backup is this phase's first mutation, on every run (packages, credentials, hook, certificates), so a later
+# credentials change is covered as well, not only the first install.
+- name: Backup before the first change
+  ansible.builtin.include_role:
+    name: backup
+  vars:
+    backup_phase: certbot
+
+- name: certbot and the Cloudflare DNS plugin
+  ansible.builtin.apt:
+    name: "{{ certbot_packages }}"
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Mark the package as this installer's
+  ansible.builtin.include_role:
+    name: state
+    tasks_from: installed.yml
+  vars:
+    state_component: certbot
+  when: not ansible_check_mode
+
+- name: Credentials directory (outside /etc/caddy)
+  ansible.builtin.file:
+    path: "{{ certbot_credentials_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Cloudflare credentials (byte for byte, never shown)
+  ansible.builtin.copy:
+    src: "{{ secret_files.cloudflare_token | expanduser }}"
+    dest: "{{ certbot_credentials }}"
+    owner: root
+    group: root
+    mode: "0600"
+  when: (secret_files.cloudflare_token | default('')) != ''
+  no_log: true
+
+- name: A token file is needed for a real certificate
+  ansible.builtin.assert:
+    that: [certbot_test_authenticator | bool or (secret_files.cloudflare_token | default('')) != '']
+    fail_msg: "secret_files.cloudflare_token (certbot ini dosyası) yok; sertifika alınamaz"
+    quiet: true
+
+- name: Renewal hook directory
+  ansible.builtin.file:
+    path: "{{ certbot_deploy_hook | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Renewal deploy hook (Caddy keeps reading the certificates, then reloads)
+  ansible.builtin.template:
+    src: deploy-hook.sh.j2
+    dest: "{{ certbot_deploy_hook }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Certificate (Let's Encrypt DNS-01; once per name)
+  ansible.builtin.command:
+    argv: [certbot, certonly, -n, --agree-tos, -m, "{{ acme_email }}", --dns-cloudflare, --dns-cloudflare-credentials,
+           "{{ certbot_credentials }}", --dns-cloudflare-propagation-seconds, "{{ certbot_propagation_seconds }}",
+           --cert-name, "{{ item }}", -d, "{{ item }}", -d, "*.{{ item }}"]
+    creates: "/etc/letsencrypt/live/{{ item }}/fullchain.pem"
+  loop: "{{ cert_names }}"
+  when: not certbot_test_authenticator | bool
+
+- name: Certificate (TEST ONLY, self-signed in certbot's layout; once per name)
+  ansible.builtin.shell: |
+    set -eu
+    n='{{ item }}'
+    install -d -m 0755 /etc/letsencrypt/renewal
+    # The modes certbot uses: live/ and archive/ 0700, the per-name directories 0755, the key 0600.
+    install -d -m 0700 /etc/letsencrypt/live /etc/letsencrypt/archive
+    install -d -m 0755 "/etc/letsencrypt/archive/$n" "/etc/letsencrypt/live/$n"
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 90 -subj "/CN=$n" \
+      -addext "subjectAltName=DNS:$n,DNS:*.$n" \
+      -keyout "/etc/letsencrypt/archive/$n/privkey1.pem" -out "/etc/letsencrypt/archive/$n/fullchain1.pem" 2>/dev/null
+    chmod 0600 "/etc/letsencrypt/archive/$n/privkey1.pem"
+    ln -sfn "../../archive/$n/fullchain1.pem" "/etc/letsencrypt/live/$n/fullchain.pem"
+    ln -sfn "../../archive/$n/privkey1.pem" "/etc/letsencrypt/live/$n/privkey.pem"
+    printf 'version = 2.9.0\narchive_dir = /etc/letsencrypt/archive/%s\ncert = /etc/letsencrypt/live/%s/fullchain.pem\nprivkey = /etc/letsencrypt/live/%s/privkey.pem\nfullchain = /etc/letsencrypt/live/%s/fullchain.pem\n\n[renewalparams]\nauthenticator = tagcess-test\n' \
+      "$n" "$n" "$n" "$n" >"/etc/letsencrypt/renewal/$n.conf"
+  args:
+    creates: "/etc/letsencrypt/live/{{ item }}/fullchain.pem"
+  loop: "{{ cert_names }}"
+  when: certbot_test_authenticator | bool
+
+- name: Installed by this installer
+  ansible.builtin.set_fact:
+    state_installed: [certbot]

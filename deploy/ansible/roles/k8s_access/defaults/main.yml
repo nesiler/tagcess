@@ -1,0 +1,10 @@
+# k8s_access (F6-007, ADR 0030 [K], NFR-09): the read-only RBAC manifest (same source as the UI) and the commands the
+# developer runs with their own kubeconfig. The installer never applies anything to a cluster.
+k8s_namespaces: []                 # empty: the saved connection profile's namespaces (UI /k8s/setup)
+k8s_sa_namespace: tagcess
+k8s_sa_name: tagcess-reader
+k8s_sa_credential_ttl: 720h
+# How the manifest is produced on the host: the installed tagcess image reads the config and the database read-only.
+k8s_access_manifest_cmd: >-
+  docker run --rm -v {{ app_config_path | default('/etc/tagcess/config.yaml') }}:/etc/tagcess/config.yaml:ro
+  -v /var/lib/tagcess:/var/lib/tagcess:ro {{ tagcess_image }} -config /etc/tagcess/config.yaml -k8s-manifest

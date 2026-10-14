@@ -1,0 +1,156 @@
+# Roll the installer back, phase by phase, in the reverse order of group_vars/all/phases.yml (F6-008).
+#   ansible-playbook rollback.yml --tags <phase>    one phase (its own backup, from the host state)
+#   ansible-playbook rollback.yml -e confirm_remove_data=yes    everything, back to before the installer (tagcess's
+#                                                   data directories are moved into the backup directory)
+# Never removed: Headplane, WireGuard, the existing installation's certbot, and the packages the fresh phases installed (closing a
+# fresh host means deleting it). Zitadel objects are not deleted (listed for a manual step).
+- name: Roll back the tagcess installer
+  hosts: vpn
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    config_require_mode: false
+  pre_tasks:
+    - name: Settings
+      ansible.builtin.import_role:
+        name: config
+      tags: [always]
+    - name: Installer state on the host
+      ansible.builtin.import_role:
+        name: state
+        tasks_from: load
+      tags: [always]
+  tasks:
+    - name: "Rollback g02"
+      ansible.builtin.import_role:
+        name: rollback
+        tasks_from: g02
+      vars:
+        rollback_phase: g02
+      tags: [g02]
+    - name: "Rollback hs_dns_path"
+      ansible.builtin.import_role:
+        name: rollback
+        tasks_from: generic_phase
+      vars:
+        rollback_phase: hs_dns_path
+      tags: [hs_dns_path]
+    - name: "Rollback hs_hook_acl"
+      ansible.builtin.import_role:
+        name: rollback
+        tasks_from: hs_hook_acl
+      vars:
+        rollback_phase: hs_hook_acl
+      tags: [hs_hook_acl]
+    - name: "Rollback hs_tags"
+      ansible.builtin.import_role:
+        name: rollback
+        tasks_from: hs_tags
+      vars:
+        rollback_phase: hs_tags
+      tags: [hs_tags]
+    - name: "Rollback app"
+      ansible.builtin.import_role:
+        name: rollback
+        tasks_from: app
+      vars:
+        rollback_phase: app
+      tags: [app]
+    - name: "Rollback caddy_ui"
+      ansible.builtin.import_role:
+        name: rollback
+        tasks_from: caddy_ui
+      vars:
+        rollback_phase: caddy_ui
+      tags: [caddy_ui]
+    - name: "Rollback oauth2_proxy"
+      ansible.builtin.import_role:
+        name: rollback
+        tasks_from: oauth2_proxy
+      vars:
+        rollback_phase: oauth2_proxy
+      tags: [oauth2_proxy]
+    - name: "Rollback hshelper"
+      ansible.builtin.import_role:
+        name: rollback
+        tasks_from: hshelper
+      vars:
+        rollback_phase: hshelper
+      tags: [hshelper]
+    - name: "Rollback host_system"
+      ansible.builtin.import_role:
+        name: rollback
+        tasks_from: host_system
+      vars:
+        rollback_phase: host_system
+      tags: [host_system]
+    - name: "Rollback host"
+      ansible.builtin.import_role:
+        name: rollback
+        tasks_from: host
+      vars:
+        rollback_phase: host
+      tags: [host]
+    - name: "Rollback headscale_oidc"
+      ansible.builtin.import_role:
+        name: rollback
+        tasks_from: generic_phase
+      vars:
+        rollback_phase: headscale_oidc
+      tags: [headscale_oidc]
+    - name: "Rollback zitadel_seed"
+      ansible.builtin.import_role:
+        name: rollback
+        tasks_from: report_only
+      vars:
+        rollback_phase: zitadel_seed
+      tags: [zitadel_seed]
+    - name: "Rollback zitadel_install"
+      ansible.builtin.import_role:
+        name: rollback
+        tasks_from: report_only
+      vars:
+        rollback_phase: zitadel_install
+      tags: [zitadel_install]
+    - name: "Rollback tailscale_join"
+      ansible.builtin.import_role:
+        name: rollback
+        tasks_from: report_only
+      vars:
+        rollback_phase: tailscale_join
+      tags: [tailscale_join]
+    - name: "Rollback caddy_install"
+      ansible.builtin.import_role:
+        name: rollback
+        tasks_from: report_only
+      vars:
+        rollback_phase: caddy_install
+      tags: [caddy_install]
+    - name: "Rollback headscale_install"
+      ansible.builtin.import_role:
+        name: rollback
+        tasks_from: report_only
+      vars:
+        rollback_phase: headscale_install
+      tags: [headscale_install]
+    - name: "Rollback certbot"
+      ansible.builtin.import_role:
+        name: rollback
+        tasks_from: report_only
+      vars:
+        rollback_phase: certbot
+      tags: [certbot]
+  post_tasks:
+    - name: Not removed (report)
+      ansible.builtin.debug:
+        msg: "{{ rollback_not_removed | default(['-']) }}"
+      tags: [always]
+    - name: Full rollback leaves no installer state on the host (moved into the backup directory)
+      ansible.builtin.shell: |
+        set -e
+        test -d {{ install_state_dir }} || exit 0
+        dest={{ backup_root }}/installer-state-$(date -u +%Y%m%dT%H%M%SZ)
+        mv {{ install_state_dir }} "$dest"
+      changed_when: true
+      when: >-
+        'all' in ansible_run_tags and (confirm_remove_data | default('') | string) == 'yes' and not ansible_check_mode

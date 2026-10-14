@@ -1,0 +1,17 @@
+# Test helper (F6-005): app role seed check + render on the controller only.
+- name: App render
+  hosts: vpn
+  gather_facts: false
+  roles:
+    - role: config
+      tags: [always]
+  tasks:
+    - name: Seed schema
+      ansible.builtin.import_role:
+        name: app
+        tasks_from: seed.yml
+    - name: Render
+      ansible.builtin.import_role:
+        name: app
+        tasks_from: render_only.yml
+      when: app_render_dir is defined

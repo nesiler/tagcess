@@ -1,0 +1,116 @@
+# guide (F6 öneri 9 [Ö], F6-001): the manual steps of one phase, written only on the controller as
+# <install_env_dir>/guide/<phase>.md (for people) and .json (install.sh, verify). A rerun rewrites both files
+# (no duplicates). Optional read-only checks per item set its status: done / pending / unknown; a check that
+# fails never fails the phase. Nothing here touches the host, and it runs in --check too (a plan output).
+#
+# Item fields: id (stable kebab-case), title, steps (list of lines), optional phase (default guide_phase),
+# blocking (information only), check (one of: cmd = shell on the controller, host_cmd = command on the host,
+# url = GET from the controller). cmd/host_cmd: exit 0 done, 1 pending, else unknown. url: 2xx done,
+# 4xx/5xx pending, no answer unknown.
+- name: "Guide: controller checks ({{ guide_phase }})"
+  ansible.builtin.shell: "{{ item.check.cmd }}"  # noqa: command-instead-of-shell
+  loop: "{{ guide_items }}"
+  loop_control:
+    label: "{{ item.id }}"
+  when: item.check is defined and item.check.cmd is defined
+  delegate_to: localhost
+  become: false
+  register: guide_cmd_results
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: "Guide: host checks (read-only) ({{ guide_phase }})"
+  ansible.builtin.shell: "{{ item.check.host_cmd }}"  # noqa: command-instead-of-shell
+  loop: "{{ guide_items }}"
+  loop_control:
+    label: "{{ item.id }}"
+  when: item.check is defined and item.check.host_cmd is defined
+  register: guide_host_results
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: "Guide: URL checks ({{ guide_phase }})"
+  ansible.builtin.uri:
+    url: "{{ item.check.url }}"
+    method: GET
+    status_code: [-1, 200, 201, 202, 204, 301, 302, 400, 401, 403, 404, 500, 502, 503]
+    timeout: 10
+    validate_certs: "{{ item.check.validate_certs | default(true) }}"
+  loop: "{{ guide_items }}"
+  loop_control:
+    label: "{{ item.id }}"
+  when: item.check is defined and item.check.url is defined
+  delegate_to: localhost
+  become: false
+  register: guide_url_results
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: "Guide: item statuses ({{ guide_phase }})"
+  ansible.builtin.set_fact:
+    guide_rendered: >-
+      {%- set out = [] -%}
+      {%- for it in guide_items -%}
+        {%- set i = loop.index0 -%}
+        {%- set c = guide_cmd_results.results[i] if guide_cmd_results.results is defined else {} -%}
+        {%- set h = guide_host_results.results[i] if guide_host_results.results is defined else {} -%}
+        {%- set u = guide_url_results.results[i] if guide_url_results.results is defined else {} -%}
+        {%- if it.check is not defined -%}
+          {%- set st = 'manual' -%}
+        {%- elif it.check.cmd is defined or it.check.host_cmd is defined -%}
+          {%- set r = c if it.check.cmd is defined else h -%}
+          {%- set st = 'done' if r.rc | default(-1) == 0 else ('pending' if r.rc | default(-1) == 1 else 'unknown') -%}
+        {%- else -%}
+          {%- set code = u.status | default(-1) | int -%}
+          {%- set st = 'done' if 200 <= code < 300 else ('pending' if code >= 300 else 'unknown') -%}
+        {%- endif -%}
+        {%- set _ = out.append({'id': it.id, 'phase': it.phase | default(guide_phase), 'title': it.title,
+              'steps': it.steps | default([]), 'blocking': it.blocking | default(false) | bool, 'status': st}) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: "Guide: no secret-shaped value in the text ({{ guide_phase }})"
+  ansible.builtin.assert:
+    that:
+      - (guide_rendered | to_json) is not regex(item)
+    fail_msg: "guide {{ guide_phase }}: öğe metni secret'a benzeyen bir değer içeriyor; dosya yazılmadı"
+    quiet: true
+  loop: "{{ guide_secret_patterns }}"
+  loop_control:
+    label: pattern
+
+- name: "Guide: controller directory ({{ guide_phase }})"
+  ansible.builtin.file:
+    path: "{{ install_env_dir }}/guide"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  changed_when: false
+  check_mode: false
+
+- name: "Guide: JSON for install.sh and verify ({{ guide_phase }})"
+  ansible.builtin.copy:
+    content: "{{ {'phase': guide_phase, 'items': guide_rendered} | to_nice_json(indent=2) }}\n"
+    dest: "{{ install_env_dir }}/guide/{{ guide_phase }}.json"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  changed_when: false
+  check_mode: false
+
+- name: "Guide: text for people ({{ guide_phase }})"
+  ansible.builtin.template:
+    src: guide.md.j2
+    dest: "{{ install_env_dir }}/guide/{{ guide_phase }}.md"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  changed_when: false
+  check_mode: false

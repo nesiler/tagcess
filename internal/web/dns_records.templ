@@ -1,0 +1,177 @@
+package web
+
+import (
+	"strconv"
+
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// The manual MagicDNS records screens (F3-008, H-06): the /headscale/dns page with the
+// site-derived records (read-only, linked to their site) and the manual ones (edit inline, delete,
+// add), and the preview page with the dns diff and the version-bound approval. Every value is
+// escaped by templ. The page only composes internal/web/ui components (docs/ui-guide.md).
+
+// DNSRecordsPage renders the records screen. FormError carries a refused record next to the
+// forms that stay on the page.
+templ DNSRecordsPage(v dnsRecordsView, csrfToken string) {
+	@ui.PageHead(ui.H{Title: "MagicDNS kayıtları", Sub: "Site adresleri ve elle eklenen DNS kayıtları.", Tip: "Site kayıtlarından türeyen adresler burada değiştirilemez; elle eklenenler buradan yönetilir."})
+	@HeadscaleTabs("dns", v.DryRun)
+	if v.FormError != "" {
+		@ui.Callout(ui.N{Tone: ui.Err, Title: "Kayıt reddedildi; hiçbir şey yazılmadı"}) {
+			<pre><code>{ v.FormError }</code></pre>
+		}
+	}
+	@ui.Card(ui.C{Title: "Site kayıtları", Right: dnsReadonlyPill()}) {
+		if len(v.SiteRows) == 0 {
+			<p>Site kayıtlarından üretilen kayıt yok.</p>
+		} else {
+			@ui.ListTable(ui.L{Label: "Site DNS kayıtları", Search: true, In: true}) {
+				<thead>
+					<tr>
+						<th scope="col">Ad</th>
+						<th scope="col">Tür</th>
+						<th scope="col">Değer</th>
+						<th scope="col">Kaynak</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, r := range v.SiteRows {
+						<tr>
+							<td><code>{ r.Name }</code></td>
+							<td>{ r.Type }</td>
+							<td><code>{ r.Value }</code></td>
+							<td><a href={ templ.SafeURL("/sites/" + strconv.FormatInt(r.SiteID, 10) + "/edit") }>site: { r.SiteLabel }</a></td>
+						</tr>
+					}
+				</tbody>
+			}
+		}
+	}
+	@ui.Card(ui.C{Title: "Elle kayıtlar", Desc: "Tailnet dışı işaretli adreslere yalnız bu ağa route alan cihazlar ulaşabilir; diğer kullanıcılar bağlanamaz."}) {
+		if len(v.ManualRows) == 0 {
+			<p>Elle eklenmiş kayıt yok.</p>
+		} else {
+			@ui.ListTable(ui.L{Label: "Elle DNS kayıtları", In: true}) {
+				<thead>
+					<tr>
+						<th scope="col">Ad</th>
+						<th scope="col">Tür</th>
+						<th scope="col">Değer</th>
+						<th scope="col" aria-label="İşlemler"></th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, r := range v.ManualRows {
+						<tr>
+							<td><code>{ r.Name }</code></td>
+							<td>{ r.Type }</td>
+							<td>
+								<code data-manual-value="true">{ r.Value }</code>
+								if r.OffTailnet {
+									<span data-off-tailnet="true">@ui.StatusText(ui.Warn, "tailnet dışı", "")</span>
+								}
+								@ui.InlineEdit("Düzenle") {
+									@MaintenanceWideningGuard() {
+										<form method="post" action="/headscale/dns/preview">
+											@CSRFField(csrfToken)
+											@ui.HiddenFields([]ui.Hidden{{Name: "action", Value: "edit"}, {Name: "old_name", Value: r.Name}, {Name: "old_type", Value: r.Type}, {Name: "name", Value: r.Name}})
+											@ui.Input(ui.In{Name: "value", Value: r.Value, Label: "Yeni değer: " + r.Name, Required: true, Pattern: dnsIPPattern, Msg: dnsIPMsg})
+											@ui.Btn(ui.B{Small: true}) {
+												Güncelle
+											}
+										</form>
+									}
+								}
+							</td>
+							@ui.Actions() {
+								<form method="post" action="/headscale/dns/preview">
+									@CSRFField(csrfToken)
+									@ui.HiddenFields([]ui.Hidden{{Name: "action", Value: "delete"}, {Name: "name", Value: r.Name}, {Name: "type", Value: r.Type}})
+									@ui.Btn(ui.B{Small: true, Kind: ui.DangerOutline, Icon: "delete"}) {
+										Sil
+									}
+								</form>
+							}
+						</tr>
+					}
+				</tbody>
+			}
+		}
+	}
+	@ui.Card(ui.C{Title: "Kayıt ekle", Desc: "Tür adresten belirlenir (IPv4 → A, IPv6 → AAAA). Değişiklik preview ve onaydan sonra DNS dosyasına yazılır."}) {
+		@MaintenanceWideningGuard() {
+			<form method="post" action="/headscale/dns/preview">
+				@CSRFField(csrfToken)
+				@ui.HiddenFields([]ui.Hidden{{Name: "action", Value: "add"}})
+				@ui.Row() {
+					@ui.Input(ui.In{ID: "dns-name", Name: "name", Placeholder: "ad.example.com", Label: "Kayıt adı", Required: true, Pattern: dnsNamePattern, Msg: "Geçerli bir host adı girin (ör. ad.example.com)."})
+					@ui.Input(ui.In{ID: "dns-value", Name: "value", Placeholder: "100.64.0.5 veya fd7a::1", Label: "Kayıt değeri", Required: true, Pattern: dnsIPPattern, Msg: dnsIPMsg})
+				}
+				@ui.BtnRow() {
+					@ui.Btn(ui.B{Kind: ui.Primary, Icon: "plus"}) {
+						Ekle
+					}
+				}
+			</form>
+		}
+	}
+}
+
+// dnsReadonlyPill marks the site-derived records the page never edits.
+templ dnsReadonlyPill() {
+	@ui.StatusText(ui.Off, "yalnız okunur", "")
+}
+
+// The shapes the browser checks while typing; the server validates every record again.
+const (
+	dnsNamePattern = `[A-Za-z0-9]([A-Za-z0-9.\-]*[A-Za-z0-9])?`
+	dnsIPPattern   = `[0-9]{1,3}(\.[0-9]{1,3}){3}|[0-9A-Fa-f:]*:[0-9A-Fa-f:.]*`
+	dnsIPMsg       = "IPv4 (ör. 100.64.0.5) veya IPv6 (ör. fd7a::1) adresi girin."
+)
+
+// offTailnetWarning explains a manual record that points to a private address outside the tailnet.
+templ offTailnetWarning(value string) {
+	<div data-off-tailnet="true">
+		@ui.Callout(ui.N{Tone: ui.Warn}) {
+			<code>{ value }</code> tailnet dışı özel bir adres. Yalnız bu ağa route
+			alan cihazlar ulaşabilir; diğer kullanıcılar bağlanamaz. Tailnet adresi (100.64.0.0/10)
+			kullanmak genellikle doğrudur.
+		}
+	</div>
+}
+
+// DNSPreviewPage renders the preview of a manual record change (AC2) and, unless blocked by the
+// existing state, the approval bound to the displayed plan version. A blocked change offers the
+// resync way out (AC4).
+templ DNSPreviewPage(v dnsPreviewView, csrfToken string) {
+	@ui.PageHead(ui.H{Title: "Elle DNS kaydı — preview", Crumbs: []ui.Crumb{{Label: "MagicDNS kayıtları", Href: "/headscale/dns"}, {Label: "Preview"}}})
+	if v.Blocked != "" {
+		@ui.Callout(ui.N{Tone: ui.Err, Title: "Değişiklik mevcut durum yüzünden apply edilemez; hiçbir şey yazılmadı"}) {
+			<pre><code>{ v.Blocked }</code></pre>
+		}
+		<p>
+			Kayıtlı siteler canlı artifact'lerin üzerine yeniden apply edilerek durumu düzeltir; sonra
+			buradaki değişikliği yeniden deneyin.
+		</p>
+		@ui.BtnRow() {
+			<form method="post" action="/sites/resync/preview">
+				@CSRFField(csrfToken)
+				@ui.Btn(ui.B{Kind: ui.WarnOutline, Icon: "sync"}) {
+					Kayıtlardan yeniden apply et
+				}
+			</form>
+			@ui.Btn(ui.B{Href: "/headscale/dns"}) {
+				Geri
+			}
+		}
+	} else {
+		if v.OffTailnet != "" {
+			@offTailnetWarning(v.OffTailnet)
+		}
+		<p>Yalnız MagicDNS dosyası değişir; Caddy ve Zitadel artifact'leri aynı kalır. Apply edilecek fark:</p>
+		@ui.Diff("DNS", v.Diff.DNS)
+		@MaintenanceWideningGuard() {
+			@ApplyForm("/headscale/dns/approve", csrfToken, []ui.Hidden{{Name: "request", Value: v.Request}, {Name: "plan_version", Value: v.Version}}, "/headscale/dns")
+		}
+	}
+}

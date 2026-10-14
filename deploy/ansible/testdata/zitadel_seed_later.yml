@@ -1,0 +1,12 @@
+# Test helper (F6 fix round, H7/H8): what a LATER, separate ansible-playbook call sees of an earlier zitadel_seed run
+# (config role only, no seed): the ids and the secret file paths.
+- name: Later call
+  hosts: vpn
+  gather_facts: false
+  roles:
+    - role: config
+      tags: [always]
+  tasks:
+    - name: What the later phase sees
+      ansible.builtin.debug:
+        msg: "LATER project={{ zitadel_project_id }} hssecret={{ secret_files.headscale_oidc_client_secret | default('-') }} webhook={{ secret_files.webhook_signing_key | default('-') }} groups={{ secret_files.groups_signing_key | default('-') }}"

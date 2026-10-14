@@ -1,0 +1,36 @@
+# One phase back from its own backup: rollback_phase, rollback_paths, rollback_remove_absent.
+- name: "Rollback: which backup, what metadata, backup of today's state ({{ rollback_phase }})"
+  ansible.builtin.import_tasks: prepare.yml
+  when: rollback_prepared | default('') != rollback_phase
+
+- name: "Rollback: nothing to roll back ({{ rollback_phase }})"
+  ansible.builtin.debug:
+    msg: "{{ rollback_phase }}: {{ 'zaten geri alınmış' if rollback_done else 'bu kurulum aracıyla uygulanmamış (yedek kimliği yok)' }}; atlandı."
+  when: rollback_backup_id == '' or rollback_done
+
+- name: "Rollback: restore ({{ rollback_phase }})"
+  ansible.builtin.include_role:
+    name: backup
+    tasks_from: restore
+  vars:
+    restore_backup_id: "{{ rollback_backup_id }}"
+    restore_only: "{{ rollback_paths }}"
+    restore_remove_absent: "{{ rollback_remove_absent | default(true) }}"
+  when: rollback_backup_id != '' and not rollback_done
+
+- name: "Rollback: record ({{ rollback_phase }})"
+  ansible.builtin.set_fact:
+    install_state: >-
+      {{ install_state | combine({'phases': install_state.phases | combine({rollback_phase: install_state.phases[rollback_phase]
+           | combine({'rolled_back': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ')})})}) }}
+  when: rollback_backup_id != '' and not rollback_done and not ansible_check_mode
+
+- name: "Rollback: state file ({{ rollback_phase }})"
+  ansible.builtin.copy:
+    content: "{{ install_state | to_nice_json(indent=2) }}\n"
+    dest: "{{ install_state_dir }}/state.json"
+    owner: root
+    group: root
+    mode: "0600"
+  changed_when: false
+  when: rollback_backup_id != '' and not rollback_done and not ansible_check_mode

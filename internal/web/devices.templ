@@ -1,0 +1,161 @@
+package web
+
+import (
+	"strconv"
+	"strings"
+
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// The devices screens (F3-012, H-01 read side): the list page whose table refreshes itself every
+// 30 s through the polled fragment, and the detail page with the routes and the registration and
+// expiry data. Everything is read-only; the action buttons arrive with F3-014/015/016. The pages
+// compose internal/web/ui components only (docs/ui-guide.md).
+
+// DevicesPage renders the devices list inside the section skeleton. The table lives in
+// DevicesTable, which carries the htmx poll.
+templ DevicesPage(view DevicesView) {
+	@ui.PageHead(ui.H{Title: "Headscale cihazları", Sub: "Headscale'a kayıtlı cihazlar."})
+	@HeadscaleTabs("devices", view.DryRun)
+	@DevicesTable(view)
+}
+
+// DevicesTable is the list fragment the poll swaps: /headscale/devices/table answers with exactly
+// this component. The div carries the trigger, so it survives every swap.
+templ DevicesTable(view DevicesView) {
+	<div id="device-list" hx-get="/headscale/devices/table" hx-trigger="every 30s" hx-swap="outerHTML">
+		if view.Err != nil {
+			@ui.Callout(ui.N{Tone: ui.Err, Title: "Cihazlar okunamadı"}) {
+				Liste gösterilmiyor. Neden: { view.Err.Error() }
+			}
+		} else if len(view.Rows) == 0 {
+			@ui.Card(ui.C{Flush: true}) {
+				@ui.Empty("device", "Kayıtlı cihaz yok.", "Cihazlar tailnet'e kaydolduğunda burada görünür.")
+			}
+		} else {
+			@ui.ListTable(ui.L{Label: "Cihazlar", Search: true}) {
+				<thead>
+					<tr>
+						<th scope="col">Cihaz</th>
+						<th scope="col">Sahip</th>
+						<th scope="col">IP&#39;ler</th>
+						<th scope="col">Durum</th>
+						<th scope="col">Son görülme</th>
+						<th scope="col">Expire</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, row := range view.Rows {
+						<tr>
+							<td><a href={ templ.SafeURL("/headscale/devices/" + strconv.FormatUint(row.ID, 10)) }><strong>{ row.Name }</strong></a></td>
+							<td>
+								@deviceOwnerCell(row)
+							</td>
+							<td><code>{ strings.Join(row.IPs, ", ") }</code></td>
+							<td>
+								@deviceOnlineStatus(row.Online)
+							</td>
+							<td>{ row.LastSeen }</td>
+							<td>
+								@deviceExpiryCell(row)
+							</td>
+						</tr>
+					}
+				</tbody>
+			}
+		}
+	</div>
+}
+
+// DeviceDetailPage renders one device: identity and expiry as in the list, plus the registration
+// time, the three route sets (advertised, approved, active) and, when wired, the write panel
+// (F3-014).
+templ DeviceDetailPage(view DeviceDetailView, csrf string) {
+	@ui.PageHead(ui.H{Title: "Cihaz: " + view.Row.Name, Crumbs: []ui.Crumb{{Label: "Cihazlar", Href: "/headscale/devices"}, {Label: view.Row.Name}}})
+	@HeadscaleTabs("devices", view.DryRun)
+	if view.Err != nil {
+		@ui.Callout(ui.N{Tone: ui.Err, Title: "Cihaz okunamadı"}) {
+			Neden: { view.Err.Error() }
+		}
+		@ui.Btn(ui.B{Href: "/headscale/devices"}) {
+			Listeye dön
+		}
+	} else {
+		@ui.Card(ui.C{Title: "Cihaz"}) {
+			@ui.KV() {
+				<dt>Sahip</dt>
+				<dd>
+					@deviceOwnerCell(view.Row)
+				</dd>
+				<dt>IP&#39;ler</dt>
+				<dd><code>{ strings.Join(view.Row.IPs, ", ") }</code></dd>
+				<dt>Durum</dt>
+				<dd>
+					@deviceOnlineStatus(view.Row.Online)
+				</dd>
+				<dt>Son görülme</dt>
+				<dd>{ view.Row.LastSeen }</dd>
+				<dt>Kayıt zamanı</dt>
+				<dd>{ view.CreatedAt }</dd>
+				<dt>Expire</dt>
+				<dd>
+					@deviceExpiryCell(view.Row)
+				</dd>
+			}
+		}
+		@ui.Card(ui.C{Title: "Route'lar"}) {
+			@ui.KV() {
+				<dt>İlan edilen</dt>
+				<dd><code>{ routeList(view.AvailableRoutes) }</code></dd>
+				<dt>Onaylı</dt>
+				<dd><code>{ routeList(view.ApprovedRoutes) }</code></dd>
+				<dt>Aktif</dt>
+				<dd><code>{ routeList(view.ActiveRoutes) }</code></dd>
+			}
+		}
+		@ui.BtnRow() {
+			@ui.Btn(ui.B{Href: routesPath(view.Row.ID)}) {
+				Route&#39;ları yönet
+			}
+			@MaintenanceWideningLink(tagsPath(view.Row.ID), "Tag'leri düzenle", ui.B{Small: true})
+		}
+		@deviceActionsSection(view, csrf)
+		@ui.BtnRow() {
+			@ui.Btn(ui.B{Href: "/headscale/devices"}) {
+				Listeye dön
+			}
+		}
+	}
+}
+
+// deviceOwnerCell shows the owner of a device: "tag'li" with its tags for a tagged node, the user
+// name for a personal one.
+templ deviceOwnerCell(row DeviceRowView) {
+	if row.Tagged {
+		tag&#39;li
+		for _, tag := range row.Tags {
+			@ui.Tag(tag)
+		}
+	} else {
+		{ row.Owner }
+	}
+}
+
+// deviceOnlineStatus is the online state dot. An offline node is neutral, never healthy (fail safe).
+templ deviceOnlineStatus(online bool) {
+	if online {
+		@ui.Status(ui.OK, "çevrimiçi")
+	} else {
+		@ui.Status(ui.Neutral, "çevrimdışı")
+	}
+}
+
+// deviceExpiryCell shows the expiry: red text when the moment has passed, otherwise the display
+// text ("yok" when the node never expires). No data is ever shown as healthy.
+templ deviceExpiryCell(row DeviceRowView) {
+	if row.Expired {
+		@ui.StatusText(ui.Err, "geçmiş", "")
+	} else {
+		{ row.Expiry }
+	}
+}

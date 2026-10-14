@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for a tagcess Headscale helper request marker
+
+[Path]
+PathExists=/var/lib/tagcess-headscale/requests/request.ready
+Unit=tagcess-hshelper.service
+
+[Install]
+WantedBy=multi-user.target

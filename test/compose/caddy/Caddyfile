@@ -1,0 +1,42 @@
+# F1-020 local test variant of deploy/caddy/tagcess.caddy (the F1-019 production snippet). The
+# directive order and the X-Auth-Request-* stripping follow the production snippet; the differences
+# are local-only and intentional:
+#   - plain HTTP on :8080 (the test browser is on the developer's machine, there is no TLS cert);
+#   - the upstream is oauth2-proxy's `static://200` upstream, because the test stack has no tagcess
+#     ui.sock (the real UI path is exercised by F1-021);
+#   - the tailnet-only `@tailnet` / `respond 403` branch is dropped: the test client reaches Caddy on
+#     loopback, which is never inside 100.64.0.0/10 (the F1-019 evidence flagged this);
+#   - the admin endpoint listens on all container interfaces so the published 127.0.0.1:2019
+#     (F2-008) reaches it; production keeps the default localhost-only listener (architecture §6).
+# `allowed_groups=devops` matches the production snippet: oauth2-proxy enforces it against the
+# session's `groups` claim, which the F1-026 Actions v2 target fills from the vpn grants.
+{
+	admin 0.0.0.0:2019
+}
+
+:8080 {
+	handle {
+		# oauth2-proxy's login endpoints (start/callback) must reach oauth2-proxy itself.
+		handle /oauth2/* {
+			reverse_proxy oauth2-proxy:4180
+		}
+
+		# Strip the client's own X-Auth-Request-* headers before forward_auth, so the only source of
+		# the identity headers is oauth2-proxy (security.md §3.1). `route` keeps this literal order.
+		route {
+			request_header -X-Auth-Request-User
+			request_header -X-Auth-Request-Email
+			request_header -X-Auth-Request-Groups
+			forward_auth oauth2-proxy:4180 {
+				uri /oauth2/auth?allowed_groups=devops
+				copy_headers X-Auth-Request-User X-Auth-Request-Email X-Auth-Request-Groups
+				# oauth2-proxy returns 401 when there is no session; send the browser to sign in.
+				@unauthenticated status 401
+				handle_response @unauthenticated {
+					redir * /oauth2/start?rd={http.request.uri}
+				}
+			}
+			reverse_proxy oauth2-proxy:4180
+		}
+	}
+}

@@ -1,0 +1,53 @@
+# Production deployment for tagcess on vpn-host (architecture.md §8, ADR 0004). Files only: an agent
+# never applies this. The developer installs and starts it in F1-022 (runbook).
+#
+# Before starting: place config.yaml and the secret files under /etc/tagcess, build the image
+# (`docker build -f deploy/Dockerfile -t tagcess:latest .`), and make sure the host paths below exist.
+services:
+  tagcess:
+    image: ${TAGCESS_IMAGE:-tagcess:latest}
+    # GIDs must match the host `caddy` and `headscale` groups (getent group caddy headscale). Set them
+    # in the shell or a .env file; compose fails fast if they are missing, so the image can never chgrp
+    # ui.sock to the wrong group (T2/NFR-02).
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        CADDY_GID: ${CADDY_GID:?set CADDY_GID to the host caddy group id}
+        HEADSCALE_GID: ${HEADSCALE_GID:?set HEADSCALE_GID to the host headscale group id}
+    container_name: tagcess
+    network_mode: host
+    read_only: true
+    restart: unless-stopped
+    # The container needs no Linux capabilities (ports are >1024, unix sockets only) and must not gain
+    # any: it is the only place that processes untrusted webhook input.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Read-only rootfs still needs a writable scratch dir for the runtime and git.
+    tmpfs:
+      - /tmp
+    command: ["-config", "/etc/tagcess/config.yaml"]
+    volumes:
+      - /var/lib/tagcess:/var/lib/tagcess
+      - /run/tagcess:/run/tagcess
+      # F4-032: k8s token/CA written by the UI. Own directory (owned by the tagcess UID, 0700), never
+      # inside /var/lib/tagcess, so SQLite/git backups do not carry it. Create it before starting.
+      - /var/lib/tagcess-credentials:/var/lib/tagcess-credentials
+      - /etc/caddy:/etc/caddy
+      # The socket's DIRECTORY, not the socket file: Headscale recreates the socket on every restart,
+      # and a single-file bind mount would keep pointing at the old, dead inode (F5 E1). The directory
+      # itself must survive restarts too: install deploy/headscale-preserve.conf (RuntimeDirectoryPreserve=yes)
+      # on the host, or systemd recreates it and this mount shows an empty directory (F5 K1).
+      - /var/run/headscale:/var/run/headscale
+      # ADR 0021 b: only the two directories shared with the host helper. requests/ is the patch
+      # request (rw), results/ is result.json/status.json (ro). private/ and the real Headscale
+      # config.yaml stay on the host and are never mounted.
+      - /var/lib/tagcess-headscale/requests:/var/lib/tagcess-headscale/requests
+      - /var/lib/tagcess-headscale/results:/var/lib/tagcess-headscale/results:ro
+      - /etc/headscale/policy.hujson:/etc/headscale/policy.hujson:ro
+      - /etc/letsencrypt/live:/etc/letsencrypt/live:ro
+      - /etc/tagcess/secrets:/etc/tagcess/secrets:ro
+      # The settings file itself; architecture §8 lists the mounts around it, not this path.
+      - /etc/tagcess/config.yaml:/etc/tagcess/config.yaml:ro

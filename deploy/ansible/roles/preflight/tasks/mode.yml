@@ -1,0 +1,34 @@
+# install_mode proposal and gate (F6 öneri 7 [Ö]). Core components: Headscale and Caddy. None -> fresh; any ->
+# adopt (a missing one is "added in adopt"). Gate: fresh never writes over a core component this installer did
+# not install itself; adopt on a host without any core component needs confirm_adopt_empty=yes.
+- name: Components and the proposed mode
+  ansible.builtin.set_fact:
+    preflight_components: >-
+      {%- set p = preflight_probe -%}
+      {%- set managed = install_state.installed | default([]) -%}
+      {{ {'headscale': p.headscale.present, 'caddy': p.caddy.present, 'certbot': p.certbot.present,
+          'oauth2_proxy': p.oauth2_proxy.present, 'docker': p.docker.present, 'tailscale': p.tailscale.present,
+          'hshelper': p.hshelper.present, 'tagcess': p.tagcess.present, 'zitadel': p.zitadel.status == 200} }}
+    preflight_core_present: "{{ ['headscale', 'caddy'] | select('in', preflight_core_names) | list }}"
+  vars:
+    preflight_core_names: "{{ (['headscale'] if preflight_probe.headscale.present else []) + (['caddy'] if preflight_probe.caddy.present else []) }}"
+
+- name: Proposal
+  ansible.builtin.set_fact:
+    preflight_proposed_mode: "{{ 'adopt' if (preflight_core_present | length > 0 or preflight_components.tagcess) else 'fresh' }}"
+    preflight_present: "{{ preflight_components | dict2items | selectattr('value') | map(attribute='key') | list }}"
+    preflight_missing: "{{ preflight_components | dict2items | rejectattr('value') | map(attribute='key') | list }}"
+    preflight_preexisting_core: "{{ preflight_core_present | reject('in', install_state.installed | default([])) | list }}"
+
+- name: Mode gate
+  ansible.builtin.set_fact:
+    preflight_mode_blockers: >-
+      {%- set b = [] -%}
+      {%- if install_mode == 'fresh' and preflight_preexisting_core | length > 0 -%}
+        {%- set _ = b.append('install_mode fresh, ama ' ~ (preflight_preexisting_core | join(', ')) ~ ' zaten kurulu: fresh var olan bileşenin üstüne yazmaz; adopt kullan') -%}
+      {%- endif -%}
+      {%- if install_mode == 'adopt' and preflight_core_present | length == 0 and not preflight_components.tagcess
+             and (confirm_adopt_empty | default('') | string) != 'yes' -%}
+        {%- set _ = b.append('install_mode adopt, ama hedefte Headscale ve Caddy yok: bu fiilen sıfırdan kurulumdur; bilerek istiyorsan -e confirm_adopt_empty=yes') -%}
+      {%- endif -%}
+      {{ b }}

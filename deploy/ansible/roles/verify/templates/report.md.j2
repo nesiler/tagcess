@@ -1,0 +1,59 @@
+# Kurulum doğrulama raporu ({{ install_env }})
+
+Salt okur: host'ta hiçbir şey değiştirilmedi. Secret içerik yok.
+Kip: `{{ install_mode }}` · tagcess: `{{ tagcess_host }}`
+{% if verify_s06_lines | length > 0 %}
+
+> **UYARI: S-06 açık başlangıç, iç siteler internetten de erişilebilir olacak** (`s06_open_start`)
+>
+{% for l in verify_s06_lines %}
+> - {{ l }}
+{% endfor %}
+{% endif %}
+
+## İlk içe aktarma paritesi
+{{ verify_parity_line }}
+{% if verify_preview.first_diffs is defined and verify_preview.first_diffs %}
+
+İlk farklar:
+{% for d in verify_preview.first_diffs %}
+- `{{ d }}`
+{% endfor %}
+{% endif %}
+{% if verify_preview.manual_dns is defined and verify_preview.manual_dns %}
+
+İçe aktarmanın koruyacağı elle DNS kayıtları: {{ verify_preview.manual_dns | map(attribute='name') | join(', ') }}
+{% endif %}
+
+## Kontroller
+{% for c in verify_checks %}
+- [{{ 'x' if c.ok else ' ' }}] {{ c.name }} ({{ c.detail }})
+{% else %}
+- (host kontrolleri atlandı)
+{% endfor %}
+
+## Rolsüz kullanıcılar (bilgi, kapı değil)
+{% if verify_unroled is none %}
+Bilinmiyor (Zitadel yönetici kimliği verilmedi).
+{% else %}
+{{ verify_unroled }} aktif kullanıcının vpn projesinde rolü yok.{% if verify_unroled | int > 0 %} Rolleri Zitadel'de vpn projesinde sen verirsin (tagcess rol vermez); sonra siteleri arayüzden site site role geçir.{% endif %}
+
+{% endif %}
+
+## Elle doğrulanacaklar
+{% for m in verify_manual_checks %}
+- [ ] {{ m }} (elle)
+{% endfor %}
+
+## Fazların elle adımları (guide)
+{% for g in verify_guides %}
+{% for it in g['items'] %}
+- **{{ g.phase }}** · {{ it.title }}: {{ {'done': 'yapıldı', 'pending': 'bekliyor', 'unknown': 'bilinmiyor', 'manual': 'elle kontrol et'}[it.status] }}
+{% endfor %}
+{% endfor %}
+
+## Sonuç
+{{ 'Uygulamaya hazır: parite tamam.' if verify_ready | bool else 'uygulamaya hazır değil: parite 0 fark değil.' }}
+{% if verify_ready | bool and verify_s06_lines | length > 0 %}
+Kabul edilen fark var: yukarıdaki S-06 uyarısını oku; S-06'yı WireGuard kapatılınca arayüzden kapat.
+{% endif %}

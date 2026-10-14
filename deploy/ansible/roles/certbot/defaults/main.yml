@@ -1,0 +1,14 @@
+# certbot (F6-012): fresh installs certbot with the Cloudflare DNS-01 plugin and takes one wildcard certificate per
+# cert_names entry (-d <name> -d *.<name>). The credentials file is secret_files.cloudflare_token copied byte for
+# byte ([Ö]: that file is the certbot ini, `dns_cloudflare_api_token = ...`), outside /etc/caddy. An existing certbot
+# (adopt mode) is adopted untouched: only the certificate expiry is reported. Cloudflare A records are a guide step.
+certbot_packages: [certbot, python3-certbot-dns-cloudflare]
+certbot_credentials_dir: /root/.secrets/certbot
+certbot_credentials: "{{ certbot_credentials_dir }}/cloudflare.ini"
+certbot_propagation_seconds: 30
+certbot_deploy_hook: /etc/letsencrypt/renewal-hooks/deploy/tagcess-caddy.sh
+certbot_dns_hosts: ["{{ hs_host }}", "{{ auth_host }}", "{{ tagcess_host }}"]
+certbot_public_ip: ""            # the VPN host's public IPv4 (guide check: dig +short <host> equals it)
+# TEST ONLY: self-signed certificates in certbot's live/archive layout instead of Let's Encrypt (the test inventory
+# sets it; the real DNS-01 run is part of the lab rehearsal).
+certbot_test_authenticator: false

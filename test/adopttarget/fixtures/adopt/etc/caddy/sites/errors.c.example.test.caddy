@@ -1,0 +1,5 @@
+errors.c.example.test {
+	# Hata izleyici: SDK'ların hata gönderdiği yollar ve API token'ları
+	@api expression `header({'Authorization': '*'}) || path_regexp('^/api/[0-9]+/(envelope|store|security)/')`
+	import vpn_site_api c.example.test devops,developer
+}

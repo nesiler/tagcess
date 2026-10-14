@@ -1,0 +1,41 @@
+# `make ui`: adds tagcess itself to the local test stack and points Caddy at its web UI, so the
+# developer can open the interface in a browser (see test/ui/up.sh). It overrides the base
+# test/compose/compose.yaml; nothing here touches production or the lab.
+#
+# - tagcess runs with `network_mode: host` because headscale.New only accepts a unix socket or a
+#   loopback address, and the compose relay publishes Headscale's socket on 127.0.0.1:50444.
+# - Its UI socket is shared with the Caddy container through the `tagcess-ui` named volume. Named
+#   volumes work across network modes on OrbStack, unlike a bind-mounted host unix socket.
+# - It runs as root: the fresh `tagcess-data` volume is root-owned, and this is a disposable local
+#   stack. Secrets come from the gitignored test/compose/.secrets/lab, never the repo.
+services:
+  tagcess:
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile
+      args:
+        # Placeholder GIDs: the socket is only read by the root Caddy container, and tagcess reaches
+        # Headscale over TCP, so the exact group ids do not matter here.
+        CADDY_GID: "1000"
+        HEADSCALE_GID: "1000"
+    image: tagcess:ui
+    user: "0:0"
+    network_mode: host
+    depends_on:
+      - headscale-relay
+    volumes:
+      - tagcess-data:/var/lib/tagcess
+      - tagcess-ui:/run/tagcess
+      - ./.ui/config.yaml:/etc/tagcess/config.yaml:ro
+      - ./.secrets/lab:/etc/tagcess/secrets:ro
+    command: ["-config", "/etc/tagcess/config.yaml"]
+
+  caddy:
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile.ui", "--adapter", "caddyfile"]
+    volumes:
+      - ./caddy/Caddyfile.ui:/etc/caddy/Caddyfile.ui:ro
+      - tagcess-ui:/run/tagcess:ro
+
+volumes:
+  tagcess-data:
+  tagcess-ui:

@@ -1,0 +1,85 @@
+# tailscale_join (F6-012). See defaults/main.yml.
+- name: Tailscale here, and whose
+  ansible.builtin.set_fact:
+    ts_join_present: "{{ preflight_components.tailscale | default(false) }}"
+    ts_join_owned: "{{ 'tailscale' in (install_state.installed | default([])) }}"
+    ts_join_add_ok: "{{ install_mode == 'fresh' or 'tailscale' in (confirm_add_missing | default('') | string).split(',') }}"
+    ts_join_k8s: "{{ groups['k8s'] | default([]) | first | default('') if install_mode == 'fresh' else '' }}"
+
+- name: Existing Tailscale adopted untouched
+  ansible.builtin.debug:
+    msg: "Tailscale zaten kurulu ve bu araçla kurulmadı: devralındı (tailnet IP {{ preflight_probe.tailscale.ip4 | default('-') }}); katılım değiştirilmedi."
+  when: ts_join_present and not ts_join_owned
+
+- name: Missing Tailscale not added without confirmation (adopt)
+  ansible.builtin.debug:
+    msg: "Tailscale yok ve adopt kipinde onaysız eklenmez (confirm_add_missing=tailscale)."
+  when: not ts_join_present and not ts_join_owned and not ts_join_add_ok
+
+# The backup is this phase's first mutation on the VPN host (apt repository, package, the Headscale database the join
+# writes to). The k8s host is not the installer's host and the backup role only covers this host: only a k8s host with
+# nothing of Tailscale on it (no binary, no repository key, no source list, no package record) is touched, so there is
+# nothing of anyone's to overwrite or back up (review R2-M2).
+- name: Backup before the first change
+  ansible.builtin.include_role:
+    name: backup
+  vars:
+    backup_phase: tailscale_join
+  when: ts_join_owned or (not ts_join_present and ts_join_add_ok)
+
+- name: The VPN host
+  ansible.builtin.include_tasks: join.yml
+  vars:
+    ts_node: "{{ inventory_hostname }}"
+    ts_tag: "{{ hs_vpn_tag }}"
+    ts_routes: "{{ vpn_private_cidr }}"
+    ts_hostname: "{{ tailscale_vpn_hostname }}"
+  when: ts_join_owned or (not ts_join_present and ts_join_add_ok)
+
+# The k8s host has no installer state: a Tailscale already there (perhaps in another tailnet), or what is left of one
+# (repository key, source list, package record), is never touched; only a host with none of it is installed and joined.
+# The guide item says what to check by hand.
+- name: Tailscale on the k8s host (read-only)  # noqa: risky-shell-pipe
+  ansible.builtin.shell: |
+    if ! command -v tailscale >/dev/null 2>&1; then
+      if [ -e {{ tailscale_repo_keyring_path | quote }} ] || [ -e {{ tailscale_repo_list_path | quote }} ] || dpkg -s tailscale >/dev/null 2>&1; then echo leftover; else echo absent; fi
+      exit 0
+    fi
+    tailscale status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("BackendState") or "unknown")' 2>/dev/null || echo unknown
+  register: ts_k8s_probe
+  changed_when: false
+  check_mode: false
+  delegate_to: "{{ ts_join_k8s or inventory_hostname }}"  # resolved before `when`: never empty
+  when: ts_join_k8s != '' and (ts_join_owned or (not ts_join_present and ts_join_add_ok))
+
+- name: Existing Tailscale on the k8s host left alone
+  ansible.builtin.debug:
+    msg: >-
+      {{ ("k8s host'unda Tailscale kalıntısı var (" ~ tailscale_repo_keyring_path ~ ", " ~ tailscale_repo_list_path ~ " ya da tailscale paketi kaydı): yedeksiz ezilmesin diye dokunulmadı; elle kur/kat (guide).")
+         if ts_k8s_probe.stdout | trim == 'leftover'
+         else ("k8s host'unda Tailscale zaten var (" ~ ts_k8s_probe.stdout | trim ~ "): dokunulmadı; bu Headscale'e katılı değilse elle kat (guide).") }}
+  when: ts_k8s_probe.stdout is defined and ts_k8s_probe.stdout | trim != 'absent'
+
+- name: The k8s host (fresh, only with a k8s inventory group and no Tailscale there yet)
+  ansible.builtin.include_tasks: join.yml
+  vars:
+    ts_node: "{{ ts_join_k8s }}"
+    ts_tag: "{{ hs_k8s_tag }}"
+    ts_routes: ""
+    ts_hostname: ""
+  when: ts_k8s_probe.stdout is defined and ts_k8s_probe.stdout | trim == 'absent'
+
+- name: Installed by this installer
+  ansible.builtin.set_fact:
+    state_installed: [tailscale]
+  when: ts_join_owned or (not ts_join_present and ts_join_add_ok)
+
+- name: Guide items of tailscale_join
+  ansible.builtin.set_fact:
+    guide_items_tailscale_join: >-
+      {{ [{'id': 'tailscale-k8s-join', 'title': 'k8s düğümünü tailnet\'e kat',
+           'steps': ['Envanterde k8s grubu yok ya da k8s host\'unda Tailscale zaten var (dokunulmadı). k8s düğümü bu Headscale\'de ' ~ hs_k8s_tag ~ ' ile yoksa elle kat:',
+                     'VPN host\'ta: headscale preauthkeys create --user <id> --reusable=false --expiration 10m --tags ' ~ hs_k8s_tag,
+                     'k8s host\'ta: tailscale up --login-server ' ~ headscale_login_url ~ ' --authkey <anahtar> --accept-dns=false'],
+           'check': {'host_cmd': 'headscale nodes list -o json | python3 -c "import json,sys; sys.exit(0 if any(\'' ~ hs_k8s_tag ~ '\' in (n.get(\'tags\') or []) for n in json.load(sys.stdin)) else 1)"'}}]
+         if install_mode == 'fresh' and (ts_join_k8s == '' or (ts_k8s_probe.stdout | default('absent') | trim) != 'absent') else [] }}

@@ -1,0 +1,11 @@
+# Test/plan helper (F6-006 golden tests): renders oauth2-proxy.cfg into oauth2_proxy_render_dir on the controller.
+- name: Cookie profile
+  ansible.builtin.import_tasks: profile.yml
+
+- name: Render oauth2-proxy.cfg (controller)
+  ansible.builtin.template:
+    src: oauth2-proxy.cfg.j2
+    dest: "{{ oauth2_proxy_render_dir }}/oauth2-proxy.cfg"
+    mode: "0644"
+  delegate_to: localhost
+  become: false

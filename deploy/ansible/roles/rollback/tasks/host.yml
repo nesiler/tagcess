@@ -1,0 +1,11 @@
+# host: tagcess's config/secret files, tmpfiles entry and DNS file back to before; the data directories only with
+# confirm_remove_data=yes (moved aside into the backup directory, not deleted).
+- name: "Rollback host: data needs a confirmation"
+  ansible.builtin.debug:
+    msg: "Veri dizinleri ({{ rollback_host_data | join(', ') }}) korunuyor; kaldırmak için -e confirm_remove_data=yes."
+  when: (confirm_remove_data | default('') | string) != 'yes'
+
+- name: "Rollback host: files"
+  ansible.builtin.import_tasks: generic.yml
+  vars:
+    rollback_paths: "{{ rollback_phase_paths.host + (rollback_host_data + ['/run/tagcess'] if (confirm_remove_data | default('') | string) == 'yes' else []) }}"

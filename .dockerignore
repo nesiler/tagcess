@@ -1,0 +1,7 @@
+# Keep the deploy image build context small and out of secrets. Applies to `docker build` from the
+# repo root (deploy/Dockerfile only copies go.mod, go.sum, cmd and internal).
+.git
+.secrets
+test
+docs
+*.md

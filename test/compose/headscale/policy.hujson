@@ -1,0 +1,11 @@
+// Minimal test-only ACL: any tailnet member reaches any other member.
+// F1-004 only needs the stack to start; real ACL rules land with F1-008/F1-009.
+{
+  "acls": [
+    {
+      "action": "accept",
+      "src": ["*"],
+      "dst": ["*:*"],
+    },
+  ],
+}

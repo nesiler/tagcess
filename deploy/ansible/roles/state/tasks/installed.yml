@@ -1,0 +1,25 @@
+# Marks state_component as installed by this installer, right after its package step (see load.yml).
+- name: "Marker directory ({{ state_component }})"
+  ansible.builtin.file:
+    path: "{{ install_state_dir }}/installed"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: "Installed marker ({{ state_component }})"
+  ansible.builtin.copy:
+    content: ""
+    dest: "{{ install_state_dir }}/installed/{{ state_component }}"
+    owner: root
+    group: root
+    mode: "0600"
+    force: false
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: "Installed in this run ({{ state_component }})"
+  ansible.builtin.set_fact:
+    install_state: "{{ install_state | combine({'installed': (install_state.installed + [state_component]) | unique}) }}"

@@ -1,0 +1,164 @@
+# Blockers and warnings from the probe, the report on the controller, then stop on any blocker.
+- name: Blockers and warnings
+  ansible.builtin.set_fact:
+    preflight_checks: >-
+      {%- set p = preflight_probe -%}
+      {%- set hc = preflight_hs_cfg | default({}) -%}
+      {%- set blk = [] -%}{%- set warn = [] -%}
+      {%- if p.headscale.present -%}
+        {%- if p.headscale.version != headscale_version -%}
+          {%- set _ = blk.append('Headscale sürümü ' ~ p.headscale.version ~ ', beklenen ' ~ headscale_version) -%}{%- endif -%}
+        {%- if not p.headscale.configtest.ok -%}
+          {%- set _ = blk.append('headscale configtest başarısız: ' ~ p.headscale.configtest.detail) -%}{%- endif -%}
+        {%- if not p.headscale.grpc.ok -%}
+          {%- set _ = blk.append('Headscale gRPC soketi erişilemez (' ~ headscale_socket ~ '): ' ~ p.headscale.grpc.detail) -%}{%- endif -%}
+        {%- if p.headscale.policy_check is defined and not p.headscale.policy_check.ok -%}
+          {%- set _ = blk.append('headscale policy check başarısız: ' ~ p.headscale.policy_check.detail) -%}{%- endif -%}
+        {%- set want_listen = headscale_health_url | urlsplit('netloc') -%}
+        {%- if hc.listen_addr | default('') not in ['', want_listen] -%}
+          {%- set _ = blk.append('Headscale listen_addr ' ~ hc.listen_addr ~ ', beklenen ' ~ want_listen) -%}{%- endif -%}
+      {%- endif -%}
+      {%- if p.caddy.present -%}
+        {%- if not p.caddy.validate.ok -%}
+          {%- set _ = blk.append('caddy validate başarısız: ' ~ p.caddy.validate.detail) -%}{%- endif -%}
+        {%- if p.caddy.disk_equals_running is sameas false -%}
+          {%- set _ = blk.append('Caddy: disk ve çalışan config ayrışmış (' ~ caddyfile_path ~ ' ile admin /config/ eşit değil); önce farkı gider') -%}
+        {%- elif p.caddy.disk_equals_running is none and p.caddy.active -%}
+          {%- set _ = blk.append('Caddy çalışıyor ama çalışan config okunamadı (' ~ p.caddy.drift_detail | default('') ~ '); disk ile eşit olduğu doğrulanmadan hiçbir faz yazmaz') -%}{%- endif -%}
+        {%- if caddy_sites_dir and not p.caddy.sites_dir.exists -%}
+          {%- set _ = blk.append('Caddy site dizini yok: ' ~ caddy_sites_dir) -%}{%- endif -%}
+        {%- if not p.caddy.version.startswith(caddy_version ~ '.') -%}
+          {%- set _ = warn.append('Caddy sürümü ' ~ p.caddy.version ~ ', beklenen hat ' ~ caddy_version) -%}{%- endif -%}
+      {%- endif -%}
+      {%- for c in p.certs -%}
+        {%- if not (c.fullchain and c.privkey) -%}
+          {%- if 'certbot' in install_state.installed | default([]) -%}
+            {%- set _ = warn.append('Sertifika yok: ' ~ c.name ~ '; bu aracın certbot fazı alır') -%}
+          {%- elif p.caddy.present or p.certbot.present -%}
+            {%- set _ = blk.append('Sertifika yolu yok: /etc/letsencrypt/live/' ~ c.name ~ '/{fullchain,privkey}.pem') -%}
+          {%- endif -%}
+        {%- elif c.days_left is defined and c.days_left < 0 -%}
+          {%- set _ = blk.append('Sertifika süresi dolmuş: ' ~ c.name ~ ' (' ~ c.not_after ~ ')') -%}
+        {%- elif c.days_left is defined and c.days_left < cert_min_days -%}
+          {%- set _ = warn.append('Sertifika ' ~ c.name ~ ' ' ~ c.days_left ~ ' gün içinde bitiyor') -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {%- set hook = p.ports[headscale_hook_port | string] -%}
+      {%- if hook.listening and hook.process != 'tagcess' -%}
+        {%- set _ = blk.append('Hook portu ' ~ headscale_hook_port ~ ' dolu: ' ~ hook.address ~ ' (' ~ (hook.process or '?') ~ ')') -%}{%- endif -%}
+      {%- if p.zitadel.status != 200 -%}
+        {%- if zitadel_install_enabled | bool and install_mode != 'adopt' -%}
+          {%- set _ = warn.append('Zitadel OIDC discovery erişilemiyor; zitadel_install kuracak') -%}
+        {%- elif install_mode == 'fresh' and 'caddy' in install_state.installed | default([]) -%}
+          {%- set _ = warn.append('Zitadel OIDC discovery erişilemiyor (' ~ p.zitadel.url ~ '); oauth2_proxy ve app fazları ister') -%}
+        {%- elif p.caddy.present -%}
+          {%- set _ = blk.append('Zitadel OIDC discovery erişilemez: ' ~ p.zitadel.url ~ ' (' ~ p.zitadel.status ~ ')') -%}
+        {%- else -%}
+          {%- set _ = warn.append('Zitadel OIDC discovery erişilemiyor; Caddy kurulduktan sonraki çağrılarda yeniden denetlenir') -%}
+        {%- endif -%}
+      {%- endif -%}
+      {%- if p.disk_free_mb >= 0 and p.disk_free_mb < disk_min_free_mb -%}
+        {%- set _ = blk.append('/var/lib altında boş alan ' ~ p.disk_free_mb ~ ' MB (en az ' ~ disk_min_free_mb ~ ')') -%}{%- endif -%}
+      {%- if p.headscale.present and not p.tools.sqlite3 -%}
+        {%- set _ = blk.append('sqlite3 yok: Headscale veritabanının tutarlı yedeği için gerekli (apt install sqlite3)') -%}{%- endif -%}
+      {%- if p.os.id != 'ubuntu' -%}
+        {%- set _ = warn.append('İşletim sistemi ' ~ p.os.id ~ ' ' ~ p.os.version ~ '; roller Ubuntu 24.04 için yazıldı') -%}{%- endif -%}
+      {%- if p.tailscale.present and vpn_tailnet_ip and p.tailscale.ip4 and p.tailscale.ip4 != vpn_tailnet_ip -%}
+        {%- set _ = blk.append('vpn_tailnet_ip ' ~ vpn_tailnet_ip ~ ', host tailnet IP ' ~ p.tailscale.ip4) -%}{%- endif -%}
+      {%- for s in preflight_controller_secrets.results | default([]) -%}
+        {%- if not s.stat.exists -%}
+          {%- set _ = warn.append('Denetim makinesinde secret dosyası yok: ' ~ s.item.key ~ ' (' ~ s.item.value ~ ')') -%}{%- endif -%}
+      {%- endfor -%}
+      {{ {'blockers': blk + preflight_mode_blockers, 'warnings': warn} }}
+
+- name: Values later phases use
+  ansible.builtin.set_fact:
+    vpn_tailnet_ip_effective: "{{ vpn_tailnet_ip or preflight_probe.tailscale.ip4 | default('') }}"
+    preflight_policy_sha256: "{{ preflight_probe.headscale.policy_sha256 | default('') }}"
+    preflight_report:
+      proposed_mode: "{{ preflight_proposed_mode }}"
+      install_mode: "{{ install_mode }}"
+      components: "{{ preflight_components }}"
+      present: "{{ preflight_present }}"
+      missing: "{{ preflight_missing }}"
+      core_present: "{{ preflight_core_present }}"
+      managed_by_installer: "{{ install_state.installed | default([]) }}"
+      untouched: "{{ preflight_probe.untouched }}"
+      blockers: "{{ preflight_checks.blockers }}"
+      warnings: "{{ preflight_checks.warnings }}"
+      headscale: "{{ {'version': preflight_probe.headscale.version | default(''), 'active': preflight_probe.headscale.active | default(false),
+                     'policy_sha256': preflight_probe.headscale.policy_sha256 | default('')} | combine(preflight_hs_cfg | default({})) }}"
+      caddy: "{{ {'version': preflight_probe.caddy.version | default(''), 'active': preflight_probe.caddy.active | default(false),
+                 'disk_equals_running': preflight_probe.caddy.disk_equals_running | default(none),
+                 'tagcess_owned': preflight_probe.caddy.tagcess_marker | default(false), 'sites_dir': caddy_sites_dir} }}"
+      oauth2_proxy: "{{ {'running': preflight_probe.oauth2_proxy.running, 'unit': preflight_probe.oauth2_proxy.unit.unit,
+                        'container': preflight_probe.oauth2_proxy.container.present, 'settings': preflight_probe.oauth2_proxy.settings} }}"
+      tailscale: "{{ preflight_probe.tailscale }}"
+      certs: "{{ preflight_probe.certs }}"
+      zitadel: "{{ preflight_probe.zitadel }}"
+      docker: "{{ preflight_probe.docker }}"
+      disk_free_mb: "{{ preflight_probe.disk_free_mb }}"
+      host_secret_files: "{{ preflight_probe.host_secret_files | selectattr('exists') | list }}"
+      controller_secret_files: >-
+        {{ preflight_controller_secrets.results | default([]) | map(attribute='item.key')
+           | zip(preflight_controller_secrets.results | default([]) | map(attribute='stat.exists'),
+                 preflight_controller_secrets.results | default([]) | map(attribute='stat.mode', default='')) | list }}
+
+- name: Guide items of preflight
+  ansible.builtin.set_fact:
+    guide_items_preflight: >-
+      {%- set g = [] -%}
+      {%- if not vpn_tailnet_ip and preflight_probe.tailscale.ip4 | default('') -%}
+        {%- set _ = g.append({'id': 'preflight-vpn-tailnet-ip', 'title': 'vpn_tailnet_ip değerini ortam dosyasına yaz',
+            'steps': ['Host tailnet IP\'si ' ~ preflight_probe.tailscale.ip4 ~ '; ortam dosyasında vpn_tailnet_ip: ' ~ preflight_probe.tailscale.ip4 ~ ' olarak sabitle.']}) -%}
+      {%- endif -%}
+      {%- set missing = preflight_controller_secrets.results | default([]) | rejectattr('stat.exists') | map(attribute='item.key') | list -%}
+      {%- if missing -%}
+        {%- set _ = g.append({'id': 'preflight-secret-files', 'title': 'Eksik secret dosyalarını hazırla',
+            'steps': ['Şu secret dosyaları denetim makinesinde yok: ' ~ (missing | join(', ')) ~ '. İçerik repoya girmez; dosyayı 0600 ile oluştur.']}) -%}
+      {%- endif -%}
+      {{ g }}
+
+- name: Controller directory
+  ansible.builtin.file:
+    path: "{{ install_env_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  changed_when: false
+  check_mode: false
+
+- name: Preflight JSON (install.sh reads proposed_mode)
+  ansible.builtin.copy:
+    content: "{{ preflight_report | to_nice_json(indent=2) }}\n"
+    dest: "{{ install_env_dir }}/preflight.json"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  check_mode: false
+
+- name: Preflight report
+  ansible.builtin.template:
+    src: report.md.j2
+    dest: "{{ install_env_dir }}/preflight.md"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  check_mode: false
+
+- name: Summary
+  ansible.builtin.debug:
+    msg:
+      - "Önerilen kip: {{ preflight_proposed_mode }} (seçili: {{ install_mode or '-' }})"
+      - "Var: {{ preflight_present | join(', ') or '-' }} · Eksik/kurulacak: {{ preflight_missing | join(', ') or '-' }}"
+      - "Dokunulmayacak: {{ preflight_probe.untouched | dict2items | selectattr('value.present') | map(attribute='key') | join(', ') or '-' }}"
+      - "Engeller: {{ preflight_checks.blockers | length }} · Uyarılar: {{ preflight_checks.warnings | length }} · Rapor: {{ install_env_dir }}/preflight.md"
+
+- name: Stop on a blocker (no phase writes)
+  ansible.builtin.fail:
+    msg: "Preflight engeli: {{ preflight_checks.blockers | join(' | ') }}"
+  when: preflight_checks.blockers | length > 0

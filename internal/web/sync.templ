@@ -1,0 +1,230 @@
+package web
+
+import (
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// SyncPage renders the sync screen (Y-05, Y-06, G-03 identity conversion): the open alerts at the top, the last run's
+// status, the operator actions, the pending change and the current Zitadel-Headscale diff with the
+// G-03 identity mapping. Every value is escaped by templ. Actions are POST forms carrying the CSRF
+// token as a hidden field (the middleware also accepts the header htmx sends).
+templ SyncPage(ov SyncOverview, csrfToken string) {
+	@ui.PageHead(ui.H{Title: "Sync", Sub: "Zitadel rollerinin Headscale'e yansıması, dry-run ve onay bekleyen değişiklikler."}) {
+		<form method="post" action="/sync/trigger">
+			@CSRFField(csrfToken)
+			@ui.Btn(ui.B{Kind: ui.Primary, Icon: "sync"}) {
+				Elle tetikle
+			}
+		</form>
+	}
+
+	if len(ov.Alerts) > 0 {
+		@ui.Callout(ui.N{Tone: ui.Err, Title: "Açık uyarılar"}) {
+			<ul>
+				for _, a := range ov.Alerts {
+					<li>
+						<span data-kind={ a.Kind }>{ legacyAlertKindLabel(a.Kind) }</span> · <span data-source={ a.Source }>{ systemSourceLabel(a.Source) }</span> ·
+						<time datetime={ a.LastSeen.Format(time.RFC3339) }>{ a.LastSeen.Format("2006-01-02 15:04:05") }</time>
+					</li>
+				}
+			</ul>
+		}
+	}
+
+	@ui.Card(ui.C{Title: "Durum"}) {
+		@ui.KV() {
+			<dt>Son çalışma</dt>
+			<dd>
+				if ov.LastRun != nil {
+					<time datetime={ ov.LastRun.At.Format(time.RFC3339) }>{ ov.LastRun.At.Format("2006-01-02 15:04:05") }</time>
+					· <span data-trigger={ ov.LastRun.Trigger }>{ syncTriggerLabel(ov.LastRun.Trigger) }</span> ·
+					<span data-result={ ov.LastRun.Result }>{ syncResultLabel(ov.LastRun.Result) }</span>
+					if ov.LastRun.Summary != "" {
+						· { ov.LastRun.Summary }
+					}
+				} else {
+					Kayıt yok.
+				}
+			</dd>
+			<dt>Dry-run</dt>
+			<dd>
+				if ov.DryRun {
+					@ui.StatusText(ui.Warn, "Açık", "")
+				} else {
+					@ui.StatusText(ui.Off, "Kapalı", "")
+				}
+			</dd>
+			<dt>Sync aralığı</dt>
+			<dd>{ strconv.Itoa(ov.IntervalMin) } dk</dd>
+		}
+	}
+	@ui.Card(ui.C{Title: "Ayarlar"}) {
+		@ui.Field(ui.F{Label: "Dry-run", Help: "Açıkken fark hesaplanır ama apply edilmez. Değiştirmek için önce onay kutusunu işaretleyin."}) {
+			<form method="post" action="/sync/dry-run">
+				@CSRFField(csrfToken)
+				@ui.Inline() {
+					@ui.Switch(ui.SW{Name: "dry_run", Value: dryRunValue(!ov.DryRun), On: ov.DryRun, Label: "Dry-run"})
+					@ui.Check(ui.Chk{ID: "dry_run_confirm", Name: "confirm", Value: "1", Label: "Onaylıyorum", Attrs: templ.Attributes{"required": true}})
+				}
+			</form>
+		}
+		@ui.Field(ui.F{Label: "Aralık (dk)", For: "minutes", Help: "Periyodik tam karşılaştırmanın aralığı (1–60)."}) {
+			<form method="post" action="/sync/interval">
+				@CSRFField(csrfToken)
+				@ui.Inline() {
+					@ui.Input(ui.In{ID: "minutes", Name: "minutes", Type: "number", Value: strconv.Itoa(ov.IntervalMin), Attrs: templ.Attributes{"min": "1", "max": "60"}})
+					@ui.Btn(ui.B{}) {
+						Kaydet
+					}
+				}
+			</form>
+		}
+	}
+
+	if len(ov.Pending) > 0 {
+		@ui.Card(ui.C{Title: "Onay bekleyen değişiklikler"}) {
+			for _, p := range ov.Pending {
+				@ui.Group("") {
+					<p>
+						<strong>#{ strconv.FormatInt(p.ID, 10) }</strong>
+						{ p.Actor }
+						if p.Summary != "" {
+							· { p.Summary }
+						}
+					</p>
+					@ui.BtnRow() {
+						<form method="post" action="/sync/approve">
+							@CSRFField(csrfToken)
+							<input type="hidden" name="change_id" value={ strconv.FormatInt(p.ID, 10) }/>
+							<input type="hidden" name="proposal_version" value={ p.Version }/>
+							@ui.Btn(ui.B{Kind: ui.OKOutline, Icon: "check"}) {
+								Onayla
+							}
+						</form>
+						<form method="post" action="/sync/reject">
+							@CSRFField(csrfToken)
+							<input type="hidden" name="change_id" value={ strconv.FormatInt(p.ID, 10) }/>
+							@ui.Btn(ui.B{Kind: ui.DangerOutline, Icon: "close"}) {
+								Reddet
+							}
+						</form>
+					}
+				}
+			}
+		}
+	}
+
+	@ui.Card(ui.C{Title: "Fark"}) {
+		if syncPlanEmpty(ov.Plan) {
+			@ui.Empty("ok", "Fark yok", "Zitadel rolleri ile Headscale grupları ve cihazları aynı; apply edilecek bir şey yok.")
+		}
+		if ov.Plan.Blocked {
+			@ui.Callout(ui.N{Tone: ui.Err}) {
+				Plan bloklu; apply edilemez.
+			}
+		}
+		if ov.Plan.NeedsApproval {
+			@ui.Callout(ui.N{Tone: ui.Warn}) {
+				Onay gerekli.
+			}
+		}
+		if ov.Plan.Reason != "" {
+			<p>{ ov.Plan.Reason }</p>
+		}
+		if len(ov.Plan.GroupDiff.Groups) > 0 {
+			@ui.TableIn() {
+				<thead>
+					<tr>
+						<th scope="col">Grup</th>
+						<th scope="col">Eksik (eklenecek)</th>
+						<th scope="col">Fazla (çıkarılacak)</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, g := range ov.Plan.GroupDiff.Groups {
+						<tr>
+							<td>{ g.Group }</td>
+							<td>{ strings.Join(g.Added, ", ") }</td>
+							<td>{ strings.Join(g.Removed, ", ") }</td>
+						</tr>
+					}
+				</tbody>
+			}
+		}
+		if len(ov.Plan.GroupDiff.RemovedGroups) > 0 {
+			<p>Silinecek gruplar: { strings.Join(ov.Plan.GroupDiff.RemovedGroups, ", ") }</p>
+		}
+		if len(ov.Plan.ExpireNodes) > 0 {
+			@ui.TableIn() {
+				<thead>
+					<tr>
+						<th scope="col">Node</th>
+						<th scope="col">Kullanıcı</th>
+						<th scope="col">Neden</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, n := range ov.Plan.ExpireNodes {
+						<tr>
+							<td data-node-id={ strconv.FormatUint(n.NodeID, 10) }>{ n.Node }</td>
+							<td>{ n.UserID }</td>
+							<td>{ n.Why }</td>
+						</tr>
+					}
+				</tbody>
+			}
+		}
+		if len(ov.Plan.Warnings) > 0 {
+			<ul>
+				for _, w := range ov.Plan.Warnings {
+					<li>{ w }</li>
+				}
+			</ul>
+		}
+	}
+
+	if ov.Plan.Identity != nil {
+		@ui.Card(ui.C{Title: "Kimlik dönüşümü", Desc: "Headscale grup üyelerinin e-posta yerine Zitadel kullanıcı kimliğiyle yazılması; erişim değişmez."}) {
+			if len(ov.Plan.Identity.Mappings) > 0 {
+				@ui.TableIn() {
+					<thead>
+						<tr>
+							<th scope="col">Eski</th>
+							<th scope="col">Yeni</th>
+							<th scope="col">Zitadel kullanıcı</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, m := range ov.Plan.Identity.Mappings {
+							<tr>
+								<td>{ m.Old }</td>
+								<td>{ m.New }</td>
+								<td>{ m.UserID }</td>
+							</tr>
+						}
+					</tbody>
+				}
+			}
+			if len(ov.Plan.Identity.Unmatched) > 0 {
+				@ui.Callout(ui.N{Tone: ui.Err}) {
+					Eşleşmeyen: { strings.Join(ov.Plan.Identity.Unmatched, ", ") }
+				}
+			}
+			if len(ov.Plan.Identity.Dropped) > 0 {
+				<p>Düşürülecek: { strings.Join(ov.Plan.Identity.Dropped, ", ") }</p>
+			}
+		}
+	}
+}
+
+// dryRunValue is the select value (true/false) matching the dry-run setting.
+func dryRunValue(on bool) string {
+	if on {
+		return "true"
+	}
+	return "false"
+}

@@ -1,0 +1,12 @@
+# Placeholder for the existing installation's wireguard-ui (F6 adopt test target): the installer must detect it and
+# never touch it. It runs nothing.
+[Unit]
+Description=wireguard-ui placeholder (F6 adopt target)
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+
+[Install]
+WantedBy=multi-user.target

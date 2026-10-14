@@ -1,0 +1,80 @@
+# Headscale v0.29.4, test-only compose stack (F1-004). Not the production config (ADR-relevant
+# facts for prod are in .agents/skills/stack-notes/reference.md).
+#
+# The stack runs with `network_mode: host` (compose.yaml), so every address below is the loopback
+# interface shared by headscale and the seed/test tooling on the developer's machine. Zitadel is not
+# local: it runs in the developer's k3s lab (ADR 0014) and is the OIDC issuer below.
+server_url: http://localhost:8090
+listen_addr: 127.0.0.1:8090
+metrics_listen_addr: 127.0.0.1:9091
+grpc_listen_addr: 127.0.0.1:50443
+grpc_allow_insecure: false
+
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+  allocation: sequential
+
+derp:
+  server:
+    enabled: false
+  urls:
+    - https://controlplane.tailscale.com/derpmap/default
+  paths: []
+  auto_update_enabled: false
+
+disable_check_updates: true
+
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+    write_ahead_log: true
+
+policy:
+  mode: file
+  path: /etc/headscale/policy.hujson
+
+dns:
+  magic_dns: true
+  base_domain: ts.tagcess.test
+  override_local_dns: true
+  nameservers:
+    global:
+      - 1.1.1.1
+  search_domains: []
+  # F2-006 (ADR 0013): the file tagcess atomically rewrites; Headscale watches it
+  # with fsnotify. The file must exist at startup or headscale refuses to start
+  # (hscontrol/dns NewExtraRecordsManager), so test/lab/up.sh seeds test/compose/dns.
+  extra_records_path: /var/lib/tagcess-dns/extra-records.json
+
+unix_socket: /var/run/headscale/headscale.sock
+unix_socket_permission: "0770"
+
+# Client id/secret come only from HEADSCALE_OIDC_CLIENT_ID / HEADSCALE_OIDC_CLIENT_SECRET
+# (test/compose/.env, written by the seed tool after it creates the "headscale" app in Zitadel).
+# tagcess itself never logs in through this; it only exists so F1-021's node registration can use
+# a real OIDC flow later. F1-004's own tests register nodes with a pre-auth key instead (see seed).
+oidc:
+  only_start_if_oidc_is_available: true
+  issuer: "https://tagcess-zitadel.lab.example.com"
+  scope: ["openid", "profile", "email"]
+  pkce:
+    enabled: true
+    method: S256
+
+logtail:
+  enabled: false
+
+taildrop:
+  enabled: true
+
+auto_update:
+  enabled: false
+
+log:
+  level: info
+  format: text

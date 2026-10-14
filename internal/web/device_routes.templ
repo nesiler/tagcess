@@ -1,0 +1,126 @@
+package web
+
+import (
+	"strconv"
+
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// The device routes screen (F3-015, H-01): the advertised, approved and active route sets side by
+// side, and one approval form whose checkboxes are the desired full approved set. The exit node
+// is a single row; approving it sends the IPv4 and IPv6 /0 pair. Approval is not access: the note
+// says so, and the autoApprovers match from the policy is a hint, never a blocker.
+
+templ DeviceRoutesPage(view DeviceRoutesView, csrfToken string) {
+	@ui.PageHead(ui.H{
+		Title: "Route'lar: " + view.Row.Name,
+		Tip:   routeApprovalNote,
+		Crumbs: []ui.Crumb{
+			{Label: "Cihazlar", Href: "/headscale/devices"},
+			{Label: "Route'lar"},
+		},
+	}) {
+		@ui.Btn(ui.B{Href: "/headscale/devices/" + strconv.FormatUint(view.Row.ID, 10)}) {
+			Cihaza dön
+		}
+	}
+	@HeadscaleTabs("devices", view.DryRun)
+	if view.Err != nil {
+		@ui.Callout(ui.N{Tone: ui.Err, Title: "Route'lar okunamadı."}) {
+			<p>Neden: { view.Err.Error() }</p>
+		}
+		@ui.Btn(ui.B{Href: "/headscale/devices"}) {
+			Listeye dön
+		}
+	} else {
+		if view.PolicyErr {
+			@ui.Callout(ui.N{Tone: ui.Warn}) {
+				Policy okunamadı; autoApprovers eşleşmesi gösterilmiyor. Onay yine de yapılabilir.
+			}
+		}
+		@ui.Card(ui.C{Title: "Route cluster'ları"}) {
+			@ui.KV() {
+				<dt>İlan edilen</dt>
+				<dd><code>{ routeList(view.AvailableRoutes) }</code></dd>
+				<dt>Onaylı</dt>
+				<dd><code>{ routeList(view.ApprovedRoutes) }</code></dd>
+				<dt>Aktif</dt>
+				<dd><code>{ routeList(view.ActiveRoutes) }</code></dd>
+			}
+		}
+		if len(view.SubnetRows) == 0 && view.Exit == nil {
+			@ui.Callout(ui.N{Tone: ui.Info}) {
+				Node route ilan etmiyor; onaylanacak bir şey yok.
+			}
+		} else {
+			@MaintenanceWideningGuard() {
+				<form method="post" action={ templ.SafeURL("/headscale/devices/" + strconv.FormatUint(view.Row.ID, 10) + "/routes") }>
+					@CSRFField(csrfToken)
+					@ui.HiddenFields([]ui.Hidden{{Name: "version", Value: view.Version}})
+					@ui.Table() {
+						<thead>
+							<tr>
+								<th scope="col">Onay</th>
+								<th scope="col">Route</th>
+								<th scope="col">Durum</th>
+								<th scope="col">autoApprovers</th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, row := range view.SubnetRows {
+								<tr>
+									<td>
+										@ui.Check(ui.Chk{Name: "route", Value: row.Prefix, Checked: row.Approved, Attrs: templ.Attributes{"aria-label": row.Prefix}})
+									</td>
+									<td><code>{ row.Prefix }</code></td>
+									<td>
+										@routeState(row.Approved, row.Active)
+									</td>
+									<td>
+										if row.AutoApprovers != "" {
+											otomatik onaylar: { row.AutoApprovers }
+										}
+									</td>
+								</tr>
+							}
+							if view.Exit != nil {
+								<tr>
+									<td>
+										@ui.Check(ui.Chk{Name: "route", Value: routeExitForm, Checked: view.Exit.Approved, Attrs: templ.Attributes{"aria-label": "exit node"}})
+									</td>
+									<td>exit node <code>0.0.0.0/0, ::/0</code></td>
+									<td>
+										@routeState(view.Exit.Approved, view.Exit.Active)
+									</td>
+									<td>
+										if view.Exit.AutoApprovers != "" {
+											otomatik onaylar: { view.Exit.AutoApprovers }
+										}
+									</td>
+								</tr>
+							}
+						</tbody>
+					}
+					@ui.BtnRow() {
+						@ui.Btn(ui.B{Kind: ui.Primary, Icon: "check"}) {
+							Onayla
+						}
+					}
+				</form>
+			}
+		}
+	}
+}
+
+// routeState renders the approval and activity badges of one route row.
+templ routeState(approved, active bool) {
+	if approved {
+		@ui.StatusText(ui.OK, "onaylı", "")
+	}
+	if active {
+		@ui.StatusText(ui.Info, "aktif", "")
+	}
+	if !approved && !active {
+		—
+	}
+}

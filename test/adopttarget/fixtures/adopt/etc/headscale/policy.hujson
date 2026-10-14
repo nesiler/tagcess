@@ -1,0 +1,19 @@
+// Adopt-shaped Headscale policy for the F6 adopt test target (example.test
+// users). File mode; the hook ACL rule (tag:k8s -> tag:vpn-server:9443) is NOT here yet: the installer's
+// hs_hook_acl phase adds it.
+{
+  "groups": {
+    "group:devops": ["alice@"],
+    "group:developer": ["bob@"],
+    "group:standart": []
+  },
+  "tagOwners": {
+    "tag:vpn-server": ["group:devops"],
+    "tag:k8s": ["group:devops"]
+  },
+  "acls": [
+    {"action": "accept", "src": ["autogroup:member"], "dst": ["tag:vpn-server:80,443"]},
+    {"action": "accept", "src": ["tag:vpn-server"], "dst": ["tag:k8s:8443"]},
+    {"action": "accept", "src": ["group:devops"], "dst": ["tag:vpn-server:22", "tag:k8s:22"]}
+  ]
+}

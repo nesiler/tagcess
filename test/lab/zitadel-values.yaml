@@ -1,0 +1,135 @@
+# Lab Zitadel (F1-024, ADR 0014). Official chart zitadel/zitadel 10.0.6 (app v4.15.3), image pinned to the
+# production version v4.16.0 below. Chart 10.1.0 (v4.19.2) is deliberately not used.
+# TLS ends at Traefik. Plain Ingress, no access restriction: this is a lab (ADR 0014).
+image:
+  tag: v4.16.0
+
+zitadel:
+  # Secret `zitadel-masterkey`, created by lab-up (exactly 32 chars, never committed).
+  masterkeySecretName: zitadel-masterkey
+  configmapConfig:
+    ExternalDomain: tagcess-zitadel.lab.example.com
+    ExternalPort: 443
+    ExternalSecure: true
+    TLS:
+      Enabled: false
+    # F1-020: Zitadel's default HTTPClient.DenyList refuses 100.64.0.0/10 (Tailscale CGNAT), so an
+    # Actions target pointing at the developer's Tailscale address fails with Target.DeniedURL. This
+    # list is the upstream default (Zitadel v4.16.0 cmd/defaults.yaml) with only 100.64.0.0/10
+    # removed; every other SSRF-protection range stays blocked. The lab is disposable (ADR 0014).
+    # Production (ADR 0003) needs the same narrow removal or a non-CGNAT webhook address; that is a
+    # developer decision recorded as a proposed ADR, not applied here.
+    HTTPClient:
+      DenyList:
+        - "localhost"
+        - "0.0.0.0/8"
+        - "10.0.0.0/8"
+        - "127.0.0.0/8"
+        - "169.254.0.0/16"
+        - "172.16.0.0/12"
+        - "192.168.0.0/16"
+        - "198.18.0.0/15"
+        - "::/128"
+        - "::1/128"
+        - "fc00::/7"
+        - "fe80::/10"
+    FirstInstance:
+      Org:
+        Name: Lab
+        # The admin password cannot be set from env (chart gotcha), so no human password here; the seed
+        # works with the machine user's PAT, which the chart writes to Secret tagcess-seed-pat.
+        Machine:
+          Machine:
+            Username: tagcess-seed
+            Name: tagcess seed bootstrap
+          Pat:
+            ExpirationDate: "2026-12-31T00:00:00Z"
+    Database:
+      Postgres:
+        Host: zitadel-db
+        Port: 5432
+        Database: zitadel
+        MaxOpenConns: 10
+        MaxIdleConns: 5
+        MaxConnLifetime: 30m
+        MaxConnIdleTime: 5m
+        User:
+          Username: postgres
+          SSL:
+            Mode: disable
+        Admin:
+          Username: postgres
+          SSL:
+            Mode: disable
+
+# Database passwords: Secret `zitadel-db-env` (ZITADEL_DATABASE_POSTGRES_{USER,ADMIN}_PASSWORD), created by lab-up.
+envVarsSecret: zitadel-db-env
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 384Mi
+  limits:
+    cpu: "1"
+    memory: 768Mi
+
+initJob:
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 384Mi}
+setupJob:
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+cleanupJob:
+  resources:
+    requests: {cpu: 10m, memory: 32Mi}
+    limits: {cpu: 100m, memory: 64Mi}
+
+# The chart derives the kubectl image tag from the cluster version; that tag may not exist.
+tools:
+  kubectl:
+    image:
+      tag: "1.35.8"
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+  hosts:
+    - host: tagcess-zitadel.lab.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: tagcess-zitadel-tls
+      hosts:
+        - tagcess-zitadel.lab.example.com
+
+login:
+  image:
+    tag: v4.16.0
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  ingress:
+    enabled: true
+    className: traefik
+    annotations:
+      traefik.ingress.kubernetes.io/router.entrypoints: websecure
+      traefik.ingress.kubernetes.io/router.tls: "true"
+    hosts:
+      - host: tagcess-zitadel.lab.example.com
+        paths:
+          - path: /ui/v2/login
+            pathType: Prefix
+    tls:
+      - secretName: tagcess-zitadel-tls
+        hosts:
+          - tagcess-zitadel.lab.example.com

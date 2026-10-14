@@ -1,0 +1,107 @@
+[
+  {
+    "name": "monitor.c.example.test",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "k8s-api.c.example.test",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "projects.c.example.test",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "projects-auth.c.example.test",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "tickets.c.example.test",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "auth.c.example.test",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "docs.c.example.test",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "dbadmin.c.example.test",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "storage-api.c.example.test",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "dbmetrics.c.example.test",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "errors.c.example.test",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "partner-api.c.example.test",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "blog.internal.a.example.test",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "store.internal.a.example.test",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "store-staging.internal.a.example.test",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "blog-staging.internal.a.example.test",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "dashboard-staging.internal.a.example.test",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "blog-admin.internal.a.example.test",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "issues.internal.a.example.test",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "dashboard.internal.a.example.test",
+    "type": "A",
+    "value": "100.64.0.4"
+  },
+  {
+    "name": "sandbox.b.example.test",
+    "type": "A",
+    "value": "100.64.0.4"
+  }
+]

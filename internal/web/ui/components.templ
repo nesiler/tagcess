@@ -1,0 +1,458 @@
+package ui
+
+// Icon draws one icon from icons.go at text size. An unknown name draws nothing visible; the
+// icon-name test fails the build for any literal name that does not exist.
+templ Icon(name string) {
+	<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+		@templ.Raw(iconBodies[name])
+	</svg>
+}
+
+// IconSm draws a smaller icon for dense rows.
+templ IconSm(name string) {
+	<svg class="ic ic-sm" viewBox="0 0 24 24" aria-hidden="true">
+		@templ.Raw(iconBodies[name])
+	</svg>
+}
+
+// Spinner is the busy indicator htmx shows while a request runs (hx-indicator).
+templ Spinner() {
+	<svg class="ic htmx-indicator" viewBox="0 0 24 24" role="status" aria-label="yükleniyor">
+		@templ.Raw(iconBodies["spinner"])
+	</svg>
+}
+
+// Btn is the one button of the interface: a link with Href, an inert span when that link is
+// disabled, otherwise a <button>. Children are the label.
+templ Btn(b B) {
+	if b.Href != "" && b.Disabled {
+		<span class={ b.class() } role="link" aria-disabled="true" { optAttrs(nil, "title", b.Title, "aria-description", b.Title)... }>
+			if b.Icon != "" {
+				@Icon(b.Icon)
+			}
+			{ children... }
+		</span>
+	} else if b.Href != "" {
+		<a class={ b.class() } href={ templ.SafeURL(b.Href) } { optAttrs(b.Attrs, "title", b.Title)... }>
+			if b.Icon != "" {
+				@Icon(b.Icon)
+			}
+			{ children... }
+		</a>
+	} else {
+		<button class={ b.class() } type={ b.buttonType() } disabled?={ b.Disabled } { b.attrs()... }>
+			if b.Icon != "" {
+				@Icon(b.Icon)
+			}
+			{ children... }
+		</button>
+	}
+}
+
+// BtnRow lays out a row of buttons (and forms holding one button each) under a form or card.
+templ BtnRow() {
+	<div class="btnrow">
+		{ children... }
+	</div>
+}
+
+// Pill is a small rounded label. Children are its text.
+templ Pill(t Tone) {
+	<span class={ pillClass(t, false) }>
+		{ children... }
+	</span>
+}
+
+// Tag is an outlined pill for identifiers such as tag:web or a role name.
+templ Tag(text string) {
+	<span class="pill pill-flat">{ text }</span>
+}
+
+// Status is a coloured dot followed by text: the health or state of a row.
+templ Status(t Tone, text string) {
+	<span class="st"><span class={ toneClass("dot", t) }></span>{ text }</span>
+}
+
+// StatusText is a simple state ("güncel", "açık") as coloured plain text, never a chip, with an
+// optional muted time after it. Colour is only a hint; the text itself says the state.
+templ StatusText(t Tone, text, at string) {
+	<span class="stt-wrap">
+		<span class={ statusTextClass(t) }>{ text }</span>
+		if at != "" {
+			<span class="stt-at">{ at }</span>
+		}
+	</span>
+}
+
+// Tip is a small info button next to a title; its text shows as a tooltip on hover and on keyboard
+// focus (and a tap on touch screens), and Escape hides it again (ui.js). The button is described by
+// the text, so screen readers read it without opening anything.
+templ Tip(text string) {
+	if text != "" {
+		<span class="tip" data-tip>
+			<button type="button" class="tip-btn" aria-label="Bilgi" aria-describedby={ tipID(text) }>
+				@IconSm("info")
+			</button>
+			<span class="tip-body" role="tooltip" id={ tipID(text) }>{ text }</span>
+		</span>
+	}
+}
+
+// PageHead is the title block of a page: breadcrumb, title, subtitle and the page actions
+// (children) on the right.
+templ PageHead(h H) {
+	if len(h.Crumbs) > 0 {
+		<nav class="crumbs" aria-label="konum">
+			for i, c := range h.Crumbs {
+				if i > 0 {
+					@IconSm("chevron-right")
+				}
+				if c.Href != "" {
+					<a href={ templ.SafeURL(c.Href) }>{ c.Label }</a>
+				} else {
+					<span aria-current="page">{ c.Label }</span>
+				}
+			}
+		</nav>
+	}
+	<div class="page-head">
+		<div>
+			<h1>
+				{ h.Title }
+				@Tip(h.Tip)
+			</h1>
+			if h.Sub != "" {
+				<p>{ h.Sub }</p>
+			}
+		</div>
+		<div class="page-acts">
+			{ children... }
+		</div>
+	</div>
+}
+
+// Card is the bordered block every section of a page sits in.
+templ Card(c C) {
+	<section class={ c.class() } { c.attrs()... }>
+		if c.Title != "" {
+			<h2 class="card-title">
+				{ c.Title }
+				@Tip(c.Desc)
+				if c.Right != nil {
+					<span class="right">
+						@c.Right
+					</span>
+				}
+			</h2>
+		}
+		if c.Desc != "" && c.Title == "" {
+			<p class="card-desc">{ c.Desc }</p>
+		}
+		{ children... }
+	</section>
+}
+
+// Grid lays cards out in 2 to 5 equal columns that collapse on narrow screens.
+templ Grid(cols int) {
+	<div class={ gridClass(cols) }>
+		{ children... }
+	</div>
+}
+
+// TileCard is one dashboard number in a card.
+templ TileCard(t Tile) {
+	<section class="card">
+		<div class="tile-k">
+			if t.Icon != "" {
+				@Icon(t.Icon)
+			}
+			{ t.Label }
+		</div>
+		<div class="tile-v">{ t.Value }</div>
+		if t.Sub != "" {
+			<div class="tile-s">
+				if t.Href != "" {
+					<a href={ templ.SafeURL(t.Href) }>{ t.Sub }</a>
+				} else {
+					{ t.Sub }
+				}
+			</div>
+		}
+	</section>
+}
+
+// Group is a titled, bordered sub-section inside a card or form (API rules, redirects…).
+templ Group(title string) {
+	<div class="group">
+		if title != "" {
+			<h3>{ title }</h3>
+		}
+		{ children... }
+	</div>
+}
+
+// Callout is a toned message box: errors, warnings, results, notes. Children are the body.
+templ Callout(n N) {
+	<div class={ toneClass("callout", n.Tone) } role={ n.role() }>
+		@Icon(n.icon())
+		<div class="callout-body">
+			if n.Title != "" {
+				<p class="callout-title">{ n.Title }</p>
+			}
+			{ children... }
+		</div>
+	</div>
+}
+
+// Tabs is a tab bar; the tab whose Key equals active is marked current.
+templ Tabs(tabs []Tab, active string) {
+	<nav class="tabs" aria-label="Alt menü">
+		for _, t := range tabs {
+			if t.Key == active {
+				<a href={ templ.SafeURL(t.Href) } aria-current="page">
+					{ t.Label }
+					if t.Count != "" {
+						<span class="cnt">{ t.Count }</span>
+					}
+				</a>
+			} else {
+				<a href={ templ.SafeURL(t.Href) }>
+					{ t.Label }
+					if t.Count != "" {
+						<span class="cnt">{ t.Count }</span>
+					}
+				</a>
+			}
+		}
+	</nav>
+}
+
+// Table is a full-width table in its own flush card. Children are <thead> and <tbody>; cells are
+// plain <th>/<td>, actions go in an Actions cell.
+templ Table() {
+	<div class="card card-flush">
+		<div class="tscroll">
+			<table>
+				{ children... }
+			</table>
+		</div>
+	</div>
+}
+
+// TableFoot is Table with a pager (or any footer line) under it, inside the same card.
+templ TableFoot(foot templ.Component) {
+	<div class="card card-flush">
+		<div class="tscroll">
+			<table>
+				{ children... }
+			</table>
+		</div>
+		@foot
+	</div>
+}
+
+// TableIn is a table inside a padded card, running edge to edge.
+templ TableIn() {
+	<div class="table-in tscroll">
+		<table>
+			{ children... }
+		</table>
+	</div>
+}
+
+// ListTable is a list a person sorts and searches in the browser (ui.js): every header with text
+// becomes a sort button (aria-sort), and with Search a box above the rows filters them by their
+// text. Without script it is the same plain table and the search box stays hidden. A cell sorts by
+// its data-sort attribute when set (a time, a number), otherwise by its text; a header with
+// data-nosort is left alone. Children are <thead> and <tbody>.
+templ ListTable(l L) {
+	<div class={ l.class() } data-table>
+		if l.Search {
+			<div class="tbar" data-table-tools hidden>
+				<label class="tsearch">
+					@IconSm("search")
+					<span class="sr-only">{ l.searchLabel() }</span>
+					<input class="input" type="search" id={ l.searchID() } placeholder="Ara" autocomplete="off" data-table-search/>
+				</label>
+				<span class="tcount" role="status" aria-live="polite" data-table-count></span>
+			</div>
+		}
+		<div class={ l.scrollClass() }>
+			<table data-sortable { optAttrs(nil, "aria-label", l.Label)... }>
+				{ children... }
+			</table>
+		</div>
+		if l.Search {
+			<p class="tnone" data-table-none hidden>Aramayla eşleşen satır yok.</p>
+		}
+		if l.Foot != nil {
+			@l.Foot
+		}
+	</div>
+}
+
+// Actions is the right-aligned last cell of a row: buttons, menus, links.
+templ Actions() {
+	<td class="act">
+		{ children... }
+	</td>
+}
+
+// Pager is the line under a paged table: a labelled navigation landmark with previous/next links.
+templ Pager(p P) {
+	<nav class="pager" aria-label={ p.label() }>
+		<span>{ p.Info }</span>
+		<span class="pager-sp">
+			@pagerStep(p.Prev, "prev", "Önceki")
+			@pagerStep(p.Next, "next", "Sonraki")
+		</span>
+	</nav>
+}
+
+// pagerStep is one pager link; without a target it is a disabled link, never a form button.
+templ pagerStep(href, rel, label string) {
+	if href == "" {
+		<span class="btn btn-sm" aria-disabled="true">{ label }</span>
+	} else {
+		<a class="btn btn-sm" href={ templ.SafeURL(href) } rel={ rel }>{ label }</a>
+	}
+}
+
+// Empty is the placeholder of a list with nothing in it. Children are an optional action.
+templ Empty(icon, title, text string) {
+	<div class="empty">
+		<div class="empty-art">
+			<svg class="ic ic-lg" viewBox="0 0 24 24" aria-hidden="true">
+				@templ.Raw(iconBodies[icon])
+			</svg>
+		</div>
+		<h3>{ title }</h3>
+		if text != "" {
+			<p>{ text }</p>
+		}
+		{ children... }
+	</div>
+}
+
+// Fold is a closed-by-default section the operator opens on demand (details/summary, no script),
+// for secondary content such as expired keys. Children are its body.
+templ Fold(summary string, attrs templ.Attributes) {
+	<details class="fold" { attrs... }>
+		<summary class="fold-head">
+			@IconSm("chevron-right")
+			<span>{ summary }</span>
+		</summary>
+		<div class="fold-body">
+			{ children... }
+		</div>
+	</details>
+}
+
+// LinkList is a list of navigation rows (icon, title, description, chevron), e.g. an index page that
+// points to other screens.
+templ LinkList(links []Link) {
+	<ul class="links">
+		for _, l := range links {
+			<li>
+				<a class="link-row" href={ templ.SafeURL(l.Href) }>
+					if l.Icon != "" {
+						<span class="link-ic">
+							@Icon(l.Icon)
+						</span>
+					}
+					<span class="link-text">
+						<strong>{ l.Title }</strong>
+						if l.Desc != "" {
+							<small>{ l.Desc }</small>
+						}
+					</span>
+					@IconSm("chevron-right")
+				</a>
+			</li>
+		}
+	</ul>
+}
+
+// KV is a definition list of label/value pairs. Children are <dt>/<dd> pairs.
+templ KV() {
+	<dl class="kv">
+		{ children... }
+	</dl>
+}
+
+// Secret shows a value the operator sees only once (a new key) with a copy button.
+templ Secret(value string) {
+	<div class="secret">
+		<code>{ value }</code>
+		@Btn(B{Small: true, Type: "button", Icon: "copy", Attrs: templ.Attributes{"data-copy": value}}) {
+			<span data-copy-label>Kopyala</span>
+		}
+		<span class="copy-status" role="status" aria-live="polite" data-copy-status></span>
+	</div>
+}
+
+// Menu is a "more actions" dropdown (details/summary, no script needed). Children are MenuItems.
+templ Menu(label string) {
+	<details class="menu">
+		<summary class="menu-btn" aria-label={ label }>
+			@Icon("more")
+		</summary>
+		<ul class="menu-list">
+			{ children... }
+		</ul>
+	</details>
+}
+
+// MenuLink is a menu entry that navigates.
+templ MenuLink(href string, danger bool) {
+	<li>
+		if danger {
+			<a class="danger" href={ templ.SafeURL(href) }>{ children... }
+</a>
+		} else {
+			<a href={ templ.SafeURL(href) }>{ children... }
+</a>
+		}
+	</li>
+}
+
+// MenuDialog is a menu entry that opens the dialog with the given id.
+templ MenuDialog(dialogID string, danger bool) {
+	<li>
+		if danger {
+			<button class="danger" type="button" data-dialog-open={ dialogID }>{ children... }
+</button>
+		} else {
+			<button type="button" data-dialog-open={ dialogID }>{ children... }
+</button>
+		}
+	</li>
+}
+
+// Dialog is a modal dialog. Children are its body, usually a form ending in DialogFoot.
+templ Dialog(d D) {
+	<dialog id={ d.ID } class={ d.class() } aria-labelledby={ d.ID + "-title" } { d.attrs()... }>
+		<h2 id={ d.ID + "-title" }>{ d.Title }</h2>
+		if d.Desc != "" {
+			<p class="dlg-desc" id={ d.ID + "-desc" }>{ d.Desc }</p>
+		}
+		{ children... }
+	</dialog>
+}
+
+// DialogFoot is the button row of a dialog: a cancel button, then the children (the action).
+templ DialogFoot() {
+	<div class="dlg-foot">
+		@Btn(B{Type: "button", Attrs: templ.Attributes{"data-dialog-close": true}}) {
+			Vazgeç
+		}
+		{ children... }
+	</div>
+}
+
+// HiddenFields writes hidden inputs.
+templ HiddenFields(fields []Hidden) {
+	for _, f := range fields {
+		<input type="hidden" name={ f.Name } value={ f.Value }/>
+	}
+}

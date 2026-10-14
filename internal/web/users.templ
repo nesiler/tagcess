@@ -1,0 +1,92 @@
+package web
+
+import (
+	"strconv"
+
+	"github.com/nesiler/tagcess/internal/web/ui"
+)
+
+// UsersPage renders the Headscale users screen (H-02): every Headscale user with its Zitadel
+// match, roles and account state, and its personal/tagged device counts. Read-only: users are
+// created by OIDC sign-in; the screen has no create, delete or rename action (R2 karar 8).
+templ UsersPage(view UsersView) {
+	@ui.PageHead(ui.H{
+		Title: "Headscale kullanıcıları",
+		Sub:   "Kullanıcılar OIDC girişiyle oluşur.",
+		Tip:   "Bu liste yalnız okunur: oluşturma, silme ve yeniden adlandırma buradan yapılmaz.",
+	})
+	@HeadscaleTabs("users", view.DryRun)
+	if view.ZitadelErr != nil {
+		@ui.Callout(ui.N{Tone: ui.Warn, Title: "Zitadel doğrulanamadı;"}) {
+			Roller ve hesap durumu sütunları güvenilir değil. Neden: { view.ZitadelErr.Error() }
+		}
+	}
+	if len(view.Rows) == 0 {
+		@ui.Card(ui.C{}) {
+			@ui.Empty("user", "Kullanıcı yok", "Headscale'de kayıtlı kullanıcı yok.")
+		}
+	} else {
+		@ui.ListTable(ui.L{Label: "Kullanıcılar", Search: true}) {
+			<thead>
+				<tr>
+					<th scope="col">Kullanıcı</th>
+					<th scope="col">E-posta</th>
+					<th scope="col">Eşleşme</th>
+					<th scope="col">Zitadel kimliği</th>
+					<th scope="col">Roller</th>
+					<th scope="col">Hesap durumu</th>
+					<th scope="col">Kişisel cihaz</th>
+					<th scope="col">Tag'li cihaz</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, row := range view.Rows {
+					<tr>
+						<td>
+							{ row.Name }
+							if row.DisplayName != "" && row.DisplayName != row.Name {
+								<span>· { row.DisplayName }</span>
+							}
+						</td>
+						<td>{ row.Email }</td>
+						<td>
+							if !row.Verified {
+								@ui.StatusText(ui.Off, "doğrulanamadı", "")
+							} else if row.Matched {
+								@ui.StatusText(ui.OK, "eşleşti", "")
+							} else {
+								@ui.StatusText(ui.Warn, "eşleşmedi", "")
+								if row.PersonalDevices == 0 && row.TaggedDevices > 0 {
+									@ui.Tip("Bilgi: tag'li cihazların kurulum sahibi; Zitadel kullanıcısı olması beklenmez.")
+								}
+							}
+						</td>
+						<td>{ row.ZitadelID }</td>
+						<td>
+							if !row.Verified {
+								doğrulanamadı
+							} else if row.Matched && len(row.Roles) > 0 {
+								for _, r := range row.Roles {
+									@ui.Tag(r)
+								}
+							} else {
+								—
+							}
+						</td>
+						<td>
+							if !row.Verified {
+								doğrulanamadı
+							} else if row.Matched {
+								{ row.State }
+							} else {
+								—
+							}
+						</td>
+						<td>{ strconv.Itoa(row.PersonalDevices) }</td>
+						<td>{ strconv.Itoa(row.TaggedDevices) }</td>
+					</tr>
+				}
+			</tbody>
+		}
+	}
+}
