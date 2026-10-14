@@ -35,7 +35,7 @@ while [ $# -gt 0 ]; do
 done
 
 [ "$(id -u)" = 0 ] || die "must run as root"
-[ -n "$BINARY" ] && [ -f "$BINARY" ] || die "--binary FILE is required and must exist"
+if [ -z "$BINARY" ] || [ ! -f "$BINARY" ]; then die "--binary FILE is required and must exist"; fi
 [ -n "$SHA256" ] || die "--sha256 HEX is required"
 case "$REQUEST_UID" in ''|*[!0-9]*) die "--request-uid must be a number" ;; esac
 [[ "$HEALTH_URL" =~ ^http://(127\.0\.0\.1|localhost):[0-9]+/health$ ]] ||

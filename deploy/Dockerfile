@@ -1,9 +1,9 @@
 # tagcess production image (architecture.md §8): non-root, with git for the artifact history.
 # Build from the repo root: docker build -f deploy/Dockerfile -t tagcess:latest .
 
-# golang:1.27 matches go.mod (go 1.27.1). modernc.org/sqlite is pure Go, so CGO is off and the binary
+# golang:1.27 matches go.mod (go 1.27.2). modernc.org/sqlite is pure Go, so CGO is off and the binary
 # is static; the runtime image needs no libc.
-FROM golang:1.27 AS build
+FROM golang:1.27.2 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

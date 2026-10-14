@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -275,6 +276,7 @@ func TestZitadelInstall_SkippedUnlessFreshAndAbsent(t *testing.T) {
 func TestZitadelInstall_LabHostFromEnvironment(t *testing.T) {
 	t.Parallel()
 	adopttarget.RequireAnsible(t)
+	requireInstallTools(t)
 	const host = "tagcess-zitadel.dev.example.net"
 	r := runZitadelInstall(t, map[string]any{"zitadel_lab_host": host}, 0)
 	if r.ExitCode != 0 {
@@ -300,6 +302,7 @@ func TestZitadelInstall_LabHostFromEnvironment(t *testing.T) {
 func TestZitadelInstall_PATToFileNoLog(t *testing.T) {
 	t.Parallel()
 	adopttarget.RequireAnsible(t)
+	requireInstallTools(t)
 	r := runZitadelInstall(t, nil, 0)
 	if r.ExitCode != 0 {
 		t.Fatalf("install:\n%s", r.Output)
@@ -330,5 +333,15 @@ func TestZitadelInstall_PATToFileNoLog(t *testing.T) {
 	g, _ := os.ReadFile(filepath.Join(r.home, "tagcess-install", "lab", "guide", "zitadel_install.json")) // #nosec G304 -- test temp dir
 	if !strings.Contains(string(g), "zitadel-admin-pat") || strings.Contains(string(g), pat) {
 		t.Fatalf("guide: %s", g)
+	}
+}
+
+// requireInstallTools skips (never passes) when a tool the zitadel_install shell tasks use is missing on the host.
+func requireInstallTools(t *testing.T) {
+	t.Helper()
+	for _, tool := range []string{"bash", "openssl", "base64"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s is not installed; a skip is not a PASS", tool)
+		}
 	}
 }

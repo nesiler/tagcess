@@ -152,8 +152,9 @@ verify_adopt() {
   role="$(in_target sh -c 'grep -l "import vpn_site " /etc/caddy/sites/*.caddy | wc -l' | tr -d ' ')"
   api="$(in_target sh -c 'grep -l "import vpn_site_api " /etc/caddy/sites/*.caddy | wc -l' | tr -d ' ')"
   only="$(in_target sh -c 'grep -l "import vpn_only " /etc/caddy/sites/*.caddy | wc -l' | tr -d ' ')"
-  [ "$files" = 20 ] && [ "$((role + api))" = 16 ] && [ "$api" = 5 ] && [ "$only" = 4 ] ||
+  if ! { [ "$files" = 20 ] && [ "$((role + api))" = 16 ] && [ "$api" = 5 ] && [ "$only" = 4 ]; }; then
     fail "sites/ layout is $files files, $((role + api)) role ($api api), $only vpn_only; want 20, 16 (5), 4"
+  fi
   # The existing installation's vpn-host is a tagged tailnet node; join this one the same way (pre-auth key in memory only).
   # shellcheck disable=SC2016 # expanded by the target's shell
   in_target sh -c '
