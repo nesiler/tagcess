@@ -339,9 +339,6 @@ func TestZitadelInstall_PATToFileNoLog(t *testing.T) {
 // requireInstallTools skips (never passes) when a tool the zitadel_install shell tasks use is missing on the host.
 func requireInstallTools(t *testing.T) {
 	t.Helper()
-	if os.Getenv("GITHUB_ACTIONS") == "true" {
-		t.Skip("the zitadel_install shell tasks do not run on the CI runner; a skip is not a PASS")
-	}
 	for _, tool := range []string{"bash", "openssl", "base64"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("%s is not installed; a skip is not a PASS", tool)
