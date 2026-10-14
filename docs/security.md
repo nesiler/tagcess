@@ -327,14 +327,17 @@ Design: [setup-flow.md](setup-flow.md) §2 and §5. The decisions behind the cho
   user and grant the first admin role is an open question (setup-flow.md O3).
 - **No Docker socket in tagcess (T19).** Docker documents the daemon and the `docker` group as root-level; a socket proxy
   still allows container creation. The helper accepts only `discover`, `stack.apply`, `stack.remove`,
-  `service.restart`, `stack.upgrade` and `handoff.cleanup` with typed parameters (hostnames by the §5 rule, the typed
+  `service.restart`, `stack.upgrade`, `handoff.ack` and `handoff.cleanup` with typed parameters (hostnames by the §5 rule, the typed
   settings of setup-flow.md §5.3.1, component switches); it renders the compose file itself, runs `docker compose config --quiet` before any change, mounts no Docker socket into
   any service and never publishes an admin port (Caddy admin, Headscale gRPC, Zitadel API) beyond loopback.
 - **Credential handoff.** Secret values cross between tagcess and the helper only as files in the handoff directory:
-  one file per allow-listed kind, bound to the running request ID, opened with the ADR 0021 b rules, deleted after use,
-  at the end of the request, at boot and after 15 minutes unread. A file for another or a finished request is deleted
-  unread (no replay). Results, journals, logs and audit carry only the kinds, never values. A value handed out to tagcess
-  (the bootstrap machine key, the initial admin password) is usable only by the setup session that owns the request.
+  one file per allow-listed kind, bound to the request ID, opened with the ADR 0021 b rules. A value for the helper is
+  deleted after use, at the end of the request, at boot and after 15 minutes; a file for another or a finished request
+  is deleted unread (no replay). A value for tagcess (the bootstrap machine key, the initial admin password) stays after
+  its request succeeded until tagcess acknowledges delivery (`handoff.ack`), the setup is sealed or 12 hours pass, so a
+  tagcess restart does not lose it; it is deleted at once if the request failed. It is usable only by the setup session
+  that owns the step (or one that replaced it through a new token from the host). Results, journals, logs and audit
+  carry only the kinds, never values.
 - **One authority for the Headscale config.** After `stack.apply` creates Headscale, its `config.yaml` changes only
   through the ADR 0021 patch flow with its `base_rev`; the stack channel never re-renders it, so a later stack apply
   cannot undo a narrowed `allowed_groups`. Both helper channels share one host lock and refuse to run while the other

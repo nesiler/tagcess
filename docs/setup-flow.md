@@ -204,7 +204,7 @@ New tables, all with the `setup_` prefix, so they do not collide with the k8s di
 | `setup_findings` | id, run_id, kind (table above), subject key (for example `headscale/systemd`, `listener/443/tcp`), attributes (JSON, schema per kind, secret-free by construction: only allow-listed fields are copied), evidence (which check, result class), observed_at |
 | `setup_state` | single row: setup token hash and expiry, failure counter, setup session hash and times, `sealed_at`, sealing identity, re-open count |
 | `setup_steps` | step key, choice (`install`/`connect`/`migrate`/`skip`), state (`pending`/`ready`/`applying`/`verified`/`failed`/`uncertain`), parameters (JSON, no secrets), the finding ids and their `observed_at` the choice was based on, last verified parameters and evidence (last known good), verified_at, actor |
-| `setup_migration_items` | one proposed import action per finding (§6): action key, finding id, state (`proposed`/`approved`/`applied`/`declined`/`failed`), linked `changes.id`, actor and time of the decision |
+| `setup_migration_items` | one proposed import action per finding (§6): action key, finding id and its `observed_at`, state (`proposed`/`approved`/`applying`/`applied`/`declined`/`failed`/`uncertain`), linked `changes.id` or helper request ID, actor and time of the decision, the reason for a revoked approval |
 
 The host helper writes its scan to `results/discovery.json` (size-limited like ADR 0021 b); tagcess validates it with a
 strict decoder and stores it. The raw file is not kept.
@@ -418,6 +418,7 @@ box (architecture.md §10.1) lists the remaining items, as it does today.
   | `stack.remove` | stops and removes one service that a failed "install new" added; keeps its data |
   | `service.restart` | restarts one allow-listed service |
   | `stack.upgrade` | moves one service to the digest in the manifest of the helper that is installed now (§5.6) |
+  | `handoff.ack` | records that tagcess delivered one `out/` value of a succeeded request and deletes that file (§5.4) |
   | `handoff.cleanup` | deletes the handoff files of a finished, failed or abandoned request (§5.4) |
 - **Stack revision:** the helper publishes in `results/status.json` a `base_rev` (SHA-256 of the secret-free projection
   of the stack: enabled components, their settings and digests). Every write request carries the `base_rev` it was
@@ -480,13 +481,27 @@ point them anywhere). This exception needs the developer's decision, together wi
     file. A file for another or an already finished request ID is deleted unread (replay).
   - **helper → tagcess:** for values the wizard needs once: the bootstrap machine key that a new Zitadel writes at first
     start (step 2, O3) and the initial human admin password. The helper writes `out/<request_id>.<kind>` (`0640`, group
-    = tagcess) for the request that produced it; tagcess reads it into memory, deletes it, and uses it only in the setup
-    session that owns that request (the password is shown once with `no-store`; the machine key is used by the
-    bootstrap and then deleted in Zitadel and on disk).
-  - **Cleanup:** the helper deletes every handoff file of a request when the request reaches a terminal state, on
-    `handoff.cleanup`, at boot for any request that is not the journal's current one, and after 15 minutes for an
-    `out/` file nobody read. Losing a handoff file makes the step `failed` (the user re-runs it); a secret is never
-    reconstructed from a result.
+    = tagcess) for the request that produced it. tagcess records the pending delivery (request ID and kinds, no value)
+    in the step's `setup_steps` row and uses the value only in the setup session that owns the step.
+  - **Operation completion is not delivery completion.** The producing request becomes terminal (`succeeded`) as usual,
+    but its `out/` files stay until delivery is complete:
+    - the initial admin password is shown with `no-store` only to the owning session; until the user confirms "I saved
+      it", reloading the page shows it again to that session only; the confirmation sends `handoff.ack` for that request
+      ID and kind;
+    - the bootstrap machine key is read into memory by the bootstrap; it is acknowledged only after the bootstrap step
+      has finished and the key has been deleted in Zitadel (step 2).
+    On `handoff.ack` the helper deletes the file and journals the delivery (kind only). An ack for another request ID or
+    a kind that was not produced is ignored and logged without values.
+  - **Restarts:** a tagcess restart between production and consumption loses nothing: the pending delivery is in
+    `setup_steps` and the file is still there, so tagcess delivers it to the owning session after the restart. The
+    setup session is stored in `setup_state` and survives the restart. If the owning session is replaced by a new one
+    (a new token, which needs the host), the new session inherits the pending deliveries; no other session can read
+    them.
+  - **Cleanup:** `in/` files are deleted when the request reaches a terminal state, on `handoff.cleanup`, at boot for any
+    request that is not the journal's current one, and after 15 minutes. `out/` files of a **failed or interrupted**
+    request are deleted at once (the step is re-run); `out/` files of a **succeeded** request are deleted on
+    `handoff.ack`, when the setup is sealed, or after 12 hours (the setup session's absolute lifetime), whichever comes
+    first. A secret is never reconstructed from a result; an undelivered value that expired makes the step `failed`.
   - Results, journals, logs and audit contain only the kinds installed, never values.
 
 ### 5.5 Version manifest
@@ -523,17 +538,38 @@ point them anywhere). This exception needs the developer's decision, together wi
   into the Compose stack.
 - From the findings, the wizard builds a migration plan: one `setup_migration_items` row per proposed action. Each item shows
   the evidence, the exact effect and the import feature that performs it. The user approves, declines or postpones each
-  item; nothing runs without its own approval, in an order the wizard enforces.
+  item; nothing runs without its own approval, in the order below.
 
-| Finding | Proposed item | Existing feature that performs it |
-|---|---|---|
-| Caddy with a hand-written Caddyfile | Import sites from a seed and pass the parity gate | G-01 (`internal/site/seed.go`, `render.SeedParity`, `/sites/first-import`) |
-| Headscale `policy.mode: file` | Move the policy to database mode | G-02 (`headscale_adopt` `g02` phase today) |
-| E-mail based policy groups | Convert to provider identifiers | G-03 (`internal/sync/migrate_identity.go`) |
-| `extra_records_path` outside tagcess's directory | Point it at tagcess's DNS directory | G-01.2 through the Headscale helper |
-| WireGuard / wireguard-ui present | Keep S-06 open during the transition, close it later | S-06 switch, `wireguard_ui` system site |
-| Zitadel without the `vpn` project, apps or service user | Bootstrap (step 2) | `internal/zitadeladopt` |
-| Headscale `allowed_groups` not set | Choose the set in the UI | H-07 helper patch (ADR 0021) |
+**Items and their prerequisites [Proposed].** The order follows today's adopt phase order
+(`deploy/ansible/group_vars/all/phases.yml`) and the rules it encodes (the hook ACL rule is added in file mode before
+G-02, architecture.md §8; G-03 needs the policy writer, so database mode).
+
+| # | Item key | Finding | Action | Performed by | Prerequisites |
+|---|---|---|---|---|---|
+| M-1 | `idp.bootstrap` | Zitadel without the `vpn` project, apps or a complete service user | Bootstrap (step 2) | `internal/zitadeladopt` | step 2 *connect existing* verified |
+| M-2 | `caddy.first_import` | Caddy with a hand-written Caddyfile | Import sites from a seed; apply only after the parity gate | G-01 (`internal/site/seed.go`, `render.SeedParity`, `/sites/first-import`) | M-1; step 1 *connect existing* verified |
+| M-3 | `headscale.server_tags` | The VPN host or k8s node without `tag:vpn-server` / `tag:k8s` | Add the node tags (today's `hs_tags`) | the `headscale_adopt` logic, ported in I-20 | step 3 *connect existing* verified |
+| M-4 | `headscale.hook_acl` | Policy without `tag:k8s → tag:vpn-server:<hook>` | Add the rule in file mode (today's `hs_hook_acl`) | the `headscale_adopt` logic, ported in I-20 | M-3 |
+| M-5 | `headscale.dns_path` | `extra_records_path` outside tagcess's directory | Point it at tagcess's DNS directory | G-01.2 through the Headscale helper (ADR 0021) | step 3 *connect existing* verified |
+| M-6 | `headscale.policy_db` | Headscale `policy.mode: file` | Move the policy to database mode without an empty-policy moment | G-02 (today's `g02`) | M-3, M-4 |
+| M-7 | `identity.convert` | E-mail based policy groups | Convert to provider identifiers | G-03 (`internal/sync/migrate_identity.go`) | M-1, M-6 |
+| M-8 | `headscale.allowed_groups` | Headscale `allowed_groups` not set | Choose the set in the UI | H-07 helper patch (ADR 0021) | M-1 |
+| M-9 | `s06.close` | WireGuard / wireguard-ui present, S-06 open | Close S-06 when the transition is over | S-06 switch, `wireguard_ui` system site | M-2; never proposed as approved by default |
+
+**Plan rules [Proposed]:**
+- An item can be approved at any time, but it **runs** only when every prerequisite is `applied`. An approved item whose
+  prerequisite is `proposed`, `approved`, `applying`, `failed`, `uncertain` or `declined` stays waiting, and the screen
+  names the prerequisite. Declining an item therefore blocks the items that depend on it; the screen says so before the
+  user declines.
+- One item runs at a time (`applying`), under the existing writer lock of the feature that performs it.
+- A write whose result cannot be read back makes the item `uncertain`; the whole plan stops (no other item starts)
+  until the user resolves it with the feature's own recovery flow (for example the policy writer's controlled recovery,
+  ADR 0020, or an ADR 0021 result review). `failed` stops only the item and its dependants.
+- Before an approved item runs, its findings are re-checked (§3.4). If a finding changed, the approval is revoked: the
+  item goes back to `proposed` with the reason recorded, and its dependants that were approved are revoked too.
+- S-06 starts open on adoption, and the parity gate accepts only the named `s06_open_start` difference, reported with
+  a warning **[Decided]** (ADR 0010 §6, overview.md §9 #19). M-2 keeps that rule unchanged; M-9 is the step that closes
+  S-06 later.
 
 - **What moves from today's import features:** their logic stays in the import code of milestone "Import as an optional
   feature"; the wizard is only a new entry point that feeds them findings and records the decisions. The Ansible
@@ -595,8 +631,12 @@ deliver a fresh install end to end on the decided test lab (lab VM + the existin
 - AC7: THE handoff SHALL install only listed kinds for the running request ID, SHALL delete the drop file, and SHALL
   delete unread a file for another or finished request (replay), a symlink, a wrong owner or an oversize file. Test:
   handoff table test.
-- AC8: WHEN a request ends, at boot and after the 15-minute timeout THE helper SHALL delete the request's handoff files.
-  Test: interruption test (kill between drop and install).
+- AC8: WHEN a request ends, at boot and after the 15-minute timeout THE helper SHALL delete the request's `in/` files,
+  and WHEN a request fails or is interrupted it SHALL delete its `out/` files. Test: interruption test (kill between
+  drop and install).
+- AC10: WHEN a request succeeded THE helper SHALL keep its `out/` files until `handoff.ack` for that request ID and
+  kind, the seal or 12 hours, and SHALL ignore an ack for another request ID or kind. Test: handoff lifecycle test that
+  consumes after the request is terminal, plus a wrong-ID ack.
 - AC9: Secret values SHALL NOT appear in results, journals, logs or the audit. Test: canary-secret test.
 
 **I-3 Host discovery** (`internal/discover`, helper `discover`) — risk: normal — depends on: I-2.
@@ -702,10 +742,12 @@ deliver a fresh install end to end on the decided test lab (lab VM + the existin
   `--masterkeyFile`. Test: golden compose.
 - AC2: WHEN the bootstrap finishes THE step SHALL delete the bootstrap machine key on disk and in Zitadel. Test: fake API
   + file test.
-- AC4: THE bootstrap machine key and the initial admin password SHALL reach tagcess only as `out/` handoff files of the
-  request that produced them, SHALL be read once and SHALL be usable only by the owning setup session. Test: handoff
-  test with a second session and a replayed request ID.
 - AC3: THE Caddy routing to Zitadel (h2c API, login UI path) SHALL work end to end. Test: lab run (see O7 for where).
+- AC4: THE bootstrap machine key and the initial admin password SHALL reach tagcess only as `out/` handoff files of the
+  request that produced them and SHALL be usable only by the owning setup session (or the session that replaced it
+  through a new token). Test: handoff test with a second session and a replayed request ID.
+- AC5: WHEN tagcess restarts between production and consumption THE wizard SHALL still deliver the password to the
+  owning session, and SHALL send `handoff.ack` only after the user confirmed it. Test: restart test with a fake helper.
 
 **I-17 Connect an existing Caddy** — risk: auth — depends on: I-6, I-3.
 - AC1: THE step SHALL be verified only when the admin API answers, the version is supported, `caddy validate` passes
@@ -721,16 +763,20 @@ deliver a fresh install end to end on the decided test lab (lab VM + the existin
   backend otherwise. Test: helper backend-selection test.
 
 **I-19 Migration plan framework** (`setup_migration_items`) — risk: auth — depends on: I-6.
-- AC1: THE wizard SHALL build one item per §6 finding and SHALL run an item only after its own approval and only when
-  every item it depends on is `applied` (order of §6). Test: plan table test.
-- AC2: IF an item's write is uncertain THEN THE item SHALL be `uncertain`, the plan SHALL stop and no later item SHALL
-  run until the user resolves it. Test: plan test with a fake writer.
-- AC3: WHEN a finding changes after approval THE item SHALL go back to `proposed`. Test: plan test.
+- AC1: THE wizard SHALL build one item per §6 finding with the prerequisites of the §6 table. Test: plan table test per
+  finding set.
+- AC2: WHILE any prerequisite of an approved item is not `applied` (including `declined`, `failed` and `uncertain`) THE
+  item SHALL NOT run. Test: table test over every prerequisite state.
+- AC3: IF an item's write is uncertain THEN THE item SHALL be stored as `uncertain` and no other item SHALL start until
+  the user resolves it. Test: plan test with a fake writer and a store reload.
+- AC4: WHEN a finding changes after approval THE item and its approved dependants SHALL go back to `proposed` with the
+  reason recorded. Test: plan test.
 
 **I-20 Migration adapters** (G-01 seed and parity, G-01.2 DNS path, G-02, S-06, H-07 `allowed_groups`) — risk: auth —
 depends on: I-19, I-17, I-18; milestone "Import as an optional feature".
-- AC1: THE G-01 item SHALL apply nothing until the parity gate passes, and SHALL keep the parity result of the
-  existing gate unchanged. Test: existing parity tests run through the adapter.
+- AC1: THE G-01 item SHALL apply nothing until the parity gate passes, and SHALL keep the existing gate unchanged: only
+  the named `s06_open_start` difference is accepted (with its warning), every other difference fails. Test: the
+  existing `TestParity_S06OpenStart` cases run through the adapter.
 - AC2: THE G-02 item SHALL never leave Headscale with an empty policy (G-02.2). Test: hsstack integration test.
 - AC3: EACH adapter SHALL use its existing pipeline (seed, policy writer, ADR 0021 patch) and SHALL add no second
   writer. Test: adapter tests with fakes.
@@ -741,8 +787,13 @@ depends on: I-19, I-17, I-18; milestone "Import as an optional feature".
 
 **I-22 Adopt end to end through the wizard** — risk: auth — depends on: I-17 … I-21.
 - AC1: WHEN the script runs on a lab host with an existing systemd Headscale, Caddy and WireGuard THE wizard SHALL
-  connect and migrate them without Ansible, with parity kept and access never wider than before. Test: lab acceptance
-  run on the adopt target (`test/adopttarget` harness).
+  connect and migrate them (M-1 … M-8) without Ansible. Test: lab acceptance run on the adopt target
+  (`test/adopttarget` harness).
+- AC2: THE first import SHALL pass parity with exactly the reported `s06_open_start` blocks as accepted differences
+  (the decided S-06-open start, ADR 0010 §6) and SHALL reject any other difference, including any other widening.
+  Test: same run, checking the `accepted` list against the fixture's source-restricted open sites.
+- AC3: THE G-02 item SHALL leave no moment with an empty policy, and the live policy after G-02 SHALL equal the file
+  policy before it plus M-3/M-4. Test: same run, policy read before and after.
 
 **I-23 Stack upgrades, release A → B** — risk: auth — depends on: I-2, I-7, I-15.
 - AC1: WHEN `install.sh --upgrade` runs THE script SHALL replace only the helper (checksum-verified) and keep the
