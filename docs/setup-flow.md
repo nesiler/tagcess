@@ -94,7 +94,8 @@ The answers are stored in `/etc/tagcess/install.env` (root `0600`, no secrets) a
 - **Before the setup is sealed** (§2.4) a re-run rotates the setup token and prints the address and the new token
   again (the old token stops working).
 - **After the setup is sealed** the script changes nothing in the stack. It prints the UI address and points to the
-  UI; upgrades and changes are done in the UI (§5.6). `--uninstall` stops the stack and keeps every data directory;
+  UI; changes and service upgrades are done in the UI. The one exception is `--upgrade v0.1.y`, which activates a new
+  release by replacing only the host helper (§5.6). `--uninstall` stops the stack and keeps every data directory;
   data removal is a separate, explicit `--purge` that asks for the domain name as confirmation.
 - Exit codes follow today's installer: `0` done, `1` error or blocker, `3` the user declined a confirmation.
 - Output and prompts are English (AGENTS.md "Language"; issue #21 item 4).
@@ -291,7 +292,8 @@ form, k8s drafts, G-01 seed) behind the normal gate; the wizard only links to th
 - **Users and grants stay with the IdP (hard rule 3).** Today `zitadeladopt` only *reports* on the `tagcess` service
   user (exists, `PROJECT_OWNER`, `ORG_OWNER_VIEWER`, key) and shows console steps; the step keeps that for a connected
   IdP: it shows the console steps, waits, and re-reads until the service user is complete, then the user uploads its key
-  file once (stored as today, security.md §7). For a Zitadel this setup installed, O3 asks whether the bootstrap may
+  file once; it goes to the helper through the credential handoff (§5.4), which installs it where tagcess reads it
+  today (`/etc/tagcess/secrets/zitadel-key.json`, security.md §7). For a Zitadel this setup installed, O3 asks whether the bootstrap may
   create the `tagcess` service user with its roles and key, and grant the admin role once to the first-instance human
   admin.
 - **After bootstrap** the bootstrap credential is discarded: the pasted admin credential is never written; the
@@ -373,7 +375,7 @@ box (architecture.md §10.1) lists the remaining items, as it does today.
 |---|---|---|---|---|
 | `caddy` | `caddy` official image | host | 80/tcp, 443/tcp, 443/udp; admin `127.0.0.1:2019` | `/var/lib/tagcess-stack/caddy/data` (`/data`, must persist: certificates and keys), `/etc/caddy` (Caddyfile, written by tagcess as today) |
 | `headscale` | `headscale/headscale` (distroless) | host | none public (`127.0.0.1:8080` behind Caddy; metrics `127.0.0.1:9090`); 3478/udp only if the embedded DERP is enabled | `/etc/tagcess/stack/headscale/` (config, ro), `/var/lib/headscale` (database), `/var/run/headscale` (socket directory, shared with tagcess), tagcess's DNS directory (ro) |
-| `tagcess` | `ghcr.io/nesiler/tagcess` | host | none public (`ui.sock`; hook on the tailnet IP; setup listener `127.0.0.1:9180` until sealed) | the architecture.md §8 mounts, plus the stack channel of the helper (§5.3) |
+| `tagcess` | `ghcr.io/nesiler/tagcess` | host | none public (`ui.sock`; hook on the tailnet IP; setup listener `127.0.0.1:9180` until sealed) | the architecture.md §8 mounts, plus the stack channel and the handoff directory of the helper (§5.3, §5.4) |
 | `oauth2-proxy` | `quay.io/oauth2-proxy/oauth2-proxy` | host | `127.0.0.1:4180` | config and secrets (ro) |
 | `tailscale` | `tailscale/tailscale` | host, `/dev/net/tun`, `NET_ADMIN` | 41641/udp (direct connections) | `/var/lib/tagcess-stack/tailscale` (node state) |
 | `zitadel` | `ghcr.io/zitadel/zitadel` | `idp` | `127.0.0.1:8081` (h2c, behind Caddy) | master key file (ro); bootstrap directory |
@@ -406,51 +408,114 @@ box (architecture.md §10.1) lists the remaining items, as it does today.
 - So the existing host helper (`cmd/tagcess-hshelper`, ADR 0021) gets a second channel for **stack operations**,
   `/var/lib/tagcess-host/{requests,results,private}`, with the same file rules as ADR 0021 b (container writes only
   `requests/`, reads `results/`; `private/` root `0700`; `O_NOFOLLOW`, owner and size checks; one pending request;
-  journal; `TimeoutStartSec`). The Headscale channel of ADR 0021 stays as it is.
-- **Operations** (typed JSON, version 1, `request_id`, `op`, parameters; no paths, image names, commands or free text):
+  journal; `TimeoutStartSec`), plus the handoff directory of §5.4. The Headscale channel of ADR 0021 stays as it is.
+- **Operations** (typed JSON, version 1, `request_id`, `op`, `base_rev`, parameters; no paths, image names, commands or
+  free text):
   | Operation | What the helper does |
   |---|---|
   | `discover` | the read-only host scan (§3); writes `results/discovery.json` |
-  | `stack.apply` | parameters: enabled components, hostnames, IPs, ports from a fixed list, the admin group and other validated values. The helper renders the compose file and service configs from templates and the version manifest embedded in its own binary, generates missing secrets (§5.4), validates (`docker compose config --quiet`), backs up, pulls, starts the changed services, waits for health and reports |
+  | `stack.apply` | for **one named component**: renders that component's compose service and config files from its templates, the request's typed settings (§5.3.1) and the manifest embedded in its own binary; installs handed-off secrets and generates missing ones (§5.4); validates (`docker compose config --quiet`); backs up; pulls; starts the component; waits for health; reports. The files of every other component must stay byte-identical, otherwise nothing is written |
   | `stack.remove` | stops and removes one service that a failed "install new" added; keeps its data |
   | `service.restart` | restarts one allow-listed service |
-  | `stack.upgrade` | moves one service to the version of the current manifest (§5.6) |
+  | `stack.upgrade` | moves one service to the digest in the manifest of the helper that is installed now (§5.6) |
+  | `handoff.cleanup` | deletes the handoff files of a finished, failed or abandoned request (§5.4) |
+- **Stack revision:** the helper publishes in `results/status.json` a `base_rev` (SHA-256 of the secret-free projection
+  of the stack: enabled components, their settings and digests). Every write request carries the `base_rev` it was
+  built from; a stale one is rejected, so two wizard tabs or a retry cannot apply an older picture of the stack.
 - **Headscale config changes in a container:** the ADR 0021 patch flow stays (allow-listed patch → candidate on the host
   → `configtest` → backup → atomic replace → restart → health); the helper gets a second backend that runs `configtest`
   with the Headscale image and restarts with `docker compose restart headscale` instead of `systemctl`. The backend is
   chosen from the discovery finding (systemd for a connected existing Headscale, compose for one tagcess installed).
+- **One authority for the Headscale config (both channels):**
+  - `stack.apply` renders Headscale's `config.yaml` **only when it creates** the service (no config exists yet). After
+    that, the file belongs to the ADR 0021 flow: every later change, including `allowed_groups` (H-07), goes through an
+    ADR 0021 patch with its `base_rev`; `stack.apply` never re-renders, overwrites or "repairs" it. A changed setup
+    parameter that would change `config.yaml` is turned into an ADR 0021 patch, or refused if the patch schema does not
+    cover it yet.
+  - Both channels take the same host lock (`flock` on one helper lock file shared by both roots) and the helper refuses a
+    stack operation while the ADR 0021 journal is not terminal, and an ADR 0021 patch while a stack operation is not
+    terminal.
+  - Any stack operation that recreates or restarts the `headscale` service (`stack.apply`, `stack.remove`,
+    `service.restart`, `stack.upgrade` on it) is a Headscale config operation for the tagcess side: it needs the DB
+    maintenance flag of ADR 0021 (only widening writes stop) and ends like an ADR 0021 operation (result read back,
+    reconcile before widening writes resume).
+  - The secret-free Headscale projection that the UI and discovery show (`allowed_groups`, `base_rev`, last operation)
+    is the ADR 0021 `status.json`; the stack status refers to it and does not copy the values.
 - **Trade-off:** the helper is root and runs `docker compose`; its input is small, typed and validated twice (container
   and helper), and it renders everything itself, so a compromised tagcess can ask only for the stacks the helper knows
   how to build. The cost is a bigger helper (it is already root and already packaged by the installer).
 
+#### 5.3.1 Configurable settings and fixed boundaries
+**[Decided]** everything is chosen in the UI, including addresses, CIDRs and paths (product-decisions §11). The helper
+therefore separates two kinds of values:
+
+| Kind | Examples | How it is set |
+|---|---|---|
+| **Service settings** (UI) | hostnames; public IPs; ACME e-mail; loopback listen ports of each service and the setup listener; Headscale IP prefixes (IPv4 inside `100.64.0.0/10`, IPv6 inside `fd7a:115c:a1e0::/48`); MagicDNS base domain; embedded DERP on/off; the admin group; oauth2-proxy cookie lifetime within bounds; for *connect existing*: the addresses of the existing services and the paths they use (Caddyfile path, socket path, certificate directory) | Typed fields in the request, validated in the container and again in the helper: hostnames by security.md §5, IPs and prefixes as canonical values inside the allowed ranges, ports 1024-65535 and not used by another finding, durations within fixed bounds. Paths of an existing installation are absolute, without `..`, under an allow-listed root per kind (`/etc/caddy`, `/var/run/headscale`, `/etc/letsencrypt`, …) and must exist as found by discovery; they are read-only facts for the helper, never a place it creates or writes |
+| **Helper boundaries** (fixed per release) | host paths of the managed stack (§5.2); which services exist and their images; which ports are published publicly; the socket directories; where secrets live | Part of the helper's templates and manifest; shown read-only in the UI |
+
+**[Proposed]** The host paths of the *managed* stack are an exception to "paths are chosen in the UI": a host path in a
+request to a root helper is a host-write primitive, and these paths are internal to the stack (the user never needs to
+point them anywhere). This exception needs the developer's decision, together with O1.
+
 ### 5.4 Secrets on a fresh server
-- Generated by the helper (root) on first need, never by the tagcess container and never written into the compose file
-  or environment lines: Zitadel master key (exactly 32 characters, cannot change after init; passed with
-  `--masterkeyFile`, §11 F5), Postgres
-  password, oauth2-proxy cookie secret, the OIDC client secrets that Zitadel returns once, the webhook and groups
-  signing keys.
+- **Generated by the helper** (root) on first need and used only by services: Zitadel master key (exactly 32
+  characters, cannot change after init; passed with `--masterkeyFile`, §11 F5), Postgres password, oauth2-proxy cookie
+  secret, the webhook and groups signing keys, the initial human admin password of a new Zitadel. Never written into the
+  compose file, environment lines, results, journals or logs.
 - Files under `/etc/tagcess/stack/secrets/<service>/` (`0600` or `0400`, owned by the service's UID) are mounted
-  read-only only into the service that needs them; tagcess's own secrets stay in `/etc/tagcess/secrets` (security.md §7).
-- The initial human admin password of a new Zitadel is shown **once** in the wizard (`Cache-Control: no-store`, the same
-  rule as a pre-auth key, security.md §7) and must be changed at first login.
+  read-only only into the service that needs them; tagcess's own secrets stay in `/etc/tagcess/secrets` (security.md §7),
+  which the helper fills and tagcess mounts read-only as today.
+- **Received by tagcess** from the IdP API during the bootstrap (step 2): the OIDC client secrets of the Headscale and
+  oauth2-proxy apps (Zitadel returns them once) and the Actions target signing keys. They must reach services the
+  helper owns.
+- **Credential handoff [Proposed]:** a separate directory `/var/lib/tagcess-host/handoff/` (root-owned, `0730`, group
+  = the tagcess container's group) is the only path for secret values between tagcess and the helper. Request and result
+  files never carry values.
+  - **tagcess → helper:** tagcess writes `in/<request_id>.<kind>` (atomic rename, `0600`, ≤ 4 KiB) and only then
+    publishes the request, which lists the `kind`s it hands off (allow-list: `oidc_secret_headscale`,
+    `oidc_secret_oauth2_proxy`, `hook_signing_key`, `groups_signing_key`, `zitadel_service_key`). The helper opens each
+    file with the ADR 0021 b rules (`O_NOFOLLOW`, regular file, owner, size), checks that its `request_id` is the one
+    being run and its `kind` is listed, installs it into the owning service's secret directory and deletes the drop
+    file. A file for another or an already finished request ID is deleted unread (replay).
+  - **helper → tagcess:** for values the wizard needs once: the bootstrap machine key that a new Zitadel writes at first
+    start (step 2, O3) and the initial human admin password. The helper writes `out/<request_id>.<kind>` (`0640`, group
+    = tagcess) for the request that produced it; tagcess reads it into memory, deletes it, and uses it only in the setup
+    session that owns that request (the password is shown once with `no-store`; the machine key is used by the
+    bootstrap and then deleted in Zitadel and on disk).
+  - **Cleanup:** the helper deletes every handoff file of a request when the request reaches a terminal state, on
+    `handoff.cleanup`, at boot for any request that is not the journal's current one, and after 15 minutes for an
+    `out/` file nobody read. Losing a handoff file makes the step `failed` (the user re-runs it); a secret is never
+    reconstructed from a result.
+  - Results, journals, logs and audit contain only the kinds installed, never values.
 
 ### 5.5 Version manifest
-- Each tagcess release carries a manifest of the service images it was tested with (name, tag and digest). It is
-  embedded in both the tagcess and the helper binary; the helper uses only its own copy. Images are referenced by tag
-  and digest so a moved tag cannot change what runs.
+- Each tagcess release has a manifest of the service images it was tested with (name, tag and digest). Images are
+  referenced by tag and digest so a moved tag cannot change what runs.
+- The manifest is embedded **only in the helper binary**, and the helper publishes it in `results/status.json` for the UI.
+  The helper is built after the release's tagcess image is pushed, so the manifest can contain that image's digest too;
+  no binary has to contain the digest of the image it is part of. tagcess does not keep its own copy.
 - The release notes list these versions (product-decisions §12, release proposal). The current production pins
   (stack-notes) are older than the latest releases (§11 F0); which versions the first manifest uses is O6.
 
 ### 5.6 Upgrades of the pinned services
-- tagcess never upgrades a service by itself. Settings → Stack shows, per service, the running digest and the one in the
-  manifest of the running tagcess release.
-- An upgrade is one service at a time: backup (Caddy `/data`, Headscale database, a Postgres dump for Zitadel) → pull →
-  recreate → health → the step's proof again.
+- tagcess never upgrades a service by itself.
+- **Release A → B:** a new release becomes available on the host when the helper of release B is installed, because
+  the helper carries the manifest. **[Proposed]** Until the release flow decides signing (#18), this activation is a host
+  command: `install.sh --upgrade v0.1.y` (root) downloads the release's helper with its published checksum, replaces the
+  helper binary and units atomically (the old binary is kept for one step back), and changes nothing else. Activating a
+  release from the UI would make the root helper download and run new code on the strength of a request, so it waits
+  for signed releases (#18). The activation is a separate step from upgrading services.
+- After activation, Settings → Stack shows per service the running digest and the one in the active manifest; the user
+  upgrades one service at a time through `stack.upgrade`: backup (Caddy `/data`, Headscale database, a Postgres dump for
+  Zitadel) → pull → recreate → health → the step's proof again.
 - On failure: a stateless service (Caddy, oauth2-proxy, Tailscale) is put back on the previous digest. A stateful
   service (Zitadel, Postgres, Headscale) may have migrated its data, so the previous image is not started automatically;
   the service stays stopped or degraded, a critical alert is raised, and restoring the backup is an explicit action with
   confirmation.
-- tagcess upgrades itself through the same operation; while it restarts the sites keep working (NFR-01).
+- tagcess upgrades itself through the same operation: release B's tagcess digest is in the manifest of helper B. While it
+  restarts the sites keep working (NFR-01). A tagcess B that finds a database newer than it can read refuses to start
+  (the existing migrator rule); the helper then reports the failed health and keeps the backup.
 
 ## 6. Migration path (existing installations)
 - **[Decided]** Existing services are connected as they are; tagcess does not move them (product-decisions §11).
@@ -474,16 +539,20 @@ box (architecture.md §10.1) lists the remaining items, as it does today.
   feature"; the wizard is only a new entry point that feeds them findings and records the decisions. The Ansible
   phases that run them today (`hs_tags`, `hs_hook_acl`, `hs_dns_path`, `g02`) become wizard items one by one (§9).
 - **Known gap:** G-03 has no way to drop an unmatched e-mail yet (`sync.Input.DroppedEmails` is never set by production
-  code); the migration item for G-03 needs it (§9 I-17).
+  code); the migration item for G-03 needs it (§9 I-21).
 
 ## 7. `deploy/ansible`: removed or kept **[Proposed]**
-- **Fresh mode is retired** once the fresh-install end-to-end test (§9 I-15) passes on the test lab: the fresh-only roles
-  (`certbot`, `headscale_install`, `caddy_install`, `tailscale_join`, `zitadel_install`) and the fresh branches of
-  `host`, `app`, `oauth2_proxy` and `zitadel_seed` are deleted with their tests. Issues #20-#23 then apply to the
-  wizard steps instead of Ansible (§9 notes).
-- **Adopt mode stays, unchanged,** as the supported path for existing installations (including the company
-  installation) until the wizard's *connect existing* and *migrate* paths cover it (§9 I-17). Then Ansible and
-  `deploy/install.sh` are removed, and `docs/install.md` becomes a short "adopt with the wizard" guide.
+Almost every Ansible role serves both modes: only `zitadel_install` is fresh-only (`deploy/ansible/group_vars/all/phases.yml`,
+docs/install.md §5). `certbot`, `headscale_install`, `caddy_install` and `tailscale_join` also run in adopt mode, where
+they install a missing component after confirmation and re-run on components the installer owns.
+- **Fresh mode is retired** once the fresh-install end-to-end test (§9 I-15) passes on the test lab: the `fresh` mode
+  choice, the `zitadel_install` role and the fresh-only branches inside shared roles (for example the forced Actions
+  switches of `zitadel_seed`, issue #20, and the `tagcess` cookie-profile default of `oauth2_proxy`) are removed with
+  their tests. **Shared roles stay** with their adopt behaviour, including the missing-component install and installer-
+  owned re-runs. Issues #20-#23 then apply to the wizard steps instead of Ansible (§9 notes).
+- **Adopt mode stays** as the supported path for existing installations (including the company installation) until the
+  wizard's *connect existing* and *migrate* paths are proven by the adopt end-to-end test (§9 I-22). Only then are
+  Ansible and `deploy/install.sh` removed, and `docs/install.md` becomes a short "adopt with the wizard" guide.
 - **Reused, not thrown away:** `probe.py` checks → `internal/discover`; `backup.py` → the helper's backup step;
   `roles/guide` texts → wizard step help; `internal/zitadeladopt` → the IdP bootstrap; the `verify` role's checks →
   step proofs and the seal check; `tagcess -bootstrap-caddyfile` → the bootstrap Caddyfile; the hshelper → the host
@@ -500,12 +569,14 @@ box (architecture.md §10.1) lists the remaining items, as it does today.
 ## 9. Implementation split
 Proposed follow-up issues, one concern each, for the "Install wizard and packaging" milestone. Order: I-1 … I-15
 deliver a fresh install end to end on the decided test lab (lab VM + the existing Zitadel on k3s, so the IdP step is
-*connect existing* there); I-16 … I-20 follow. Acceptance criteria are EARS; each issue adds its tests.
+*connect existing* there); I-16 … I-26 follow. Acceptance criteria are EARS; each issue adds its tests.
 
 **I-1 Version manifest and stack renderer** (`internal/stack`) — risk: auth (generated config) — depends on: O6.
 - AC1: THE renderer SHALL produce the compose file and service configs from typed parameters and the manifest,
   byte-for-byte deterministic. Test: golden files per component set.
-- AC2: THE manifest SHALL reference every image by tag and digest. Test: manifest table test.
+- AC2: THE manifest SHALL reference every service image by tag and digest, including the release's tagcess image;
+  it SHALL be embedded only in the helper binary. Test: manifest table test and a build check that the tagcess binary
+  has no manifest.
 - AC3: IF a parameter fails validation THEN THE renderer SHALL return an error and no output. Test: bad-input table.
 
 **I-2 Host helper stack channel** (`cmd/tagcess-hshelper`) — risk: auth — depends on: I-1, O1.
@@ -515,6 +586,18 @@ deliver a fresh install end to end on the decided test lab (lab VM + the existin
   SHALL leave the running stack unchanged on error. Test: runner test with a fake `docker`.
 - AC3: THE helper SHALL generate missing secrets as files with mode `0600`/`0400` and SHALL NOT write them into the
   compose file or results. Test: file-mode and redaction test.
+- AC4: IF a request's `base_rev` is stale THEN THE helper SHALL reject it and change nothing. Test: intake test.
+- AC5: WHEN `stack.apply` runs for one component THE files of every other component SHALL stay byte-identical, and an
+  existing Headscale `config.yaml` SHALL never be re-rendered. Test: runner test that applies oauth2-proxy after an
+  `allowed_groups` patch and compares the Headscale config.
+- AC6: WHILE an ADR 0021 operation is not terminal THE helper SHALL refuse stack operations, and the reverse; both SHALL
+  take the shared lock. Test: concurrent-channel test.
+- AC7: THE handoff SHALL install only listed kinds for the running request ID, SHALL delete the drop file, and SHALL
+  delete unread a file for another or finished request (replay), a symlink, a wrong owner or an oversize file. Test:
+  handoff table test.
+- AC8: WHEN a request ends, at boot and after the 15-minute timeout THE helper SHALL delete the request's handoff files.
+  Test: interruption test (kill between drop and install).
+- AC9: Secret values SHALL NOT appear in results, journals, logs or the audit. Test: canary-secret test.
 
 **I-3 Host discovery** (`internal/discover`, helper `discover`) — risk: normal — depends on: I-2.
 - AC1: THE scanner SHALL report the kinds of §3.2 and SHALL copy only allow-listed attributes. Test: fixture hosts
@@ -571,6 +654,8 @@ deliver a fresh install end to end on the decided test lab (lab VM + the existin
 - AC4: IF Zitadel cannot be read completely THEN THE step SHALL be `failed` and no later step SHALL start. Test: step
   test with a failing fake API.
 - AC5: THE admin credential SHALL NOT be written anywhere. Test: file-system and redaction test.
+- AC6: THE OIDC client secrets and Actions signing keys SHALL reach the helper only through the handoff of §5.4 and
+  SHALL NOT appear in tagcess's database, logs or audit. Test: step test with a fake helper and canary values.
 
 **I-10 Step 3a: Headscale install new** — risk: auth — depends on: I-2, I-9.
 - AC1: THE rendered config SHALL use database policy mode, the tagcess DNS path and the chosen `allowed_groups`.
@@ -582,6 +667,8 @@ deliver a fresh install end to end on the decided test lab (lab VM + the existin
 **I-11 Compose backend of the Headscale helper** — risk: auth — depends on: I-10.
 - AC1: WHEN a config patch is applied to a compose Headscale THE helper SHALL run configtest, replace and restart
   through Compose, without automatic rollback (ADR 0021). Test: helper runner test with a fake `docker`.
+- AC2: WHEN a stack operation recreates or restarts `headscale` THE tagcess side SHALL hold the ADR 0021 maintenance flag
+  and SHALL run the reconcile before widening writes resume. Test: hostapply service test.
 
 **I-12 Step 4: VPN host joins the tailnet** — risk: auth — depends on: I-10.
 - AC1: THE join key SHALL be single-use, tagged `tag:vpn-server`, valid ≤ 10 minutes and never stored. Test: admin
@@ -615,25 +702,71 @@ deliver a fresh install end to end on the decided test lab (lab VM + the existin
   `--masterkeyFile`. Test: golden compose.
 - AC2: WHEN the bootstrap finishes THE step SHALL delete the bootstrap machine key on disk and in Zitadel. Test: fake API
   + file test.
+- AC4: THE bootstrap machine key and the initial admin password SHALL reach tagcess only as `out/` handoff files of the
+  request that produced them, SHALL be read once and SHALL be usable only by the owning setup session. Test: handoff
+  test with a second session and a replayed request ID.
 - AC3: THE Caddy routing to Zitadel (h2c API, login UI path) SHALL work end to end. Test: lab run (see O7 for where).
 
-**I-17 Connect existing Caddy/Headscale and the migration plan** — risk: auth — depends on: I-6; milestone "Import as
-an optional feature".
-- AC1: THE wizard SHALL build one `setup_migration_items` row per §6 finding and SHALL run each only after its own
-  approval. Test: plan table test.
-- AC2: THE G-03 item SHALL allow dropping an unmatched e-mail with audit (`DroppedEmails`). Test: sync test.
+**I-17 Connect an existing Caddy** — risk: auth — depends on: I-6, I-3.
+- AC1: THE step SHALL be verified only when the admin API answers, the version is supported, `caddy validate` passes
+  and the running config equals the file on disk. Test: step test with fake probes, one failing check per row.
+- AC2: IF a check fails or the finding changed since the precheck THEN THE step SHALL stay unverified and SHALL write
+  nothing. Test: same.
+- AC3: THE configured Caddyfile path SHALL pass the §5.3.1 path rules. Test: validation table.
 
-**I-18 Stack upgrades** — risk: auth — depends on: I-2, I-15.
-- AC1: THE Settings → Stack page SHALL show per service the running digest and the manifest digest. Test: handler test.
-- AC2: WHEN an upgrade runs THE helper SHALL back up, recreate one service and prove it; IF a stateless service fails
-  THEN the previous digest SHALL be restored. Test: helper test with a fake `docker`.
-- AC3: IF a stateful service fails THEN THE system SHALL NOT start the previous image automatically and SHALL raise a
+**I-18 Connect an existing Headscale (systemd backend)** — risk: auth — depends on: I-2, I-3, I-6.
+- AC1: THE step SHALL be verified only after the socket answers `ListUsers`, the version is supported, `configtest`
+  and `policy check` pass. Test: step test with fakes.
+- AC2: WHEN Headscale runs under systemd THE helper SHALL select the systemd backend of ADR 0021, and the compose
+  backend otherwise. Test: helper backend-selection test.
+
+**I-19 Migration plan framework** (`setup_migration_items`) — risk: auth — depends on: I-6.
+- AC1: THE wizard SHALL build one item per §6 finding and SHALL run an item only after its own approval and only when
+  every item it depends on is `applied` (order of §6). Test: plan table test.
+- AC2: IF an item's write is uncertain THEN THE item SHALL be `uncertain`, the plan SHALL stop and no later item SHALL
+  run until the user resolves it. Test: plan test with a fake writer.
+- AC3: WHEN a finding changes after approval THE item SHALL go back to `proposed`. Test: plan test.
+
+**I-20 Migration adapters** (G-01 seed and parity, G-01.2 DNS path, G-02, S-06, H-07 `allowed_groups`) — risk: auth —
+depends on: I-19, I-17, I-18; milestone "Import as an optional feature".
+- AC1: THE G-01 item SHALL apply nothing until the parity gate passes, and SHALL keep the parity result of the
+  existing gate unchanged. Test: existing parity tests run through the adapter.
+- AC2: THE G-02 item SHALL never leave Headscale with an empty policy (G-02.2). Test: hsstack integration test.
+- AC3: EACH adapter SHALL use its existing pipeline (seed, policy writer, ADR 0021 patch) and SHALL add no second
+  writer. Test: adapter tests with fakes.
+
+**I-21 G-03: drop an unmatched e-mail** — risk: auth — depends on: I-19.
+- AC1: WHEN the devops marks an unmatched e-mail "drop" THE system SHALL set `DroppedEmails`, allow approval and audit
+  it. Test: sync test.
+
+**I-22 Adopt end to end through the wizard** — risk: auth — depends on: I-17 … I-21.
+- AC1: WHEN the script runs on a lab host with an existing systemd Headscale, Caddy and WireGuard THE wizard SHALL
+  connect and migrate them without Ansible, with parity kept and access never wider than before. Test: lab acceptance
+  run on the adopt target (`test/adopttarget` harness).
+
+**I-23 Stack upgrades, release A → B** — risk: auth — depends on: I-2, I-7, I-15.
+- AC1: WHEN `install.sh --upgrade` runs THE script SHALL replace only the helper (checksum-verified) and keep the
+  previous binary; the running services SHALL not change. Test: shell test.
+- AC2: THE Settings → Stack page SHALL show per service the running digest and the active manifest digest. Test:
+  handler test.
+- AC3: WHEN a service is upgraded THE helper SHALL back up, recreate only that service and prove it; IF a stateless
+  service fails THEN the previous digest SHALL be restored. Test: helper test with a fake `docker`.
+- AC4: IF a stateful service fails THEN THE system SHALL NOT start the previous image automatically and SHALL raise a
   critical alert. Test: same.
+- AC5: WHEN release A is upgraded to release B on the lab (helper, then every service, then tagcess itself) THE sealed
+  installation SHALL keep working and pass every step proof. Test: lab acceptance run.
 
-**I-19 Retire Ansible fresh mode** — risk: normal — depends on: I-15, O5.
-- AC1: THE fresh-only roles and their tests SHALL be removed; adopt-mode tests SHALL stay green. Test: `make check`.
+**I-24 Retire Ansible fresh mode** — risk: normal — depends on: I-15, O5.
+- AC1: THE `fresh` mode, `zitadel_install` and the fresh-only branches inside shared roles SHALL be removed with their
+  tests. Test: `make check`.
+- AC2: THE adopt re-run and missing-component install tests of `certbot`, `headscale_install`, `caddy_install` and
+  `tailscale_join` SHALL stay and pass. Test: existing adopt tests in `deploy/ansible` (named in the PR).
 
-**I-20 Docs** — risk: normal — depends on: I-15.
+**I-25 Retire Ansible adopt mode and `deploy/install.sh`** — risk: normal — depends on: I-22, O5.
+- AC1: THE Ansible tree and `deploy/install.sh` SHALL be removed and `docs/install.md` SHALL describe adopting with the
+  wizard. Test: `make check` and the runbook test.
+
+**I-26 Docs** — risk: normal — depends on: I-15.
 - AC1: THE README quickstart and `docs/install.md` SHALL describe the script and the wizard. Test: a doc check in
   `deploy/runbook_test.go` for the quickstart commands.
 
@@ -659,7 +792,7 @@ fresh mode; items 3-4 apply to the script.
   public name, and every site name, needs a public DNS record to the server (a wildcard `*.<domain>` record is enough).
   Internal sites still answer only to the tailnet (S-06 closed). Alternative: wildcard certificates with DNS-01, which
   needs a Caddy build with a DNS-provider module, so tagcess would publish and maintain its own Caddy image.
-- **O5 [Open] `deploy/ansible`.** Recommendation: §7 — retire fresh mode after I-15, keep adopt mode until I-17 covers
+- **O5 [Open] `deploy/ansible`.** Recommendation: §7 — retire fresh mode after I-15, keep adopt mode until I-22 proves
   it, then remove Ansible; re-scope #20-#24 to the wizard steps. Alternative: keep Ansible fresh mode as a second
   install path (two paths to test and document).
 - **O6 [Open] Versions of the first manifest.** The production pins (Headscale v0.29.4, Caddy v2.8.4, Zitadel v4.16.0,

@@ -55,7 +55,7 @@ components run as one Docker Compose project managed through the host helper; se
 | `internal/setup` | **[Proposed]** Setup mode (setup-flow.md §2, §4): setup token and session, the wizard step pipeline (precheck → render → validate → preview → apply → prove), last known good per step, sealing |
 | `internal/discover` | **[Proposed]** Read-only host scan run by the host helper (setup-flow.md §3); the Go port of the installer's `probe.py` checks. Copies only allow-listed, secret-free attributes |
 | `internal/stack` | **[Proposed]** Deterministic rendering of the fresh-server Compose project and service configs from typed parameters and the release's version manifest; used by the host helper, golden-tested (setup-flow.md §5) |
-| `cmd/tagcess-hshelper` | Host helper (ADR 0008/0021). **[Proposed]** A second, typed stack channel for `discover`, `stack.apply`, `stack.remove`, `service.restart` and `stack.upgrade`, and a Compose backend for Headscale config changes (setup-flow.md §5.3) |
+| `cmd/tagcess-hshelper` | Host helper (ADR 0008/0021). **[Proposed]** A second, typed stack channel for `discover`, `stack.apply` (one component at a time), `stack.remove`, `service.restart`, `stack.upgrade` and `handoff.cleanup`, with a stack `base_rev`; a credential handoff directory for secret values; a Compose backend for Headscale config changes. Both channels share one host lock, and after creation the Headscale `config.yaml` is changed only through the ADR 0021 patch flow. The release's version manifest is embedded only in this binary (setup-flow.md §5.3-§5.5) |
 | `internal/web` | templ components, handlers, identity middleware, CSRF, embedded assets (ADR 0007) |
 | `deploy/` | Dockerfile, compose, systemd helper (ADR 0008), Caddy snippet |
 | `test/compose/` | Integration environment: local Headscale, Caddy, oauth2-proxy (compose). Zitadel runs in the lab (`test/lab/`, a small k3s cluster, ADR 0014). The k8s contracts are tested with local fixtures and optional personal k3s namespace tests (§9) |
@@ -276,10 +276,12 @@ Details and rationale: [setup-flow.md](setup-flow.md) §5.
   | `/var/lib/tagcess-stack/tailscale` | tailscale (node state) | rw |
   | `/var/lib/tagcess-stack/postgres` | postgres | rw |
   | `/var/lib/tagcess-host/requests`, `/results` | tagcess rw / ro (stack channel of the host helper) | rw / ro |
+  | `/var/lib/tagcess-host/handoff/` | tagcess (writes `in/`, reads and deletes `out/`); credential handoff, setup-flow.md §5.4 | rw |
 
 - **Group IDs** for the shared sockets are passed at runtime with `group_add`; the image no longer bakes in host GIDs.
-- **Upgrades:** one service at a time through the host helper, with backup and proof; a stateful service is not put
-  back on its old image automatically (setup-flow.md §5.6).
+- **Upgrades:** a release is activated by installing its host helper, which carries the manifest (`install.sh
+  --upgrade`, until signed releases allow it from the UI, #18); then one service at a time through the host helper,
+  with backup and proof; a stateful service is not put back on its old image automatically (setup-flow.md §5.6).
 
 ## 9. Test architecture
 - **Unit:** model validation, render (golden files), diff, sync decisions (table tests), migrator.
