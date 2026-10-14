@@ -11,5 +11,6 @@ case "$*" in
 *"get secret"*) [ "${FAKE_EXISTING:-}" = 1 ] || exit 1 ;;
 *"apply -f -"*) cat >/dev/null; echo "applied" ;;   # reads the manifest like kubectl does (a closed pipe breaks the producer)
 *apply*) echo "applied" ;;
+*"create secret"*) cat >/dev/null ;;      # kubectl reads --from-env-file=/dev/stdin; a closed pipe gives the producer SIGPIPE (rc 141) under pipefail
 esac
 exit 0
