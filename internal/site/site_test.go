@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/nesiler/tagcess/internal/store"
 )
@@ -492,5 +493,68 @@ func TestSiteStore_ReadConsistentUnderConcurrentUpdate(t *testing.T) {
 		for _, site := range sites {
 			assertIntactVersion(t, site)
 		}
+	}
+}
+
+// A read must take a read snapshot, never the write lock. OpenDB starts write transactions
+// immediate (U-15), so a read started the same way competes for the single WAL write lock: this
+// is the SQLITE_BUSY flake in TestSiteStore_ReadConsistentUnderConcurrentUpdate, where the
+// re-reading pool starved the writer past the busy timeout. ReadOnly makes the driver begin
+// deferred, so GetSite/ListSites return the last committed version at once while another
+// connection holds an open write transaction.
+func TestSiteStore_ReadDoesNotWaitForWriteLock(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "tagcess.db")
+	readerPool, err := store.Open(ctx, path)
+	if err != nil {
+		t.Fatalf("reader store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = readerPool.Close() })
+	writerPool, err := store.Open(ctx, path)
+	if err != nil {
+		t.Fatalf("writer store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = writerPool.Close() })
+	v := newTestValidator(t)
+	reader, err := New(readerPool.DB(), readerPool.Queries(), v)
+	if err != nil {
+		t.Fatalf("reader New: %v", err)
+	}
+	writer, err := New(writerPool.DB(), writerPool.Queries(), v)
+	if err != nil {
+		t.Fatalf("writer New: %v", err)
+	}
+	created, err := writer.CreateSite(ctx, validRoleSite())
+	if err != nil {
+		t.Fatalf("CreateSite: %v", err)
+	}
+
+	// Hold the single WAL write lock on a connection that never commits, the worst case for a
+	// competing read: it lasts past any busy timeout. BEGIN IMMEDIATE takes the write lock.
+	held, err := writerPool.DB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("hold write lock: %v", err)
+	}
+	defer func() { _ = held.Rollback() }()
+
+	start := time.Now()
+	got, err := reader.GetSite(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetSite while a writer holds the lock: %v", err)
+	}
+	if got.ID != created.ID {
+		t.Fatalf("GetSite id = %d, want %d", got.ID, created.ID)
+	}
+	sites, err := reader.ListSites(ctx)
+	if err != nil {
+		t.Fatalf("ListSites while a writer holds the lock: %v", err)
+	}
+	if len(sites) != 1 {
+		t.Fatalf("ListSites returned %d sites, want 1", len(sites))
+	}
+	// An immediate read would sit out the 5s busy timeout before failing; a deferred read returns
+	// at once, so a small bound proves the read did not go through the write lock.
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("reads took %v with a writer holding the lock, want an immediate snapshot", elapsed)
 	}
 }

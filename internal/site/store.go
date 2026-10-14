@@ -191,7 +191,7 @@ func (s *Store) updateSite(ctx context.Context, id int64, in Site, commit bool) 
 // one version with the sub-records of another: the transaction sees one consistent snapshot.
 func (s *Store) GetSite(ctx context.Context, id int64) (Site, error) {
 	var stored Site
-	err := s.transact(ctx, func(txq *db.Queries) error {
+	err := s.read(ctx, func(txq *db.Queries) error {
 		row, err := txq.GetSite(ctx, id)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
@@ -217,7 +217,7 @@ func (s *Store) GetSite(ctx context.Context, id int64) (Site, error) {
 // that a concurrent write commits mid-read.
 func (s *Store) ListSites(ctx context.Context) ([]Site, error) {
 	var out []Site
-	err := s.transact(ctx, func(txq *db.Queries) error {
+	err := s.read(ctx, func(txq *db.Queries) error {
 		rows, err := txq.ListSites(ctx)
 		if err != nil {
 			return fmt.Errorf("site: list: %w", err)
@@ -292,13 +292,24 @@ func checkTemplateFree(ctx context.Context, q *db.Queries, in Site) error {
 	return nil
 }
 
-// transact runs fn in one transaction, rolling everything back when fn fails.
-func (s *Store) transact(ctx context.Context, fn func(txq *db.Queries) error) error {
-	return s.transactMode(ctx, true, fn)
+// read runs fn in a read-only transaction. OpenDB starts write transactions immediate (U-15) so
+// a read-then-write cannot fail its first write with SQLITE_BUSY (snapshot). A read-only
+// transaction must not inherit that mode: an immediate read takes the single WAL write lock for
+// its whole lifetime and starves concurrent writers (a reader that keeps re-reading can hold the
+// lock past the busy timeout), then fails with SQLITE_BUSY. database/sql's ReadOnly option makes
+// the driver begin deferred, so reads only ever take a read snapshot. That snapshot is still one
+// committed version: in WAL mode it is fixed by the transaction's first read.
+func (s *Store) read(ctx context.Context, fn func(txq *db.Queries) error) error {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("site: begin read: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // rollback releases a read snapshot just like commit
+	return fn(s.q.WithTx(tx))
 }
 
-// transactMode is transact with a switch: without commit the transaction is always rolled back,
-// which is how the Preview methods run a write for its checks and result only.
+// transactMode runs fn in one transaction; without commit it is always rolled back, which is how
+// the Preview methods run a write for its checks and result only.
 func (s *Store) transactMode(ctx context.Context, commit bool, fn func(txq *db.Queries) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
