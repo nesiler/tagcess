@@ -16,7 +16,7 @@ RUN CGO_ENABLED=0 go build -trimpath \
     -o /out/tagcess ./cmd/tagcess
 
 # Alpine runtime: git (artifact commits) and CA certificates. Runs as an unprivileged UID.
-FROM alpine:3.22
+FROM alpine:3.24
 # The process chgrps ui.sock to ui.socket_group (name `caddy` in the example config) and must reach
 # the headscale socket (mode 0770, group `headscale`). Both groups must exist with the host's GIDs;
 # the runbook (F1-022) passes them: `docker build --build-arg CADDY_GID=$(getent group caddy | cut -d: -f3) ...`.
