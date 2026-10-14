@@ -61,10 +61,13 @@ func OpenDB(ctx context.Context, path string) (*sql.DB, error) {
 		"_journal_mode": {"WAL"},
 		"_busy_timeout": {strconv.Itoa(busyTimeoutMS)},
 		"_foreign_keys": {"1"},
-		// Every transaction takes the write lock when it begins. A deferred transaction that read
-		// before another connection committed fails its first write with SQLITE_BUSY (snapshot) at
-		// once in WAL mode, without waiting for the busy timeout; the alert loop's read-then-write
-		// transactions then lost a whole round next to the health runner's writes (U-15).
+		// Read-write transactions take the write lock when they begin. A deferred transaction that
+		// read before another connection committed fails its first write with SQLITE_BUSY
+		// (snapshot) at once in WAL mode, without waiting for the busy timeout; the alert loop's
+		// read-then-write transactions then lost a whole round next to the health runner's writes
+		// (U-15). Read-only transactions must not inherit this mode: they pass
+		// sql.TxOptions{ReadOnly: true} so the driver begins them deferred, taking a read snapshot
+		// instead of the single write lock a concurrent writer needs.
 		"_txlock": {"immediate"},
 	}
 	// OmitHost keeps a relative path relative ("file:rel.db"): without it URL.String builds
