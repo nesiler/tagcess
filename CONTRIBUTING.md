@@ -4,10 +4,8 @@ Thank you for your interest. tagcess is in a pre-release phase; the process belo
 maintainers' own, reaches `main`. The full description is in [docs/development.md](docs/development.md).
 
 ## Before you start
-- **Contributor Licence Agreement.** tagcess is released under AGPL-3.0 and also offered under a commercial
-  licence, so the copyright must stay in one place. Every contribution requires a signed CLA. The CLA text and the
-  signing tool are not decided yet; until they are, we cannot merge outside contributions. The DCO (`Signed-off-by`)
-  is not used.
+- **Licence.** tagcess is released under the MIT License. By contributing you agree that your contribution is
+  licensed under the same terms. There is no CLA.
 - **Security issues** are never reported as public issues. See [SECURITY.md](SECURITY.md).
 - **Conduct.** See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 

@@ -6,8 +6,8 @@ sites behind role-based gates) and your OIDC identity provider (Zitadel first) f
 > **Status: pre-release.** The code is being prepared for its first public release. Do not use it in production yet.
 
 ## Licence
-tagcess is free software under the [GNU Affero General Public License v3.0](LICENSE).
-A commercial licence is also available. Installation, support and migration services are offered commercially.
+tagcess is open source under the [MIT License](LICENSE). Installation, support and migration services are
+offered commercially.
 
-## Trademarks
+## Disclaimer
 tagcess is not affiliated with or endorsed by Tailscale Inc., the Headscale project, Caddy or Zitadel.

@@ -160,3 +160,7 @@ with a devops login on a fresh device. If it fails, maintenance continues and it
 - Full YAML or free JSON Patch: enlarges the allowed-field/secret boundary.
 - Automatic rollback or automatically resuming a half-finished operation: does not fit the accepted stop-and-show model.
 - Docker socket/host D-Bus: violates the privilege boundary of ADR 0008.
+
+## Update 2026-10-14
+- **[Decided]** The `allowed_groups` set is not fixed. The admin chooses it in the UI; the helper applies it through
+  this protocol. Implementation: issue #4.

@@ -47,25 +47,24 @@ Labels: **[Decided]** the developer's decision, **[Proposed]** a proposal (not y
 - **[Proposed]** Tailnet identity (identity from the device) is not used alone; at most it becomes an additional signal.
 
 ## 5. Licence and business model
-- **[Decided]** Licence: **AGPL-3.0** core + **commercial dual licence**. Copyright must stay in one hand; external contributions require a **CLA**.
+- **[Decided 2026-10-14]** Licence: **MIT**. No dual licence, no CLA, no copyright assignment. (Replaces the earlier
+  AGPL-3.0 + commercial dual licence + CLA decision.)
 - **[Decided]** At the start, revenue comes only from services: **installation, support, migration service**.
 - **[Decided]** All features are free for now. This may change in the future.
-- **[Proposed]** (Answer to the developer's question "can it change later?") Yes: as long as copyright stays with us through AGPL + CLA,
-  a paid enterprise add-on tier can be added later. However, versions already published under AGPL cannot be withdrawn.
 - **[Proposed]** Zitadel is not embedded in the tagcess package; compose refers to the official image. (Reason: Zitadel is AGPL; distributing
   a modified version creates a source obligation. Talking over the API does not; this is an inference, not legal advice.)
-- **[Proposed]** Before release: `THIRD_PARTY_NOTICES` (dependencies are permissive; confirmed with a `go-licenses` scan),
-  a trademark conflict search for the name "tagcess", a note in the README "not affiliated with Tailscale Inc.".
-  Legal review for the licence text and the CLA (no legal advice has been taken).
+- **[Proposed]** Before release: `THIRD_PARTY_NOTICES` (dependencies are permissive; confirmed with a `go-licenses` scan)
+  and a note in the README "not affiliated with Tailscale Inc.".
+- **[Decided 2026-10-14]** No trademark search and no legal review now. The priority is a usable product.
 
 ## 6. Repository
 - **[Decided]** A new repo on GitHub: **`nesiler/tagcess`**, with a clean (new) git history. The old history is not opened because it contains the company's
   domains, IPs and production details.
 - **[Decided]** On this Mac the old folder is copied to `tagcess-old` and the working folder is cleaned.
 - Status (2026-10-14): the old folder (with its history) is kept as `tagcess-old`.
-  The new working folder started with a new git history; the first commit contains only LICENSE (AGPL-3.0, gnu.org text) and the
-  README. `nesiler/tagcess` was created on GitHub and is **private for now**. The code is committed after company traces are cleaned
-  (after a `gitleaks` scan); the repo is then made public (`gh repo edit --visibility public`).
+  The new working folder started with a new git history. The code was committed after company traces were cleaned
+  (private-pattern and `gitleaks` scans).
+- **[Decided 2026-10-14]** The repository is public.
 
 ## 7. Language
 - **[Decided]** The UI is in English and Turkish (i18n).
@@ -84,10 +83,7 @@ Labels: **[Decided]** the developer's decision, **[Proposed]** a proposal (not y
 8. **Keycloak driver**, then Authentik.
 
 ## 9. Open issues
-- **Copyright holder:** a person or a company (which legal entity)? The dual licence and the CLA are built on this.
-- Company traces to clean: 187 files contain a company domain, server name, IP or person name (mostly test fixtures
-  and golden files; `internal/render/testdata/caddy-seed.golden` was derived from the company's real Caddyfile).
-- The CLA tool (for example cla-assistant) and the commercial licence text.
+- **Release flow:** what a release contains and how it is published (see §12).
 
 ## 10. Development process (2026-10-14)
 - **[Decided]** Work tracking is GitHub Issues + Milestones. Task files, phase files and progress notes do not enter the public repo (the old ones are in `tagcess-old`).
@@ -98,3 +94,30 @@ Labels: **[Decided]** the developer's decision, **[Proposed]** a proposal (not y
 - **[Decided]** Versioning increases minimally: progress stays within `0.1.*`.
 - **[Decided]** The release flow is clarified later; postponed if needed.
 - **[Decided]** The first release and the first code push to `main` must definitely be in generic form (no company traces).
+
+## 11. Product flow (2026-10-14)
+- **[Decided]** The installation flow, in the developer's words:
+  1. A user finds the repo on GitHub and runs the install script from the README on their server.
+  2. The script installs tagcess on the server. While it installs, it scans what already exists (reverse proxy,
+     VPN, Headscale, ...) and stores the findings in a temporary (staging) area of the database. During a migration
+     every decision and every action is taken by the user in the UI.
+  3. The script is interactive but asks only the minimum (for example the domain and the IP). The rest of the
+     installation is not in the script.
+  4. The UI opens on the server. Every installation step happens there: the Headscale, Caddy, Zitadel and k8s
+     connections are set up step by step with guidance. On an empty server tagcess installs the services; when
+     they already exist it builds a migration plan.
+  5. When everything is set up, users connect with Tailscale, signing in with their Zitadel account.
+- **[Decided]** Everything is chosen in the UI. Nothing stays fixed in code or config files, including the
+  Headscale `allowed_groups` set (ADR 0021), the admin group, addresses, CIDRs and paths.
+
+## 12. CI and release (2026-10-14)
+- **[Decided]** CI stays minimal and flexible: lint, unit tests, generated-code check, dependency vulnerability scan
+  (`govulncheck`), secret scan (`gitleaks`) and build. No external services (Zitadel, Headscale, Caddy) run on
+  GitHub runners. Tests that need a tool the runner lacks skip instead of failing.
+- **[Decided]** No local Zitadel in the compose test stack for now; integration tests run on the developer's
+  machine and the lab, not in CI (closes the ADR 0014 question).
+- **[Open]** Release flow. **[Proposed]**: a release is only tagcess itself (the backend with the embedded UI, later
+  `tagcess-auth`): a tag `v0.1.x` builds linux amd64/arm64 binaries, a container image on GHCR, checksums and the
+  install script. Headscale, Caddy and Zitadel are not bundled: the setup wizard installs their official
+  images/packages at versions pinned and tested for that tagcess release, or connects to existing ones. Each
+  release lists those tested versions.

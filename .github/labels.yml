@@ -19,7 +19,7 @@
 # --- risk ---
 - name: risk:auth
   color: "b60205"
-  description: Authn/authz, webhooks, policy/ACL writes, generated config, node expiry or secrets; security review and developer approval required
+  description: "Auth, webhooks, policy/ACL, generated config, node expiry, secrets: security review + developer OK"
 
 # --- area: package groups ---
 - name: area:web

@@ -155,7 +155,7 @@ matrix is the expected Caddy role access, not a guarantee of effective end-to-en
 | Runtime location | The VPN host; Docker, host network, `127.0.0.1` only **[Decided]** (ADR 0004) |
 | Headscale policy mode | `database`: the policy is written through the API. The developer approved (§9.1) **[Decided]** |
 | Config file | YAML, strict parsing, commented example **[Decided]** |
-| Licence | Open source and free dependencies **[Decided]** (AGPL-3.0 with a commercial option, see [product-decisions.md](product-decisions.md)) |
+| Licence | Open source and free dependencies **[Decided]** (MIT, see [product-decisions.md](product-decisions.md)) |
 
 ### 6.2 Non-functional criteria **[Proposed]**
 - **Not in the data path:** if tagcess crashes, the VPN and the sites keep working. Only management and sync stop.

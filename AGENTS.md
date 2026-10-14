@@ -7,7 +7,7 @@ These instructions are for every coding agent (Claude Code, Codex, OpenCode and 
 tagcess is an access-management portal for a self-hosted VPN. It ties together Caddy (internal sites and their role
 rules), Headscale (policy, devices, DNS) and an OIDC identity provider (Zitadel today; a driver structure for others
 is planned). The IdP is the only user and role store. tagcess is a Go single binary with a server-rendered UI and
-SQLite. Licence: AGPL-3.0 (with a commercial dual licence).
+SQLite. Licence: MIT.
 - Overview and function IDs (S-, Y-, H-, K-, P-, A-, NFR-): `docs/overview.md`. Requirements, architecture,
   security: `docs/requirements.md`, `docs/architecture.md`, `docs/security.md`. Decisions: `docs/adr/`.
 - Work items: GitHub Issues, grouped by Milestones. The process: `docs/development.md`.
