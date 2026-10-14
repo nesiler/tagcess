@@ -49,7 +49,7 @@ func readConfigFile(path string) ([]byte, fileMeta, error) {
 	if err != nil || len(b) > maxConfigBytes {
 		return nil, fileMeta{}, unreadable("cannot read the config")
 	}
-	return b, fileMeta{uid: st.Uid, gid: st.Gid, mode: os.FileMode(uint32(st.Mode) & 0o777)}, nil
+	return b, fileMeta{uid: st.Uid, gid: st.Gid, mode: os.FileMode(st.Mode & 0o777)}, nil
 }
 
 func sha(b []byte) string {
