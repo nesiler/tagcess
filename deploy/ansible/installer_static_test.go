@@ -233,7 +233,21 @@ func TestInstaller_LintWiring(t *testing.T) {
 		}
 		cmd := exec.CommandContext(t.Context(), "/usr/bin/make", "-s", "installer-lint")
 		cmd.Dir = root
-		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "HOME=" + t.TempDir()}
+		path := bin + ":/usr/bin:/bin"
+		if !withTools {
+			// A hermetic PATH: a runner may ship its own shellcheck in /usr/bin.
+			for _, c := range []string{"env", "bash", "find", "sort", "dirname", "wc", "tr", "cat", "make"} {
+				p, err := exec.LookPath(c)
+				if err != nil {
+					t.Skipf("%s is not installed; a skip is not a PASS", c)
+				}
+				if err := os.Symlink(p, filepath.Join(bin, c)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			path = bin
+		}
+		cmd.Env = []string{"PATH=" + path, "HOME=" + t.TempDir()}
 		var out bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &out, &out
 		if err := cmd.Run(); err != nil {
