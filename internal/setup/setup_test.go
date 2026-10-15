@@ -3,6 +3,7 @@ package setup
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -300,5 +301,90 @@ func TestLimiter_RefundRemovesTheReservedEntry(t *testing.T) {
 	}
 	if admitted != 1 {
 		t.Fatalf("admitted %d of 2 at t=60.5s, want 1 (never %d failures within 60s)", admitted, PerSourceFailures+1)
+	}
+}
+
+func TestRateLimit_TunnelHasOwnBudget(t *testing.T) {
+	svc, _, _ := newService(t)
+	ctx := context.Background()
+	tok, _ := svc.NewToken(ctx)
+	bad := strings.Repeat("0", 52)
+	for i := 0; i < TotalFailures; i++ {
+		_, _ = svc.Exchange(ctx, bad, fmt.Sprintf("203.0.113.%d", i/4+1))
+	}
+	if _, err := svc.Exchange(ctx, tok, "198.51.100.1"); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("public source err = %v, want rate limited", err)
+	}
+	if _, err := svc.Exchange(ctx, tok, TunnelSource); err != nil {
+		t.Fatalf("tunnel request with full public bucket: %v", err)
+	}
+}
+
+func TestRateLimit_TunnelFailuresDoNotUseGlobal(t *testing.T) {
+	svc, _, _ := newService(t)
+	ctx := context.Background()
+	tok, _ := svc.NewToken(ctx)
+	bad := strings.Repeat("0", 52)
+	for i := 0; i < PerSourceFailures; i++ {
+		_, _ = svc.Exchange(ctx, bad, TunnelSource)
+	}
+	if _, err := svc.Exchange(ctx, bad, TunnelSource); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("tunnel per-minute budget err = %v", err)
+	}
+	if got := len(svc.lim.global); got != 0 {
+		t.Fatalf("global bucket holds %d tunnel attempts", got)
+	}
+	if _, err := svc.Exchange(ctx, tok, "198.51.100.1"); err != nil {
+		t.Fatalf("public source: %v", err)
+	}
+}
+
+func TestRateLimit_IPv6KeyedBy64(t *testing.T) {
+	svc, _, _ := newService(t)
+	ctx := context.Background()
+	tok, _ := svc.NewToken(ctx)
+	bad := strings.Repeat("0", 52)
+	for i := 0; i < PerSourceFailures; i++ {
+		_, _ = svc.Exchange(ctx, bad, fmt.Sprintf("2001:db8:1:2::%x", i+1))
+	}
+	if _, err := svc.Exchange(ctx, tok, "2001:db8:1:2:ffff::9"); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("same /64 err = %v, want rate limited", err)
+	}
+	if _, err := svc.Exchange(ctx, tok, "2001:db8:1:3::1"); err != nil {
+		t.Fatalf("other /64: %v", err)
+	}
+}
+
+func TestRateLimit_GlobalBucketKeepsToken(t *testing.T) {
+	svc, clk, _ := newService(t)
+	ctx := context.Background()
+	tok, _ := svc.NewToken(ctx)
+	bad := strings.Repeat("0", 52)
+	for i := 0; i < TotalFailures; i++ {
+		_, _ = svc.Exchange(ctx, bad, fmt.Sprintf("192.0.2.%d", i/4+1))
+	}
+	if _, err := svc.Exchange(ctx, tok, "192.0.2.200"); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("err = %v, want rate limited", err)
+	}
+	clk.t = clk.t.Add(attemptWindow)
+	if _, err := svc.Exchange(ctx, tok, "192.0.2.200"); err != nil {
+		t.Fatalf("token was burned by the limited request: %v", err)
+	}
+}
+
+func TestRateLimit_PrunesSourceMap(t *testing.T) {
+	svc, clk, _ := newService(t)
+	ctx := context.Background()
+	bad := strings.Repeat("0", 52)
+	for i := 0; i < 20; i++ {
+		_, _ = svc.Exchange(ctx, bad, fmt.Sprintf("192.0.2.%d", i+1))
+	}
+	if got := len(svc.lim.bySrc); got != 20 {
+		t.Fatalf("map size = %d, want 20", got)
+	}
+	clk.t = clk.t.Add(attemptWindow)
+	_, _ = svc.Exchange(ctx, bad, "198.51.100.1")
+	if got := len(svc.lim.bySrc); got != 1 {
+		t.Fatalf("map size after the window = %d, want 1", got)
 	}
 }
