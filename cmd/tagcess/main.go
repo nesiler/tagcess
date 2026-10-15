@@ -76,6 +76,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	configPath := fs.String("config", "", "path of the YAML settings file (required)")
 	check := fs.Bool("check", false, "validate the config and exit")
+	healthcheck := fs.Bool("healthcheck", false, "probe the running server: the UI socket and the hook listener must accept connections (exit 0 ready, 1 not ready)")
 	preview := fs.Bool("import-preview", false, "read-only first-import parity report as JSON (exit 0 equal, 3 different, 1 error)")
 	manifest := fs.Bool("k8s-manifest", false, "print the read-only k8s RBAC manifest the UI serves (no network call)")
 	saNamespace := fs.String("sa-namespace", "tagcess", "-k8s-manifest: namespace of the reader ServiceAccount")
@@ -107,6 +108,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if *check {
 		_, _ = fmt.Fprintln(stdout, "config ok")
+		return 0
+	}
+	if *healthcheck {
+		if err := probeServer(cfg, healthcheckTimeout); err != nil {
+			_, _ = fmt.Fprintf(stderr, "tagcess: not ready: %v\n", err)
+			return 1
+		}
+		_, _ = fmt.Fprintln(stdout, "ready")
 		return 0
 	}
 	if *preview {

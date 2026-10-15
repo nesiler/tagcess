@@ -228,7 +228,7 @@ column shows where the phase writes, the confirmation column shows the phase's o
 - **guide:** `caddy-ui-oauth2-proxy`.
 
 ### 5.15 `app`
-- **What changes:** the tagcess image, `/etc/tagcess/config.yaml`, `compose.yaml`; the `-check` gate; the container starts.
+- **What changes:** the tagcess image, `/etc/tagcess/config.yaml`, `compose.yaml`; the `-check` gate (config only; the container healthcheck is `-healthcheck`, a probe of the running server); the container starts.
 - **Verification:** `/healthz` 200; the config passes tagcess's own validation.
 - **Rollback:** `rollback.yml --tags app` (previous image and config).
 
