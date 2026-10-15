@@ -79,7 +79,7 @@ services:
       - "/etc/tagcess/config.yaml:/etc/tagcess/config.yaml:ro"
       - "/etc/tagcess/secrets:/etc/tagcess/secrets:ro"
     healthcheck:
-      test: ["CMD", "/usr/local/bin/tagcess", "-config", "/etc/tagcess/config.yaml", "-check"]
+      test: ["CMD", "/usr/local/bin/tagcess", "-config", "/etc/tagcess/config.yaml", "-healthcheck"]
       interval: 10s
       timeout: 5s
       retries: 6

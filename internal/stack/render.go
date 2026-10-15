@@ -155,7 +155,7 @@ func service(c Component, p Params) svcDef {
 				"/etc/tagcess/config.yaml:/etc/tagcess/config.yaml:ro",
 				"/etc/tagcess/secrets:/etc/tagcess/secrets:ro",
 			},
-			health: []string{"CMD", tagcessBinary, "-config", "/etc/tagcess/config.yaml", "-check"},
+			health: []string{"CMD", tagcessBinary, "-config", "/etc/tagcess/config.yaml", "-healthcheck"},
 			deps:   []Component{Headscale, Caddy},
 		}
 	case OAuth2Proxy:

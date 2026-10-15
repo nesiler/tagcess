@@ -263,7 +263,7 @@ func TestRender_RuntimeWiring(t *testing.T) {
 		`command: ["--config=/etc/oauth2-proxy/oauth2-proxy.cfg"]`,
 		`/etc/tagcess/stack/secrets/headscale:/etc/headscale/secrets:ro`,
 		`"/run/tagcess:/run/tagcess"`,
-		`["CMD", "/usr/local/bin/tagcess", "-config", "/etc/tagcess/config.yaml", "-check"]`,
+		`["CMD", "/usr/local/bin/tagcess", "-config", "/etc/tagcess/config.yaml", "-healthcheck"]`,
 	} {
 		if !strings.Contains(c, want) {
 			t.Errorf("compose.yaml lacks %s", want)
