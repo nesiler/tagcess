@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -28,6 +30,12 @@ func TestUIHandler_HealthzIsTheOnlyOpenRoute(t *testing.T) {
 	if got := do(http.MethodGet, "/healthz"); got != http.StatusOK {
 		t.Errorf("GET /healthz without headers = %d, want 200", got)
 	}
+	// Unclean paths are cleaned by a redirect to a path that is itself behind the identity chain.
+	for _, p := range []string{"/healthz/../audit", "//healthz"} {
+		if got := do(http.MethodGet, p); got == http.StatusOK {
+			t.Errorf("GET %s without headers = 200, want no open answer", p)
+		}
+	}
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodGet, "/"},
 		{http.MethodGet, "/audit"},
@@ -36,6 +44,7 @@ func TestUIHandler_HealthzIsTheOnlyOpenRoute(t *testing.T) {
 		{http.MethodGet, "/static/app.css"},
 		{http.MethodGet, "/healthz/"},
 		{http.MethodGet, "/healthz/x"},
+		{http.MethodGet, "/HEALTHZ"},
 		{http.MethodPost, "/healthz"},
 		{http.MethodGet, "/nope"},
 	} {
@@ -65,5 +74,52 @@ func TestUIHandler_HealthzClosedStore(t *testing.T) {
 	}
 	if got := get(); got != http.StatusServiceUnavailable {
 		t.Errorf("closed store = %d, want 503", got)
+	}
+}
+
+// A deleted or corrupted database file must turn the probe 503 even while the connection is open.
+func TestUIHandler_HealthzFileGone(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		damage func(t *testing.T, path string)
+	}{
+		{"deleted", func(t *testing.T, path string) {
+			for _, suffix := range []string{"", "-wal", "-shm"} {
+				if err := os.Remove(path + suffix); err != nil && suffix == "" {
+					t.Fatalf("remove: %v", err)
+				}
+			}
+		}},
+		{"corrupted", func(t *testing.T, path string) {
+			// The WAL would still serve the old pages; a damaged disk takes the whole set.
+			for _, suffix := range []string{"-wal", "-shm"} {
+				_ = os.Remove(path + suffix)
+			}
+			if err := os.WriteFile(path, bytes.Repeat([]byte("garbage!"), 4096), 0o600); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "t.db")
+			st, err := store.Open(context.Background(), path)
+			if err != nil {
+				t.Fatalf("store.Open: %v", err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+			h := web.NewHealthz(st.CheckReadable, "test")
+			get := func() int {
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/healthz", nil))
+				return rec.Code
+			}
+			if got := get(); got != http.StatusOK {
+				t.Fatalf("healthy = %d, want 200", got)
+			}
+			tc.damage(t, path)
+			if got := get(); got != http.StatusServiceUnavailable {
+				t.Errorf("%s = %d, want 503", tc.name, got)
+			}
+		})
 	}
 }

@@ -759,7 +759,7 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	pages.Dashboard, pages.Alerts, pages.MonitorSettings = f4s.Pages.Dashboard, f4s.Pages.Alerts, f4s.Pages.MonitorSettings
 	pages.K8sDiscovery, pages.K8sConnection, pages.K8sSetup, pages.K8sDraft = f4s.Pages.K8sDiscovery, f4s.Pages.K8sConnection, f4s.Pages.K8sSetup, f4s.Pages.K8sDraft
-	pages.Health = web.NewHealthz(func(ctx context.Context) error { return st.DB().PingContext(ctx) }, version.Version)
+	pages.Health = web.NewHealthz(func(ctx context.Context) error { return st.CheckReadable(ctx) }, version.Version)
 	uiHandler := newUIHandler(csrf, pages)
 	ui, err := web.New(web.Config{
 		Socket:      cfg.UI.Socket,
