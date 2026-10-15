@@ -14,7 +14,7 @@ const healthcheckTimeout = 2 * time.Second
 
 // probeServer reports whether the running server is ready: serve opens the database before it
 // binds the UI socket and the hook listener, so both accepting connections means it got that far.
-// Local only; the public /healthz endpoint is a separate issue (#7).
+// Local only; GET /healthz on the UI socket is the HTTP liveness signal.
 func probeServer(cfg *config.Config, timeout time.Duration) error {
 	for _, t := range []struct{ name, network, addr string }{
 		{"ui socket", "unix", cfg.UI.Socket},

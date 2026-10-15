@@ -12,7 +12,7 @@ import (
 
 // fixC_goodProbe is what the host probes print on a healthy installation (F6-008 verify role).
 var fixC_goodProbe = map[string]string{
-	"tagcess_started": "1", "tagcess_errors": "0", "sock": "srw-rw---- 10001 caddy", "sock_code": "403", "hook_code": "401",
+	"tagcess_started": "1", "tagcess_errors": "0", "sock": "srw-rw---- 10001 caddy", "sock_code": "403", "healthz_code": "200", "hook_code": "401",
 	"ui_code": "403", "ping_code": "200", "headscale": "active", "caddy": "active",
 }
 
@@ -72,6 +72,7 @@ func TestVerify_FailedHealthCheckFailsRun(t *testing.T) {
 			}
 		})
 		for _, c := range []struct{ name, key, bad, check string }{
+			{"healthz-down", "healthz_code", "503", "Soket /healthz 200 (başlıksız)"},
 			{"hook-not-401", "hook_code", "200", "İmzasız hook POST 401"},
 			{"socket-not-403", "sock_code", "200", "Başlıksız soket isteği 403"},
 			{"ui-not-403", "ui_code", "200", "Tailnet dışı kaynaktan arayüz 403"},

@@ -229,11 +229,11 @@ column shows where the phase writes, the confirmation column shows the phase's o
 
 ### 5.15 `app`
 - **What changes:** the tagcess image, `/etc/tagcess/config.yaml`, `compose.yaml`; the `-check` gate (config only; the container healthcheck is `-healthcheck`, a probe of the running server); the container starts.
-- **Verification:** `/healthz` 200; the config passes tagcess's own validation.
+- **Verification:** `GET /healthz` on the UI socket (`/run/tagcess/ui.sock`, no identity headers) returns 200 with `{"status":"ok","version":...}` (503 when the database cannot be read); the config passes tagcess's own validation.
 - **Rollback:** `rollback.yml --tags app` (previous image and config).
 
 ### 5.16 `verify`
-- **What it does:** first-import parity (`tagcess -import-preview`), service health, number of users without roles, guide state.
+- **What it does:** first-import parity (`tagcess -import-preview`), service health (including the header-less `/healthz` 200 on the UI socket), number of users without roles, guide state.
   If parity is not 0 it stops with "not ready to apply"; the only exception is the `s06_open_start` class (developer decision 2026-10-07,
   ADR 0010): this class is accepted but written as a WARNING at the top of the report and the guide. Read-only.
 - **guide:** `verify-s06-open-start` (if there is an accepted difference), `verify-unroled-users`.
