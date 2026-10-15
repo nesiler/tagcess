@@ -1,0 +1,14 @@
+# Test helper (issue #5): the oauth2-proxy ping URL as the config role resolves it, written on the controller.
+- name: Ping URL
+  hosts: vpn
+  gather_facts: false
+  roles:
+    - role: config
+      tags: [always]
+  tasks:
+    - name: Write it
+      ansible.builtin.copy:
+        content: "{{ oauth2_proxy_ping_url }}"
+        dest: "{{ ping_out }}"
+        mode: "0644"
+      delegate_to: localhost
