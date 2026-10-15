@@ -220,3 +220,49 @@ func readHelper(t *testing.T, name string) string {
 	}
 	return string(b)
 }
+
+// The stack channel units (setup-flow.md §5.3): same trigger shape as the Headscale helper, fixed flags, no Docker
+// socket path and no flag a request could change. Installing them is the install script's job (I-7).
+func TestStackHelperUnits_Static(t *testing.T) {
+	fixed := []string{
+		"--host-root /var/lib/tagcess-host", "--stack-dir /etc/tagcess/stack", "--secrets-dir /etc/tagcess/secrets",
+		"--headscale-root " + helperRoot, "--request-uid 10001",
+	}
+	if p := readHelper(t, "tagcess-hshelper-stack.path"); !strings.Contains(p, "PathExists=/var/lib/tagcess-host/requests/request.ready") ||
+		!strings.Contains(p, "Unit=tagcess-hshelper-stack.service") {
+		t.Error("stack .path does not watch the marker")
+	}
+	svc := readHelper(t, "tagcess-hshelper-stack.service")
+	for _, want := range []string{"Type=oneshot", "TimeoutStartSec=900", "KillMode=control-group",
+		helperBinary + " stack-run ", "ExecStopPost=" + helperBinary + " stack-finalize "} {
+		if !strings.Contains(svc, want) {
+			t.Errorf("stack service: missing %q", want)
+		}
+	}
+	for unit, mode := range map[string]string{
+		"tagcess-hshelper-stack.service":       "stack-run",
+		"tagcess-hshelper-stack-boot.service":  "stack-boot",
+		"tagcess-hshelper-stack-sweep.service": "stack-sweep",
+	} {
+		content := readHelper(t, unit)
+		if !strings.Contains(content, helperBinary+" "+mode+" ") {
+			t.Errorf("%s: no %s command", unit, mode)
+		}
+		for _, f := range fixed {
+			if !strings.Contains(content, f) {
+				t.Errorf("%s: missing fixed flag %q", unit, f)
+			}
+		}
+		for _, banned := range []string{"docker.sock", "dbus", "/var/run/docker"} {
+			if strings.Contains(content, banned) {
+				t.Errorf("%s: contains forbidden %q", unit, banned)
+			}
+		}
+	}
+	if !strings.Contains(readHelper(t, "tagcess-hshelper-stack-boot.service"), "Before=tagcess-hshelper-stack.path") {
+		t.Error("stack boot unit does not run before the .path unit")
+	}
+	if !strings.Contains(readHelper(t, "tagcess-hshelper-stack-sweep.timer"), "Unit=tagcess-hshelper-stack-sweep.service") {
+		t.Error("sweep timer does not start the sweep service")
+	}
+}

@@ -15,8 +15,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/nesiler/tagcess/internal/hshelper"
+	"github.com/nesiler/tagcess/internal/stack"
+	"github.com/nesiler/tagcess/internal/stack/manifest"
 	"github.com/nesiler/tagcess/internal/version"
 )
 
@@ -40,6 +43,9 @@ func run(args []string, stderr io.Writer) int {
 	if version.IsVersionFlag(args) {
 		_, _ = fmt.Fprintln(os.Stdout, version.String("tagcess-hshelper"))
 		return 0
+	}
+	if len(args) > 0 && strings.HasPrefix(args[0], "stack-") {
+		return runStack(args, stderr)
 	}
 	mode, s, err := parseArgs(args)
 	if err != nil {
@@ -68,6 +74,88 @@ func run(args []string, stderr io.Writer) int {
 	return 0
 }
 
+// stackSettings is the validated command line of the stack channel modes.
+type stackSettings struct {
+	root, stackDir, secretsDir, headscaleRoot string
+	uid                                       uint32
+}
+
+// runStack runs a stack-* mode: stack-run (the .path trigger), stack-boot, stack-finalize (ExecStopPost) and
+// stack-sweep (a timer that deletes stale handoff files). The release manifest comes from this binary only.
+func runStack(args []string, stderr io.Writer) int {
+	mode, s, err := parseStackArgs(args)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "tagcess-hshelper: %v\nusage: tagcess-hshelper stack-run|stack-boot|stack-finalize|stack-sweep --host-root DIR --stack-dir DIR --secrets-dir DIR --request-uid UID [--headscale-root DIR]\n", err)
+		return 2
+	}
+	logger := log.New(stderr, "tagcess-hshelper: ", 0)
+	m, err := stack.Load(manifest.JSON, false)
+	if err != nil {
+		logger.Printf("%s failed: %v", mode, err)
+		return 1
+	}
+	cfg := hshelper.StackConfig{
+		Root: s.root, StackDir: s.stackDir, TagcessSecretsDir: s.secretsDir, HeadscaleRoot: s.headscaleRoot,
+		RequestUID: s.uid, Manifest: m, Docker: hshelper.NewSystemDocker(), Logf: logger.Printf,
+	}
+	var out hshelper.Outcome
+	switch mode {
+	case "stack-run":
+		out, err = hshelper.StackRun(cfg)
+	case "stack-boot":
+		out, err = hshelper.StackBoot(cfg)
+	case "stack-finalize":
+		out, err = hshelper.StackFinalize(cfg)
+	case "stack-sweep":
+		out, err = hshelper.StackSweep(cfg)
+	}
+	if err != nil {
+		logger.Printf("%s failed: %v", mode, err)
+		return 1
+	}
+	logger.Printf("%s: %s", mode, out)
+	return 0
+}
+
+func parseStackArgs(args []string) (string, stackSettings, error) {
+	var s stackSettings
+	mode := args[0]
+	if mode != "stack-run" && mode != "stack-boot" && mode != "stack-finalize" && mode != "stack-sweep" {
+		return "", s, fmt.Errorf("unknown mode %q", mode)
+	}
+	fs := flag.NewFlagSet(mode, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var uid string
+	fs.StringVar(&s.root, "host-root", "", "")
+	fs.StringVar(&s.stackDir, "stack-dir", "", "")
+	fs.StringVar(&s.secretsDir, "secrets-dir", "", "")
+	fs.StringVar(&s.headscaleRoot, "headscale-root", "", "")
+	fs.StringVar(&uid, "request-uid", "", "")
+	if err := fs.Parse(args[1:]); err != nil {
+		return "", s, err
+	}
+	if fs.NArg() != 0 {
+		return "", s, errors.New("unexpected arguments")
+	}
+	for _, p := range []struct {
+		name, val string
+		optional  bool
+	}{{"host-root", s.root, false}, {"stack-dir", s.stackDir, false}, {"secrets-dir", s.secretsDir, false}, {"headscale-root", s.headscaleRoot, true}} {
+		if p.val == "" && p.optional {
+			continue
+		}
+		if p.val == "" || !filepath.IsAbs(p.val) || filepath.Clean(p.val) != p.val {
+			return "", s, fmt.Errorf("--%s must be a clean absolute path", p.name)
+		}
+	}
+	n, err := strconv.ParseUint(uid, 10, 32)
+	if err != nil || n == 0 {
+		return "", s, errors.New("--request-uid must be a non-root uid number")
+	}
+	s.uid = uint32(n)
+	return mode, s, nil
+}
+
 // parseArgs checks the mode and every flag. All flags are required in all modes, so one unit
 // definition serves them.
 func parseArgs(args []string) (string, settings, error) {
@@ -81,7 +169,7 @@ func parseArgs(args []string) (string, settings, error) {
 	}
 	fs := flag.NewFlagSet(mode, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var config, root, unit, serviceUser, health, socket, uid string
+	var config, root, unit, serviceUser, health, socket, uid, stackRoot string
 	fs.StringVar(&config, "config", "", "")
 	fs.StringVar(&root, "root", "", "")
 	fs.StringVar(&unit, "unit", "", "")
@@ -89,11 +177,15 @@ func parseArgs(args []string) (string, settings, error) {
 	fs.StringVar(&health, "health", "", "")
 	fs.StringVar(&socket, "socket", "", "")
 	fs.StringVar(&uid, "request-uid", "", "")
+	fs.StringVar(&stackRoot, "stack-root", "", "")
 	if err := fs.Parse(args[1:]); err != nil {
 		return "", s, err
 	}
 	if fs.NArg() != 0 {
 		return "", s, errors.New("unexpected arguments")
+	}
+	if stackRoot != "" && (!filepath.IsAbs(stackRoot) || filepath.Clean(stackRoot) != stackRoot) {
+		return "", s, errors.New("--stack-root must be a clean absolute path")
 	}
 
 	for _, p := range []struct{ name, val string }{{"config", config}, {"root", root}, {"socket", socket}} {
@@ -125,7 +217,7 @@ func parseArgs(args []string) (string, settings, error) {
 		return "", s, errors.New("--request-uid must be a uid number")
 	}
 	s.cfg = hshelper.Config{
-		Root: root, ConfigPath: config, Unit: unit, ServiceUser: serviceUser, RequestUID: uint32(n),
+		Root: root, ConfigPath: config, Unit: unit, ServiceUser: serviceUser, RequestUID: uint32(n), StackRoot: stackRoot,
 	}
 	s.health, s.socket = health, socket
 	return mode, s, nil

@@ -444,6 +444,19 @@ box (architecture.md §10.1) lists the remaining items, as it does today.
   and helper), and it renders everything itself, so a compromised tagcess can ask only for the stacks the helper knows
   how to build. The cost is a bigger helper (it is already root and already packaged by the installer).
 
+**Implementation (I-2, `internal/hshelper/stack_*.go`, modes `stack-run|stack-boot|stack-finalize|stack-sweep`):**
+- Own journal (`private/stack-journal.json`), state (`private/stack-state.json`: typed settings and the image of each
+  enabled component) and request copy; results in `results/result.json` and `results/status.json` (stack `base_rev`,
+  per component the running and the manifest image). Both channels lock `<headscale root>/private/helper.lock`.
+- `stack.apply` renders the whole stack in memory but writes only the named component's files plus `compose.yaml`;
+  another component's service block or config file that would change refuses the request (`settings_conflict`). The
+  candidate is checked with `docker compose config --quiet` in `private/` before anything outside it is written.
+- `stack.upgrade` here only rewrites that component's image in `compose.yaml` and restarts it; the automatic return
+  to the previous digest for stateless services (§5.6) belongs to I-22. `discover` needs the scanner of I-3.
+- Handoff files `handoff/in/<request_id>.<kind>` are owner/size-checked on the open fd; every file that is not a
+  listed kind of the running request is deleted unread. Cleanup runs at the end of a request, at boot, in
+  `finalize` and by `stack-sweep` (older than 15 minutes).
+
 #### 5.3.1 Configurable settings and fixed boundaries
 **[Decided]** everything is chosen in the UI, including addresses, CIDRs and paths (product-decisions §11). The helper
 therefore separates two kinds of values:
