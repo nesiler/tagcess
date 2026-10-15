@@ -189,3 +189,23 @@ func TestCaddyUI_MatchesReferenceTemplate(t *testing.T) {
 		t.Fatalf("block differs from the reference:\n%s", got)
 	}
 }
+
+// Issue #5: oauth2_proxy_http_address flows into gate.upstream; the default address writes nothing.
+func TestAppRole_GateUpstream(t *testing.T) {
+	t.Parallel()
+	base := appVarSets(t)["lab"]
+	for addr, want := range map[string]string{"127.0.0.1:4181": "127.0.0.1:4181", "127.0.0.1:4180": ""} {
+		v := adopttarget.Merge(base, map[string]any{"oauth2_proxy_http_address": addr})
+		res, out := renderApp(t, v)
+		if res.ExitCode != 0 {
+			t.Fatalf("render %s:\n%s", addr, res.Output)
+		}
+		c, err := config.Load(filepath.Join(out, "config.yaml"))
+		if err != nil {
+			t.Fatalf("the rendered config does not load: %v", err)
+		}
+		if c.Gate.Upstream != want {
+			t.Errorf("oauth2_proxy_http_address %s: gate.upstream = %q, want %q", addr, c.Gate.Upstream, want)
+		}
+	}
+}

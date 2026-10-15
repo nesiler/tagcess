@@ -1,6 +1,7 @@
 # tagcess web UI (system site, S-05.2). Reference for the `tagcess` system template (ADR 0010); the
 # rendered template must produce this same text with the configured host. Only devops reaches the UI,
-# and only from the tailnet; non-tailnet sources get 403.
+# and only from the tailnet; non-tailnet sources get 403. The oauth2-proxy address is the default
+# 127.0.0.1:4180; `gate.upstream` in the tagcess config replaces it in the rendered text.
 tagcess.example.com {
 	@tailnet remote_ip 100.64.0.0/10
 	handle @tailnet {

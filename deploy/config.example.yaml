@@ -54,6 +54,9 @@ zitadel:
 # URI. Needs sites.tagcess_host. Empty: the links only clear the oauth2-proxy cookie.
 gate:
   client_id: "000000000000000000@vpn"
+  # oauth2-proxy address (host:port) the generated Caddyfile's reverse_proxy and forward_auth lines use; it
+  # must match oauth2-proxy's http_address. Optional: unset is 127.0.0.1:4180.
+  # upstream: 127.0.0.1:4181
 
 # Caddy admin API and the file a restart reads (ADR 0005).
 caddy:

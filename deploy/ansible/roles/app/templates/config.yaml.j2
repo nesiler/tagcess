@@ -41,7 +41,13 @@ sites:
   k8s_upstream: {{ k8s_target_addr }}
   tagcess_host: {{ tagcess_host }}
   seed_file: {{ app_seed_dest }}
-{% if oauth2_proxy_client_id %}
+{% set gate_upstream = oauth2_proxy_http_address | default('127.0.0.1:4180') %}
+{% if oauth2_proxy_client_id or gate_upstream != '127.0.0.1:4180' %}
 gate:
+{% if oauth2_proxy_client_id %}
   client_id: "{{ oauth2_proxy_client_id }}"
+{% endif %}
+{% if gate_upstream != '127.0.0.1:4180' %}
+  upstream: "{{ gate_upstream }}"
+{% endif %}
 {% endif %}
