@@ -119,6 +119,8 @@ func sourceAddr(r *http.Request) string {
 		if fwd := net.ParseIP(strings.TrimSpace(r.Header.Get(SetupClientIPHeader))); fwd != nil {
 			return fwd.String()
 		}
+		// loopback without the header: the SSH-tunnel path, with its own attempt budget
+		return setup.TunnelSource
 	}
 	if ip != nil {
 		return ip.String()

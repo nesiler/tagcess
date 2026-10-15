@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,6 +37,10 @@ const (
 	PerSourceFailures = 5
 	TotalFailures     = 60
 	attemptWindow     = time.Minute
+
+	// TunnelSource is the source for a loopback request without the Caddy client-IP header (the
+	// SSH-tunnel path). It has its own per-minute budget, outside the public global bucket.
+	TunnelSource = "tunnel"
 
 	tokenBytes   = 32
 	timeFormat   = "2006-01-02T15:04:05.000Z"
@@ -300,14 +305,24 @@ func remove(ts []attempt, id uint64) []attempt {
 
 // reserve checks the limits and records the attempt in one locked step.
 func (l *limiter) reserve(now time.Time, src string) (reservation, bool) {
+	src = normalizeSource(src)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.global = prune(l.global, now)
-	if len(l.global) >= TotalFailures {
+	tunnel := src == TunnelSource
+	if !tunnel && len(l.global) >= TotalFailures {
 		return reservation{}, false
 	}
 	if l.bySrc == nil {
 		l.bySrc = map[string][]attempt{}
+	}
+	// Drop sources whose attempts have all left the window, so the map cannot grow without bound.
+	for k, ts := range l.bySrc {
+		if ts = prune(ts, now); len(ts) == 0 {
+			delete(l.bySrc, k)
+		} else {
+			l.bySrc[k] = ts
+		}
 	}
 	l.bySrc[src] = prune(l.bySrc[src], now)
 	if len(l.bySrc[src]) >= PerSourceFailures {
@@ -316,7 +331,9 @@ func (l *limiter) reserve(now time.Time, src string) (reservation, bool) {
 	l.seq++
 	a := attempt{id: l.seq, at: now}
 	l.bySrc[src] = append(l.bySrc[src], a)
-	l.global = append(l.global, a)
+	if !tunnel {
+		l.global = append(l.global, a)
+	}
 	return reservation{src: src, id: a.id}, true
 }
 
@@ -331,4 +348,14 @@ func (l *limiter) refund(r reservation) {
 		delete(l.bySrc, r.src)
 	}
 	l.global = remove(l.global, r.id)
+}
+
+// normalizeSource keys an IPv6 source by its /64, so one host cannot get a fresh budget from each
+// address of its prefix. IPv4 and non-IP labels (TunnelSource) are returned unchanged.
+func normalizeSource(src string) string {
+	ip := net.ParseIP(src)
+	if ip == nil || ip.To4() != nil {
+		return src
+	}
+	return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
 }

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -271,5 +272,20 @@ func TestSetup_CSRFKeySeparate(t *testing.T) {
 	}
 	if w := e.post("/setup/session", "127.0.0.1:1", "", url.Values{setupTokenField: {e.token}, CSRFParam: {plain.Token()}}, nil); w.Code != http.StatusForbidden {
 		t.Fatalf("exchange with UI token: %d", w.Code)
+	}
+}
+
+func TestSetup_TunnelRequestAdmittedWhenPublicBucketFull(t *testing.T) {
+	e := newSetupEnv(t)
+	for i := 0; i < setup.TotalFailures; i++ {
+		ip := "198.51.100." + strconv.Itoa(i/4+1)
+		e.post("/setup/session", "127.0.0.1:5000", ip, e.form(badToken), nil)
+	}
+	if w := e.post("/setup/session", "127.0.0.1:5001", "198.51.100.250", e.form(e.token), nil); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("public source: %d, want 429", w.Code)
+	}
+	// loopback without the Caddy header is the SSH tunnel
+	if w := e.post("/setup/session", "127.0.0.1:5002", "", e.form(e.token), nil); w.Code != http.StatusSeeOther {
+		t.Fatalf("tunnel request: %d, want 303", w.Code)
 	}
 }
