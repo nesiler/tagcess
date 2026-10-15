@@ -22,8 +22,10 @@ Sources: [product-decisions.md](product-decisions.md) §1, §2, §3, §11, §12;
   database; the script asks only the minimum (for example the domain and the IP); every other step happens in the UI,
   where Headscale, Caddy, Zitadel and k8s are set up step by step; on an empty server tagcess installs the services,
   when they exist it builds a migration plan; at the end users connect with Tailscale and sign in with Zitadel.
-- **[Decided]** On a fresh server tagcess, Caddy, Headscale, Zitadel with its database and the auth proxy run in Docker
-  Compose. Existing installations are connected as they are; tagcess does not move them (product-decisions §11).
+- **[Decided]** On a fresh server the services tagcess installs (tagcess, Caddy, Headscale, the auth proxy) run in
+  Docker Compose. Existing installations are connected as they are; tagcess does not move them (product-decisions §11).
+- **[Decided 2026-10-15]** tagcess never installs an identity provider. An existing Zitadel (later another OIDC provider
+  through a driver) is a prerequisite; the setup wizard only connects to it (product-decisions §11).
 - **[Decided]** The first stage keeps oauth2-proxy as the auth proxy; `tagcess-auth` replaces it later
   (product-decisions §4, §11).
 - **[Decided]** Everything is chosen in the UI; nothing stays fixed in code or config files, including the Headscale
@@ -36,6 +38,8 @@ Sources: [product-decisions.md](product-decisions.md) §1, §2, §3, §11, §12;
   (AGENTS.md hard rule 3). Fail safe: keep the last known good state, never widen access (hard rule 7).
 - **[Decided]** tagcess is not in the traffic path (NFR-01); the UI is reached only through a permission-restricted unix
   socket behind Caddy and the auth proxy (NFR-02, ADR 0004).
+- **[Decided 2026-10-15]** The developer's answers to the questions of this design (O1, O2, O4, O5, O6 accepted as
+  recommended; O3 and O7 dropped because no IdP is installed) are listed in §10 and marked where they apply.
 - Still **[Open]** elsewhere: the release flow (product-decisions §12, issue #18). This design depends on it only for
   how the script and images are published (§1.6).
 
@@ -54,12 +58,13 @@ Ansible or Python dependency and does as little as possible:
 6. starts the bootstrap stack (tagcess, and Caddy when ports 80/443 are free);
 7. prints the setup address and the one-time setup token (§2).
 
-Every later choice (IdP, Headscale, auth proxy, k8s, sites) is made in the wizard (product-decisions §11).
+Every later choice (which existing IdP to connect, Headscale, auth proxy, k8s, sites) is made in the wizard
+(product-decisions §11). The IdP itself must already exist; neither the script nor the wizard installs one.
 
 ### 1.2 What it asks
 | Question | Default | Check |
 |---|---|---|
-| Base domain, for example `example.com` | none | RFC 1123 hostname rule of security.md §5. The wizard derives `tagcess.`, `hs.` and `auth.` names from it; the user can change each name in the wizard |
+| Base domain, for example `example.com` | none | RFC 1123 hostname rule of security.md §5. The wizard derives the `tagcess.` and `hs.` names from it; the user can change each name in the wizard |
 | Public IPv4 address (IPv6 optional) | the address on the default-route interface | must be a global unicast address on this host; the wizard checks that DNS records point to it |
 | ACME contact e-mail | empty (Caddy works without one) | e-mail syntax only |
 
@@ -70,7 +75,7 @@ The answers are stored in `/etc/tagcess/install.env` (root `0600`, no secrets) a
 ### 1.3 Host checks (blockers and warnings)
 - **Blockers:** not root; not Linux on amd64/arm64; no systemd; an operating system outside the supported list
   (**[Proposed]** Ubuntu 24.04 and 26.04 LTS, Debian 12 and 13; Docker's apt repository supports these, §11 F1); less than 2 GB RAM or
-  10 GB free disk (**[Proposed]** values, to be measured on the lab with Zitadel and Postgres).
+  10 GB free disk (**[Proposed]** values, to be measured on the lab).
 - **Warnings (shown, then the user decides):** ports 80/443 held by a process that is not Caddy (§3.3); an existing
   Headscale, Tailscale, WireGuard, IdP or k8s (these become discovery findings, not script questions).
 - The script never stops, reconfigures or removes an existing service.
@@ -105,8 +110,8 @@ The answers are stored in `/etc/tagcess/install.env` (root `0600`, no secrets) a
 from a git tag and runs it (`curl -fsSLo install.sh …/v0.1.x/deploy/get.sh && sudo sh install.sh`), never
 `curl | sh` from `main`. After #18 it is a release asset with a published checksum.
 
-## 2. First admin before any IdP exists: setup token and setup mode
-Before the IdP and the auth proxy exist, the normal UI gate (Caddy → oauth2-proxy → admin group, security.md §3.1)
+## 2. First admin before the IdP is connected: setup token and setup mode
+Before the IdP is connected and the auth proxy exists, the normal UI gate (Caddy → oauth2-proxy → admin group, security.md §3.1)
 cannot work. Setup mode is the only way into tagcess without the gate, and it ends when the gate works (sealing,
 §2.4); only a command on the host can open it again.
 
@@ -148,7 +153,8 @@ cannot work. Setup mode is the only way into tagcess without the gate, and it en
   tailnet-only gate snippet (oauth2-proxy → `ui.sock`), so the admin's first gated request (§2.4) can arrive. It is
   generated by the existing `-bootstrap-caddyfile` renderer, extended with these two states (golden-tested).
 - Compared with NetBird's `/setup` (open to the first visitor while no user exists), the token closes the race between
-  the install and the admin's first visit. See O2 for the alternative "SSH tunnel only".
+  the install and the admin's first visit. **[Decided 2026-10-15]** The public page behind the token with the SSH tunnel as fallback
+  (O2).
 
 ### 2.4 Sealing
 The setup is **sealed** when the normal gate is proven end to end:
@@ -223,7 +229,7 @@ strict decoder and stores it. The raw file is not kept.
 | # | Step | Choices | Depends on |
 |---|---|---|---|
 | 1 | Domain, DNS and TLS (Caddy) | install new / connect existing | – |
-| 2 | Identity provider (Zitadel) | install new / connect existing | 1 |
+| 2 | Identity provider (an existing Zitadel) | connect existing only | 1 |
 | 3 | Headscale | install new / connect existing / migrate | 1, 2 |
 | 4 | VPN host on the tailnet (Tailscale client) | install new / connect existing | 3 |
 | 5 | Auth proxy and UI gate (oauth2-proxy) | install new / connect existing | 1, 2 |
@@ -232,7 +238,7 @@ strict decoder and stores it. The raw file is not kept.
 | 8 | First sites | from k8s drafts / by hand / import seed (migrate) | 6 |
 | 9 | First users | done in the IdP; tagcess shows status | 6 |
 
-Order rationale: Caddy first because every public name needs its certificate; the IdP before Headscale because
+Order rationale: Caddy first because every public name needs its certificate; the IdP connection before Headscale because
 Headscale's OIDC block needs the IdP client; the seal (step 6) before k8s, sites and users so that the public setup
 page is open for as short a time as possible. Steps 7-9 use the existing normal UI flows (K-01 connection, S-01 site
 form, k8s drafts, G-01 seed) behind the normal gate; the wizard only links to them and shows their state.
@@ -263,9 +269,10 @@ form, k8s drafts, G-01 seed) behind the normal gate; the wizard only links to th
 
 ### 4.3 The steps
 **Step 1: Domain, DNS and TLS (Caddy)**
-- Shows the hostnames (`tagcess.`, `hs.`, `auth.<domain>`; each editable) and the DNS records the user must create
-  (A/AAAA to the public IP). Checks resolution from the server. ACME needs public DNS for each public name; internal
-  site names need a public record only if HTTP-01 is used for them (see O4).
+- Shows the hostnames (`tagcess.` and `hs.<domain>`; each editable) and the DNS records the user must create
+  (A/AAAA to the public IP). Checks resolution from the server. **[Decided 2026-10-15]** Caddy's own ACME with HTTP-01/TLS-ALPN and the
+  stock Caddy image (O4): every public name, and every site name, needs a public DNS record to the server (a wildcard
+  `*.<domain>` record is enough); internal sites still answer only to the tailnet (S-06 closed).
 - *Install new:* the Caddy container of the bootstrap stack becomes the managed Caddy (tagcess writes the Caddyfile as
   today, ADR 0005).
 - *Connect existing:* an existing Caddy that discovery found (unit or container): admin API URL, Caddyfile path, version
@@ -276,15 +283,15 @@ form, k8s drafts, G-01 seed) behind the normal gate; the wizard only links to th
 - **Proof:** the presented certificate of `tagcess.<domain>` validates against the system roots (existing
   `internal/health` TLS observation); the Caddy admin API answers; the running config equals the generated one.
 
-**Step 2: Identity provider (Zitadel)**
-- *Install new:* adds `zitadel`, `zitadel-login` and `postgres` (§5.2) with a generated master key and database
-  password. Zitadel's first-instance settings create an initial human admin (`ZITADEL_FIRSTINSTANCE_ORG_HUMAN_*`, with
-  password change required) and a bootstrap machine user with a key file (`ZITADEL_FIRSTINSTANCE_ORG_MACHINE_*`,
-  `…_MACHINEKEYPATH`; §11 F5). Whether tagcess may configure these users at all is O3.
-- *Connect existing* (the test lab path: the lab's Zitadel stays on k3s, product-decisions §12): the user enters the
-  issuer URL; tagcess fetches its OIDC discovery document; the user pastes a one-time admin credential (PAT or key) used
-  only for the bootstrap below and never stored.
-- **Bootstrap (both choices)** reuses `internal/zitadeladopt` (today's `cmd/tagcess-zitadel-adopt`): find or create the
+**Step 2: Identity provider (an existing Zitadel)**
+- **[Decided 2026-10-15]** tagcess never installs an IdP; an existing Zitadel is a prerequisite and this step only
+  connects to it (product-decisions §11). Later IdPs come through the driver structure (product-decisions §3). On
+  the test lab this is the Zitadel on k3s (product-decisions §12).
+- *Connect existing:* the user enters the issuer URL; tagcess fetches its OIDC discovery document; the user pastes a
+  one-time admin credential (PAT or key) used only for the bootstrap below and never stored. This **connection
+  precheck** (issuer reachable, credential authenticated, read-only reads complete) is what the migration item M-1
+  waits for (§6); it is not yet the step's verification.
+- **Bootstrap** reuses `internal/zitadeladopt` (today's `cmd/tagcess-zitadel-adopt`): find or create the
   `vpn` project and its roles and the Headscale and oauth2-proxy OIDC apps (objects, not users or grants). The role keys
   and the admin group are chosen in the step (issues #3, #4). Actions targets use a URL the user chooses (issue #24:
   tailnet URL by default, public URL when Zitadel cannot reach the tailnet); the instance-wide groups execution is
@@ -293,17 +300,16 @@ form, k8s drafts, G-01 seed) behind the normal gate; the wizard only links to th
   user (exists, `PROJECT_OWNER`, `ORG_OWNER_VIEWER`, key) and shows console steps; the step keeps that for a connected
   IdP: it shows the console steps, waits, and re-reads until the service user is complete, then the user uploads its key
   file once; it goes to the helper through the credential handoff (§5.4), which installs it where tagcess reads it
-  today (`/etc/tagcess/secrets/zitadel-key.json`, security.md §7). For a Zitadel this setup installed, O3 asks whether the bootstrap may
-  create the `tagcess` service user with its roles and key, and grant the admin role once to the first-instance human
-  admin.
-- **After bootstrap** the bootstrap credential is discarded: the pasted admin credential is never written; the
-  first-instance machine key file is deleted and its key removed in Zitadel. Only the narrow `tagcess` service user key
-  stays (security.md §10).
+  today (`/etc/tagcess/secrets/zitadel-key.json`, security.md §7). The first admin's role is also granted in the IdP
+  console. There is no exception to hard rule 3.
+- **After bootstrap** the pasted admin credential is discarded (it is never written). Only the narrow `tagcess`
+  service user key stays (security.md §10).
 - **Fail safe:** if Zitadel cannot be read completely, or a write's result cannot be read back, the step is `failed` or
   `uncertain` and no later step starts; a bootstrap re-run is find-or-create, so it never creates a second copy.
-- **Proof:** OIDC discovery answers on the public `auth.` name with a valid certificate; the `tagcess` service user
+- **Proof:** OIDC discovery answers on the issuer URL with a valid certificate; the `tagcess` service user
   completes a full paged `ListAuthorizations` (security.md §8 "complete"); both OIDC apps read back with the expected
-  redirect URIs.
+  redirect URIs. The step becomes verified only after this proof, that is after the bootstrap (M-1) is applied or found
+  already satisfied (§6).
 
 **Step 3: Headscale**
 - *Install new:* adds the `headscale` container. Its config is rendered by the helper from typed parameters:
@@ -326,8 +332,8 @@ form, k8s drafts, G-01 seed) behind the normal gate; the wizard only links to th
   is passed to the container once and not stored.
 - *Connect existing:* an existing `tailscaled` on the host that is logged in to this Headscale.
 - **MagicDNS for the UI:** `tagcess.<domain>` has a public record (for its certificate), but the gate accepts only
-  tailnet sources. So the step writes the MagicDNS records of the system sites (`tagcess`, and `hs`/`auth` where the
-  site model says so) to the VPN address through the existing site pipeline and DNS file (ADR 0013); tailnet clients
+  tailnet sources. So the step writes the MagicDNS records of the system sites (`tagcess`, and `hs` where the site
+  model says so) to the VPN address through the existing site pipeline and DNS file (ADR 0013); tailnet clients
   then reach the UI over the tailnet.
 - **Proof:** the node is online in `ListNodes` with `tag:vpn-server`; its tailnet IP is recorded as the VPN address
   (replacing the fixed `vpn_tailnet_ip` setting); the hook listener binds to it; `tagcess.<domain>` resolves to the VPN
@@ -346,7 +352,7 @@ form, k8s drafts, G-01 seed) behind the normal gate; the wizard only links to th
 - Shows the admin what to do: install the Tailscale client, `tailscale up --login-server https://hs.<domain>`, sign in
   with the IdP account, open `https://tagcess.<domain>/`.
 - Shows live status: the admin's Headscale user and node appear; the IdP role read shows the admin role (if the role is
-  missing the screen says which user lacks which role; see O3).
+  missing the screen says which user lacks which role and that it is granted in the IdP console, hard rule 3).
 - **Proof and action:** the first gated request with the admin group seals the setup (§2.4).
 
 **Steps 7-9** are the existing flows: k8s connection, profile and credential (K-01, ADR 0030); first sites by hand, from
@@ -365,9 +371,7 @@ box (architecture.md §10.1) lists the remaining items, as it does today.
 - **Network mode [Proposed]:** the services that must see host addresses keep `network_mode: host`, as ADR 0004 already
   decides for tagcess: Caddy (real client IPs for the tailnet-only rules, admin API on localhost), Headscale (loopback
   listeners behind Caddy), tagcess (`ui.sock`, the hook on the tailnet IP, localhost APIs), oauth2-proxy (loopback
-  `4180`, as today) and the Tailscale client (it must create the host's tailnet interface). Zitadel, its login UI and
-  Postgres run on a private bridge network `idp`; only Zitadel and the login UI publish a port, on `127.0.0.1`, for
-  Caddy. A bridge layout for everything (as NetBird and Pangolin do) would need a new answer for client IPs and the
+  `4180`, as today) and the Tailscale client (it must create the host's tailnet interface). A bridge layout (as NetBird and Pangolin do) would need a new answer for client IPs and the
   tailnet; it is not worth it for one host.
 
 ### 5.2 Services
@@ -378,21 +382,14 @@ box (architecture.md §10.1) lists the remaining items, as it does today.
 | `tagcess` | `ghcr.io/nesiler/tagcess` | host | none public (`ui.sock`; hook on the tailnet IP; setup listener `127.0.0.1:9180` until sealed) | the architecture.md §8 mounts, plus the stack channel and the handoff directory of the helper (§5.3, §5.4) |
 | `oauth2-proxy` | `quay.io/oauth2-proxy/oauth2-proxy` | host | `127.0.0.1:4180` | config and secrets (ro) |
 | `tailscale` | `tailscale/tailscale` | host, `/dev/net/tun`, `NET_ADMIN` | 41641/udp (direct connections) | `/var/lib/tagcess-stack/tailscale` (node state) |
-| `zitadel` | `ghcr.io/zitadel/zitadel` | `idp` | `127.0.0.1:8081` (h2c, behind Caddy) | master key file (ro); bootstrap directory |
-| `zitadel-login` | `ghcr.io/zitadel/zitadel-login` | `idp` | `127.0.0.1:3000` | – |
-| `postgres` | `postgres` (alpine) | `idp` | none | `/var/lib/tagcess-stack/postgres` |
 
-- Healthchecks on every service and `depends_on: condition: service_healthy` order the start (Zitadel's own compose
-  does the same, §11 F1, F5). `restart: unless-stopped`; read-only root filesystems where the image allows it.
+- Healthchecks on every service and `depends_on: condition: service_healthy` order the start (§11 F1). `restart: unless-stopped`; read-only root filesystems where the image allows it.
 - **Group IDs at runtime:** the tagcess image no longer bakes the host's `caddy`/`headscale` group IDs in at build time;
   the helper passes them as `group_add` (product-decisions §1, issue #18). One published image fits every host.
 - **Headscale socket permission:** Headscale and tagcess share the socket directory; the socket keeps Headscale's
   default `0770` (§11 F3), the helper gives it a dedicated group and passes that group to tagcess with `group_add`.
   The image sets no user, so it most likely runs as root (inferred, §11 F3); I-10 checks this with `docker inspect`
   before code depends on it.
-- **Caddy → Zitadel:** Zitadel's own Caddy guide routes `/ui/v2/login/*` to the login container and everything else to
-  the API with `reverse_proxy h2c://…`, and adds `header_up -TE` against hanging error responses (§11 F4, F5). I-16
-  proves it on the lab.
 - **Tailscale client:** kernel mode (`TS_USERSPACE=false`) with `/dev/net/tun` and `NET_ADMIN`; `TS_STATE_DIR` on a
   persistent directory (otherwise every restart registers a new node); `TS_SOCKET` set explicitly, because the
   container's default differs from the host default; `--login-server` through `TS_EXTRA_ARGS` (§11 F8). Whether
@@ -400,7 +397,7 @@ box (architecture.md §10.1) lists the remaining items, as it does today.
 - **Public ports on a fresh server:** 80/tcp, 443/tcp, 443/udp, and 41641/udp. Everything else is loopback or tailnet.
 
 ### 5.3 How tagcess manages the stack: the host helper, not the Docker socket
-**[Proposed]** (decision asked in O1)
+**[Decided 2026-10-15]** (O1)
 - The Docker socket is root-equivalent: Docker says only trusted users may control the daemon and that the `docker`
   group grants root-level privileges (§11 F2). A socket proxy filters only by API section; creating and starting
   containers, which the wizard needs, stays root-equivalent (§11 F2). ADR 0008 and 0021 already decided that the tagcess
@@ -418,7 +415,6 @@ box (architecture.md §10.1) lists the remaining items, as it does today.
   | `stack.remove` | stops and removes one service that a failed "install new" added; keeps its data |
   | `service.restart` | restarts one allow-listed service |
   | `stack.upgrade` | moves one service to the digest in the manifest of the helper that is installed now (§5.6) |
-  | `handoff.ack` | records that tagcess delivered one `out/` value of a succeeded request and deletes that file (§5.4) |
   | `handoff.cleanup` | deletes the handoff files of a finished, failed or abandoned request (§5.4) |
 - **Stack revision:** the helper publishes in `results/status.json` a `base_rev` (SHA-256 of the secret-free projection
   of the stack: enabled components, their settings and digests). Every write request carries the `base_rev` it was
@@ -457,13 +453,12 @@ therefore separates two kinds of values:
 
 **[Proposed]** The host paths of the *managed* stack are an exception to "paths are chosen in the UI": a host path in a
 request to a root helper is a host-write primitive, and these paths are internal to the stack (the user never needs to
-point them anywhere). This exception needs the developer's decision, together with O1.
+point them anywhere. The 2026-10-15 answers accepted O1 but did not address this exception; it stays **[Proposed]**
+and is listed as the one remaining question in §10.
 
 ### 5.4 Secrets on a fresh server
-- **Generated by the helper** (root) on first need and used only by services: Zitadel master key (exactly 32
-  characters, cannot change after init; passed with `--masterkeyFile`, §11 F5), Postgres password, oauth2-proxy cookie
-  secret, the webhook and groups signing keys, the initial human admin password of a new Zitadel. Never written into the
-  compose file, environment lines, results, journals or logs.
+- **Generated by the helper** (root) on first need and used only by services: the oauth2-proxy cookie secret. Never
+  written into the compose file, environment lines, results, journals or logs.
 - Files under `/etc/tagcess/stack/secrets/<service>/` (`0600` or `0400`, owned by the service's UID) are mounted
   read-only only into the service that needs them; tagcess's own secrets stay in `/etc/tagcess/secrets` (security.md §7),
   which the helper fills and tagcess mounts read-only as today.
@@ -471,37 +466,18 @@ point them anywhere). This exception needs the developer's decision, together wi
   oauth2-proxy apps (Zitadel returns them once) and the Actions target signing keys. They must reach services the
   helper owns.
 - **Credential handoff [Proposed]:** a separate directory `/var/lib/tagcess-host/handoff/` (root-owned, `0730`, group
-  = the tagcess container's group) is the only path for secret values between tagcess and the helper. Request and result
-  files never carry values.
+  = the tagcess container's group) is the only path for secret values from tagcess to the helper. Values flow in one
+  direction only: since no IdP is installed, the helper never produces a secret that tagcess must read. Request and
+  result files never carry values.
   - **tagcess → helper:** tagcess writes `in/<request_id>.<kind>` (atomic rename, `0600`, ≤ 4 KiB) and only then
     publishes the request, which lists the `kind`s it hands off (allow-list: `oidc_secret_headscale`,
     `oidc_secret_oauth2_proxy`, `hook_signing_key`, `groups_signing_key`, `zitadel_service_key`). The helper opens each
     file with the ADR 0021 b rules (`O_NOFOLLOW`, regular file, owner, size), checks that its `request_id` is the one
     being run and its `kind` is listed, installs it into the owning service's secret directory and deletes the drop
     file. A file for another or an already finished request ID is deleted unread (replay).
-  - **helper → tagcess:** for values the wizard needs once: the bootstrap machine key that a new Zitadel writes at first
-    start (step 2, O3) and the initial human admin password. The helper writes `out/<request_id>.<kind>` (`0640`, group
-    = tagcess) for the request that produced it. tagcess records the pending delivery (request ID and kinds, no value)
-    in the step's `setup_steps` row and uses the value only in the setup session that owns the step.
-  - **Operation completion is not delivery completion.** The producing request becomes terminal (`succeeded`) as usual,
-    but its `out/` files stay until delivery is complete:
-    - the initial admin password is shown with `no-store` only to the owning session; until the user confirms "I saved
-      it", reloading the page shows it again to that session only; the confirmation sends `handoff.ack` for that request
-      ID and kind;
-    - the bootstrap machine key is read into memory by the bootstrap; it is acknowledged only after the bootstrap step
-      has finished and the key has been deleted in Zitadel (step 2).
-    On `handoff.ack` the helper deletes the file and journals the delivery (kind only). An ack for another request ID or
-    a kind that was not produced is ignored and logged without values.
-  - **Restarts:** a tagcess restart between production and consumption loses nothing: the pending delivery is in
-    `setup_steps` and the file is still there, so tagcess delivers it to the owning session after the restart. The
-    setup session is stored in `setup_state` and survives the restart. If the owning session is replaced by a new one
-    (a new token, which needs the host), the new session inherits the pending deliveries; no other session can read
-    them.
   - **Cleanup:** `in/` files are deleted when the request reaches a terminal state, on `handoff.cleanup`, at boot for any
-    request that is not the journal's current one, and after 15 minutes. `out/` files of a **failed or interrupted**
-    request are deleted at once (the step is re-run); `out/` files of a **succeeded** request are deleted on
-    `handoff.ack`, when the setup is sealed, or after 12 hours (the setup session's absolute lifetime), whichever comes
-    first. A secret is never reconstructed from a result; an undelivered value that expired makes the step `failed`.
+    request that is not the journal's current one, and after 15 minutes. A secret is never reconstructed from a result;
+    a lost drop file makes the step `failed` and the user re-runs it.
   - Results, journals, logs and audit contain only the kinds installed, never values.
 
 ### 5.5 Version manifest
@@ -511,7 +487,8 @@ point them anywhere). This exception needs the developer's decision, together wi
   The helper is built after the release's tagcess image is pushed, so the manifest can contain that image's digest too;
   no binary has to contain the digest of the image it is part of. tagcess does not keep its own copy.
 - The release notes list these versions (product-decisions §12, release proposal). The current production pins
-  (stack-notes) are older than the latest releases (§11 F0); which versions the first manifest uses is O6.
+  (stack-notes) are older than the latest releases (§11 F0). **[Decided 2026-10-15]** (O6): the fresh stack starts on the current releases
+  after I-1 re-verifies stack-notes on the lab (Caddy 2.11 first); the adopt path keeps the production pins.
 
 ### 5.6 Upgrades of the pinned services
 - tagcess never upgrades a service by itself.
@@ -522,10 +499,10 @@ point them anywhere). This exception needs the developer's decision, together wi
   release from the UI would make the root helper download and run new code on the strength of a request, so it waits
   for signed releases (#18). The activation is a separate step from upgrading services.
 - After activation, Settings → Stack shows per service the running digest and the one in the active manifest; the user
-  upgrades one service at a time through `stack.upgrade`: backup (Caddy `/data`, Headscale database, a Postgres dump for
-  Zitadel) → pull → recreate → health → the step's proof again.
+  upgrades one service at a time through `stack.upgrade`: backup (Caddy `/data`, Headscale database) → pull → recreate →
+  health → the step's proof again.
 - On failure: a stateless service (Caddy, oauth2-proxy, Tailscale) is put back on the previous digest. A stateful
-  service (Zitadel, Postgres, Headscale) may have migrated its data, so the previous image is not started automatically;
+  service (Headscale, and tagcess itself) may have migrated its data, so the previous image is not started automatically;
   the service stays stopped or degraded, a critical alert is raised, and restoring the backup is an explicit action with
   confirmation.
 - tagcess upgrades itself through the same operation: release B's tagcess digest is in the manifest of helper B. While it
@@ -546,10 +523,10 @@ G-02, architecture.md §8; G-03 needs the policy writer, so database mode).
 
 | # | Item key | Finding | Action | Performed by | Prerequisites |
 |---|---|---|---|---|---|
-| M-1 | `idp.bootstrap` | Zitadel without the `vpn` project, apps or a complete service user | Bootstrap (step 2) | `internal/zitadeladopt` | step 2 *connect existing* verified |
+| M-1 | `idp.bootstrap` | Zitadel without the `vpn` project, apps or a complete service user | Bootstrap (step 2) | `internal/zitadeladopt` | step 2 connection precheck passed (not step 2 verification, which follows M-1) |
 | M-2 | `caddy.first_import` | Caddy with a hand-written Caddyfile | Import sites from a seed; apply only after the parity gate | G-01 (`internal/site/seed.go`, `render.SeedParity`, `/sites/first-import`) | M-1; step 1 *connect existing* verified |
-| M-3 | `headscale.server_tags` | The VPN host or k8s node without `tag:vpn-server` / `tag:k8s` | Add the node tags (today's `hs_tags`) | the `headscale_adopt` logic, ported in I-20 | step 3 *connect existing* verified |
-| M-4 | `headscale.hook_acl` | Policy without `tag:k8s → tag:vpn-server:<hook>` | Add the rule in file mode (today's `hs_hook_acl`) | the `headscale_adopt` logic, ported in I-20 | M-3 |
+| M-3 | `headscale.server_tags` | The VPN host or k8s node without `tag:vpn-server` / `tag:k8s` | Add the node tags (today's `hs_tags`) | the `headscale_adopt` logic, ported in I-19 | step 3 *connect existing* verified |
+| M-4 | `headscale.hook_acl` | Policy without `tag:k8s → tag:vpn-server:<hook>` | Add the rule in file mode (today's `hs_hook_acl`) | the `headscale_adopt` logic, ported in I-19 | M-3 |
 | M-5 | `headscale.dns_path` | `extra_records_path` outside tagcess's directory | Point it at tagcess's DNS directory | G-01.2 through the Headscale helper (ADR 0021) | step 3 *connect existing* verified |
 | M-6 | `headscale.policy_db` | Headscale `policy.mode: file` | Move the policy to database mode without an empty-policy moment | G-02 (today's `g02`) | M-3, M-4 |
 | M-7 | `identity.convert` | E-mail based policy groups | Convert to provider identifiers | G-03 (`internal/sync/migrate_identity.go`) | M-1, M-6 |
@@ -557,7 +534,9 @@ G-02, architecture.md §8; G-03 needs the policy writer, so database mode).
 | M-9 | `s06.close` | WireGuard / wireguard-ui present, S-06 open | Close S-06 when the transition is over | S-06 switch, `wireguard_ui` system site | M-2; never proposed as approved by default |
 
 **Plan rules [Proposed]:**
-- An item can be approved at any time, but it **runs** only when every prerequisite is `applied`. An approved item whose
+- An item can be approved at any time, but it **runs** only when every prerequisite is satisfied: the prerequisite item is
+  `applied`, or discovery shows its condition already holds (no item was created for it; see I-18 AC5 for how this is
+  recorded and re-checked). An approved item whose
   prerequisite is `proposed`, `approved`, `applying`, `failed`, `uncertain` or `declined` stays waiting, and the screen
   names the prerequisite. Declining an item therefore blocks the items that depend on it; the screen says so before the
   user declines.
@@ -575,9 +554,9 @@ G-02, architecture.md §8; G-03 needs the policy writer, so database mode).
   feature"; the wizard is only a new entry point that feeds them findings and records the decisions. The Ansible
   phases that run them today (`hs_tags`, `hs_hook_acl`, `hs_dns_path`, `g02`) become wizard items one by one (§9).
 - **Known gap:** G-03 has no way to drop an unmatched e-mail yet (`sync.Input.DroppedEmails` is never set by production
-  code); the migration item for G-03 needs it (§9 I-21).
+  code); the migration item for G-03 needs it (§9 I-20).
 
-## 7. `deploy/ansible`: removed or kept **[Proposed]**
+## 7. `deploy/ansible`: removed or kept **[Decided 2026-10-15]** (O5)
 Almost every Ansible role serves both modes: only `zitadel_install` is fresh-only (`deploy/ansible/group_vars/all/phases.yml`,
 docs/install.md §5). `certbot`, `headscale_install`, `caddy_install` and `tailscale_join` also run in adopt mode, where
 they install a missing component after confirmation and re-run on components the installer owns.
@@ -587,13 +566,13 @@ they install a missing component after confirmation and re-run on components the
   their tests. **Shared roles stay** with their adopt behaviour, including the missing-component install and installer-
   owned re-runs. Issues #20-#23 then apply to the wizard steps instead of Ansible (§9 notes).
 - **Adopt mode stays** as the supported path for existing installations (including the company installation) until the
-  wizard's *connect existing* and *migrate* paths are proven by the adopt end-to-end test (§9 I-22). Only then are
+  wizard's *connect existing* and *migrate* paths are proven by the adopt end-to-end test (§9 I-21). Only then are
   Ansible and `deploy/install.sh` removed, and `docs/install.md` becomes a short "adopt with the wizard" guide.
 - **Reused, not thrown away:** `probe.py` checks → `internal/discover`; `backup.py` → the helper's backup step;
   `roles/guide` texts → wizard step help; `internal/zitadeladopt` → the IdP bootstrap; the `verify` role's checks →
   step proofs and the seal check; `tagcess -bootstrap-caddyfile` → the bootstrap Caddyfile; the hshelper → the host
   helper with a stack channel.
-- The decision is asked in O5.
+- The developer accepted this plan on 2026-10-15 (O5).
 
 ## 8. What this design does not change
 - The sync, site, policy and Headscale admin writers, their locks and fail-closed rules (architecture.md §4-§7).
@@ -604,10 +583,10 @@ they install a missing component after confirmation and re-run on components the
 
 ## 9. Implementation split
 Proposed follow-up issues, one concern each, for the "Install wizard and packaging" milestone. Order: I-1 … I-15
-deliver a fresh install end to end on the decided test lab (lab VM + the existing Zitadel on k3s, so the IdP step is
-*connect existing* there); I-16 … I-26 follow. Acceptance criteria are EARS; each issue adds its tests.
+deliver a fresh install end to end on the decided test lab (lab VM + the existing Zitadel on k3s); I-16 … I-25
+follow. Acceptance criteria are EARS; each issue adds its tests.
 
-**I-1 Version manifest and stack renderer** (`internal/stack`) — risk: auth (generated config) — depends on: O6.
+**I-1 Version manifest and stack renderer** (`internal/stack`) — risk: auth (generated config) — depends on: none (O6 decided).
 - AC1: THE renderer SHALL produce the compose file and service configs from typed parameters and the manifest,
   byte-for-byte deterministic. Test: golden files per component set.
 - AC2: THE manifest SHALL reference every service image by tag and digest, including the release's tagcess image;
@@ -615,7 +594,7 @@ deliver a fresh install end to end on the decided test lab (lab VM + the existin
   has no manifest.
 - AC3: IF a parameter fails validation THEN THE renderer SHALL return an error and no output. Test: bad-input table.
 
-**I-2 Host helper stack channel** (`cmd/tagcess-hshelper`) — risk: auth — depends on: I-1, O1.
+**I-2 Host helper stack channel** (`cmd/tagcess-hshelper`) — risk: auth — depends on: I-1.
 - AC1: THE helper SHALL accept only the operations of §5.3 with the ADR 0021 b file rules on
   `/var/lib/tagcess-host`. Test: intake table tests (symlink, owner, size, unknown op, unknown field).
 - AC2: WHEN `stack.apply` runs THE helper SHALL validate with `docker compose config --quiet` before any change and
@@ -631,12 +610,8 @@ deliver a fresh install end to end on the decided test lab (lab VM + the existin
 - AC7: THE handoff SHALL install only listed kinds for the running request ID, SHALL delete the drop file, and SHALL
   delete unread a file for another or finished request (replay), a symlink, a wrong owner or an oversize file. Test:
   handoff table test.
-- AC8: WHEN a request ends, at boot and after the 15-minute timeout THE helper SHALL delete the request's `in/` files,
-  and WHEN a request fails or is interrupted it SHALL delete its `out/` files. Test: interruption test (kill between
-  drop and install).
-- AC10: WHEN a request succeeded THE helper SHALL keep its `out/` files until `handoff.ack` for that request ID and
-  kind, the seal or 12 hours, and SHALL ignore an ack for another request ID or kind. Test: handoff lifecycle test that
-  consumes after the request is terminal, plus a wrong-ID ack.
+- AC8: WHEN a request ends, at boot and after the 15-minute timeout THE helper SHALL delete the request's handoff
+  files. Test: interruption test (kill between drop and install).
 - AC9: Secret values SHALL NOT appear in results, journals, logs or the audit. Test: canary-secret test.
 
 **I-3 Host discovery** (`internal/discover`, helper `discover`) — risk: normal — depends on: I-2.
@@ -667,7 +642,7 @@ deliver a fresh install end to end on the decided test lab (lab VM + the existin
 - AC4: WHEN a new service's proof fails THE wizard SHALL request `stack.remove` for it, except the bootstrap Caddy.
   Test: pipeline test with a fake helper.
 
-**I-7 Install script `deploy/get.sh`** — risk: auth (prints the setup token) — depends on: I-2, I-3, I-5, I-8; O7.
+**I-7 Install script `deploy/get.sh`** — risk: auth (prints the setup token) — depends on: I-2, I-3, I-5, I-8; #18 for publishing.
 - AC1: THE script SHALL ask only domain, public IP and ACME e-mail, and SHALL accept them as flags. Test: shell test.
 - AC2: IF Docker is missing THEN THE script SHALL install it from Docker's apt repository only after the user types
   `yes`. Test: shell test with stubbed `apt-get`.
@@ -675,7 +650,7 @@ deliver a fresh install end to end on the decided test lab (lab VM + the existin
   print the token; WHEN sealed it SHALL change nothing. Test: shell test of re-runs.
 - AC4: THE script SHALL never stop or reconfigure an existing service. Test: static test of the command list.
 
-**I-8 Step 1: domain, DNS, TLS, bootstrap Caddy** — risk: auth (generated Caddy config) — depends on: I-1, I-6, O4.
+**I-8 Step 1: domain, DNS, TLS, bootstrap Caddy** — risk: auth (generated Caddy config) — depends on: I-1, I-6.
 - AC1: THE bootstrap Caddyfile SHALL have three golden states for the tagcess host: setup route + `503` (before step
   5), setup route + tailnet-only gate (after step 5), gate only (sealed). Test: golden files.
 - AC2: THE bootstrap Caddyfile SHALL overwrite `X-Tagcess-Client-IP` with the connection's address. Test: golden file
@@ -683,7 +658,7 @@ deliver a fresh install end to end on the decided test lab (lab VM + the existin
 - AC3: THE step SHALL be verified only when the presented certificate validates and the running config equals the
   generated one. Test: step test with fake probes.
 
-**I-9 Step 2a: connect an existing Zitadel** — risk: auth — depends on: I-6.
+**I-9 Step 2: connect the existing Zitadel** — risk: auth — depends on: I-6.
 - AC1: THE step SHALL find or create the `vpn` project, the chosen roles and both OIDC apps through
   `internal/zitadeladopt`, and SHALL NOT create users or grants. Test: seed test against the fake API (no user/grant
   call).
@@ -697,7 +672,7 @@ deliver a fresh install end to end on the decided test lab (lab VM + the existin
 - AC6: THE OIDC client secrets and Actions signing keys SHALL reach the helper only through the handoff of §5.4 and
   SHALL NOT appear in tagcess's database, logs or audit. Test: step test with a fake helper and canary values.
 
-**I-10 Step 3a: Headscale install new** — risk: auth — depends on: I-2, I-9.
+**I-10 Step 3: Headscale install new** — risk: auth — depends on: I-2, I-9.
 - AC1: THE rendered config SHALL use database policy mode, the tagcess DNS path and the chosen `allowed_groups`.
   Test: golden config.
 - AC2: THE initial policy SHALL contain the locked admin → `tag:vpn-server:443/80` test (#22). Test: policy golden.
@@ -737,32 +712,20 @@ deliver a fresh install end to end on the decided test lab (lab VM + the existin
   the tailnet with only the script and the wizard. Test: lab acceptance run (recorded, time measured against the
   10-minute goal).
 
-**I-16 Step 2b: Zitadel install new** — risk: auth — depends on: I-2, I-9; O3.
-- AC1: THE helper SHALL render `zitadel`, `zitadel-login` and `postgres` with the master key passed by
-  `--masterkeyFile`. Test: golden compose.
-- AC2: WHEN the bootstrap finishes THE step SHALL delete the bootstrap machine key on disk and in Zitadel. Test: fake API
-  + file test.
-- AC3: THE Caddy routing to Zitadel (h2c API, login UI path) SHALL work end to end. Test: lab run (see O7 for where).
-- AC4: THE bootstrap machine key and the initial admin password SHALL reach tagcess only as `out/` handoff files of the
-  request that produced them and SHALL be usable only by the owning setup session (or the session that replaced it
-  through a new token). Test: handoff test with a second session and a replayed request ID.
-- AC5: WHEN tagcess restarts between production and consumption THE wizard SHALL still deliver the password to the
-  owning session, and SHALL send `handoff.ack` only after the user confirmed it. Test: restart test with a fake helper.
-
-**I-17 Connect an existing Caddy** — risk: auth — depends on: I-6, I-3.
+**I-16 Connect an existing Caddy** — risk: auth — depends on: I-6, I-3.
 - AC1: THE step SHALL be verified only when the admin API answers, the version is supported, `caddy validate` passes
   and the running config equals the file on disk. Test: step test with fake probes, one failing check per row.
 - AC2: IF a check fails or the finding changed since the precheck THEN THE step SHALL stay unverified and SHALL write
   nothing. Test: same.
 - AC3: THE configured Caddyfile path SHALL pass the §5.3.1 path rules. Test: validation table.
 
-**I-18 Connect an existing Headscale (systemd backend)** — risk: auth — depends on: I-2, I-3, I-6.
+**I-17 Connect an existing Headscale (systemd backend)** — risk: auth — depends on: I-2, I-3, I-6.
 - AC1: THE step SHALL be verified only after the socket answers `ListUsers`, the version is supported, `configtest`
   and `policy check` pass. Test: step test with fakes.
 - AC2: WHEN Headscale runs under systemd THE helper SHALL select the systemd backend of ADR 0021, and the compose
   backend otherwise. Test: helper backend-selection test.
 
-**I-19 Migration plan framework** (`setup_migration_items`) — risk: auth — depends on: I-6.
+**I-18 Migration plan framework** (`setup_migration_items`) — risk: auth — depends on: I-6.
 - AC1: THE wizard SHALL build one item per §6 finding with the prerequisites of the §6 table. Test: plan table test per
   finding set.
 - AC2: WHILE any prerequisite of an approved item is not `applied` (including `declined`, `failed` and `uncertain`) THE
@@ -771,9 +734,18 @@ deliver a fresh install end to end on the decided test lab (lab VM + the existin
   the user resolves it. Test: plan test with a fake writer and a store reload.
 - AC4: WHEN a finding changes after approval THE item and its approved dependants SHALL go back to `proposed` with the
   reason recorded. Test: plan test.
+- AC5 (review M6, already-satisfied prerequisites): WHEN discovery shows that a prerequisite's condition already holds
+  (for example a complete IdP bootstrap, present server tags and hook ACL, database policy mode) THE plan SHALL record
+  it as satisfied with its evidence and without a write, SHALL re-check that evidence fresh before each dependant runs,
+  and IF the evidence is missing, stale or no longer holds THEN the dependant SHALL NOT run. Test: plan tests over
+  partially migrated finding sets (each prerequisite once present, once missing, once invalidated).
+- AC6 (review M6, M-1 is not circular): THE M-1 bootstrap item SHALL be runnable after the step 2 connection precheck
+  (issuer reachable, admin credential authenticated, complete read-only reads) without step 2 being verified; step 2
+  SHALL become verified only after M-1 is applied (or found satisfied) and the step 2 proof passes. Test: plan tests
+  with a missing project, missing apps and an incomplete service user.
 
-**I-20 Migration adapters** (G-01 seed and parity, G-01.2 DNS path, G-02, S-06, H-07 `allowed_groups`) — risk: auth —
-depends on: I-19, I-17, I-18; milestone "Import as an optional feature".
+**I-19 Migration adapters** (G-01 seed and parity, G-01.2 DNS path, G-02, S-06, H-07 `allowed_groups`) — risk: auth —
+depends on: I-18, I-16, I-17; milestone "Import as an optional feature".
 - AC1: THE G-01 item SHALL apply nothing until the parity gate passes, and SHALL keep the existing gate unchanged: only
   the named `s06_open_start` difference is accepted (with its warning), every other difference fails. Test: the
   existing `TestParity_S06OpenStart` cases run through the adapter.
@@ -781,11 +753,11 @@ depends on: I-19, I-17, I-18; milestone "Import as an optional feature".
 - AC3: EACH adapter SHALL use its existing pipeline (seed, policy writer, ADR 0021 patch) and SHALL add no second
   writer. Test: adapter tests with fakes.
 
-**I-21 G-03: drop an unmatched e-mail** — risk: auth — depends on: I-19.
+**I-20 G-03: drop an unmatched e-mail** — risk: auth — depends on: I-18.
 - AC1: WHEN the devops marks an unmatched e-mail "drop" THE system SHALL set `DroppedEmails`, allow approval and audit
   it. Test: sync test.
 
-**I-22 Adopt end to end through the wizard** — risk: auth — depends on: I-17 … I-21.
+**I-21 Adopt end to end through the wizard** — risk: auth — depends on: I-16 … I-20.
 - AC1: WHEN the script runs on a lab host with an existing systemd Headscale, Caddy and WireGuard THE wizard SHALL
   connect and migrate them (M-1 … M-8) without Ansible. Test: lab acceptance run on the adopt target
   (`test/adopttarget` harness).
@@ -795,7 +767,7 @@ depends on: I-19, I-17, I-18; milestone "Import as an optional feature".
 - AC3: THE G-02 item SHALL leave no moment with an empty policy, and the live policy after G-02 SHALL equal the file
   policy before it plus M-3/M-4. Test: same run, policy read before and after.
 
-**I-23 Stack upgrades, release A → B** — risk: auth — depends on: I-2, I-7, I-15.
+**I-22 Stack upgrades, release A → B** — risk: auth — depends on: I-2, I-7, I-15.
 - AC1: WHEN `install.sh --upgrade` runs THE script SHALL replace only the helper (checksum-verified) and keep the
   previous binary; the running services SHALL not change. Test: shell test.
 - AC2: THE Settings → Stack page SHALL show per service the running digest and the active manifest digest. Test:
@@ -807,56 +779,46 @@ depends on: I-19, I-17, I-18; milestone "Import as an optional feature".
 - AC5: WHEN release A is upgraded to release B on the lab (helper, then every service, then tagcess itself) THE sealed
   installation SHALL keep working and pass every step proof. Test: lab acceptance run.
 
-**I-24 Retire Ansible fresh mode** — risk: normal — depends on: I-15, O5.
+**I-23 Retire Ansible fresh mode** — risk: normal — depends on: I-15.
 - AC1: THE `fresh` mode, `zitadel_install` and the fresh-only branches inside shared roles SHALL be removed with their
   tests. Test: `make check`.
 - AC2: THE adopt re-run and missing-component install tests of `certbot`, `headscale_install`, `caddy_install` and
   `tailscale_join` SHALL stay and pass. Test: existing adopt tests in `deploy/ansible` (named in the PR).
 
-**I-25 Retire Ansible adopt mode and `deploy/install.sh`** — risk: normal — depends on: I-22, O5.
+**I-24 Retire Ansible adopt mode and `deploy/install.sh`** — risk: normal — depends on: I-21.
 - AC1: THE Ansible tree and `deploy/install.sh` SHALL be removed and `docs/install.md` SHALL describe adopting with the
   wizard. Test: `make check` and the runbook test.
 
-**I-26 Docs** — risk: normal — depends on: I-15.
+**I-25 Docs** — risk: normal — depends on: I-15.
 - AC1: THE README quickstart and `docs/install.md` SHALL describe the script and the wizard. Test: a doc check in
   `deploy/runbook_test.go` for the quickstart commands.
 
 Notes for the coordinator: #20, #22, #23 and #24 describe real needs; with this design they land in I-9 (#20, #24),
-I-10 (#22) and I-8/the k8s flow (#23) instead of the Ansible roles, if O5 is accepted. #21 items 1-2 disappear with
+I-10 (#22) and I-8/the k8s flow (#23) instead of the Ansible roles (O5 accepted 2026-10-15). #21 items 1-2 disappear with
 fresh mode; items 3-4 apply to the script.
 
-## 10. Open questions for the developer
-- **O1 [Open] How tagcess manages the Compose stack.** Recommendation: the host helper with a typed stack channel
-  (§5.3); tagcess never gets the Docker socket. Alternatives: mount the Docker socket into tagcess (simplest; a tagcess
-  compromise becomes host root); a socket proxy (still root-equivalent for container creation).
-- **O2 [Open] How the first admin reaches the setup page.** Recommendation: `https://tagcess.<domain>/setup` behind the
-  one-time token, with the SSH tunnel as the fallback (§2.3). Alternative: SSH tunnel only (no public exposure, but
-  harder for the "10 minutes" goal).
-- **O3 [Open] Users and grants in a Zitadel that tagcess installs.** Hard rule 3 says tagcess never creates users or
-  grants roles; today the `tagcess` service user and the first admin's role are created by hand in the console.
-  Recommendation: one bounded exception, only for a Zitadel installed by this setup: the helper renders Zitadel's
-  first-instance settings (one human admin, one bootstrap machine user), and the bootstrap creates the `tagcess` service
-  user (ADR 0009 roles and key) and grants the admin role once to the first-instance human admin. For a connected IdP
-  never (the console steps stay, I-9). Alternative: also for a new Zitadel the wizard shows console steps and waits
-  (rule kept literally; several manual steps against the 10-minute goal).
-- **O4 [Open] Certificates.** Recommendation: Caddy's own ACME with HTTP-01/TLS-ALPN and the stock Caddy image; every
-  public name, and every site name, needs a public DNS record to the server (a wildcard `*.<domain>` record is enough).
-  Internal sites still answer only to the tailnet (S-06 closed). Alternative: wildcard certificates with DNS-01, which
-  needs a Caddy build with a DNS-provider module, so tagcess would publish and maintain its own Caddy image.
-- **O5 [Open] `deploy/ansible`.** Recommendation: §7 — retire fresh mode after I-15, keep adopt mode until I-22 proves
-  it, then remove Ansible; re-scope #20-#24 to the wizard steps. Alternative: keep Ansible fresh mode as a second
-  install path (two paths to test and document).
-- **O6 [Open] Versions of the first manifest.** The production pins (Headscale v0.29.4, Caddy v2.8.4, Zitadel v4.16.0,
-  oauth2-proxy v7.15.4) are behind the current releases (v0.29.5, v2.11.7, v4.19.4, v7.15.5; §11 F0), and every Caddy
-  fact in stack-notes was checked on 2.8.4. Recommendation: the fresh stack starts on the current releases after I-1
-  re-verifies stack-notes on the lab (Caddy 2.11 first); the adopt path keeps the production pins. Alternative: one
-  pin set for both, at the production versions.
-- **O7 [Open] Where "install new Zitadel" is proven.** The decided test lab keeps Zitadel on k3s (product-decisions
-  §12), so I-15 uses *connect existing*. Recommendation: for I-16's acceptance run only, start the Compose Zitadel and
-  Postgres on the lab VM (a bigger VM type for that run, deleted afterwards like every lab VM). Alternative: prove I-16
-  only on the developer's machine and leave "install new Zitadel" untested on the lab.
+## 10. Developer decisions on the questions of this design (2026-10-15)
+The developer answered on PR #27 (2026-10-15). The text above applies these answers where it says **[Decided 2026-10-15]**.
+- **O1** **[Decided 2026-10-15]** How tagcess manages the Compose stack: the host helper with a typed stack channel (§5.3); tagcess
+  never gets the Docker socket.
+- **O2** **[Decided 2026-10-15]** How the first admin reaches the setup page: `https://tagcess.<domain>/setup` behind the one-time
+  token, with the SSH tunnel as the fallback (§2.3).
+- **O3** Dropped. It asked for an exception to hard rule 3 for a Zitadel that tagcess installs. tagcess installs no
+  IdP (**[Decided 2026-10-15]**, product-decisions §11), so there is no exception: hard rule 3 stays as written, and the connected IdP's
+  console steps for the `tagcess` service user and the first admin's role stay (step 2, step 6).
+- **O4** **[Decided 2026-10-15]** Certificates: Caddy's own ACME with HTTP-01/TLS-ALPN and the stock Caddy image; public DNS records
+  (a wildcard is enough) for every public and site name (§4.3 step 1).
+- **O5** **[Decided 2026-10-15]** `deploy/ansible`: retire fresh mode after I-15, keep adopt mode until I-21 proves the wizard's adopt
+  path, then remove Ansible; #20-#24 move to the wizard steps (§7).
+- **O6** **[Decided 2026-10-15]** Versions of the first manifest: the fresh stack starts on the current releases after I-1 re-verifies
+  stack-notes on the lab (Caddy 2.11 first); the adopt path keeps the production pins (§5.5).
+- **O7** Rejected. It asked where "install new Zitadel" is proven; that path is removed with the rest of the IdP
+  installation (step 2 offers only *connect existing*; no Zitadel, login UI or Postgres in the stack).
 
-Script distribution before the release flow is not a separate question here: §1.6 is **[Proposed]** and follows #18.
+Still **[Open]**: the host paths of the managed stack as an exception to "paths are chosen in the UI" (§5.3.1).
+Recommendation: accept the exception (a path in a root helper request is a host-write primitive; these paths are
+internal to the stack and shown read-only). Script distribution before the release flow is not a separate question:
+§1.6 is **[Proposed]** and follows #18.
 
 ## 11. Verified facts and sources
 Checked on 2026-10-14 with the researcher agent; "UNVERIFIED" items are checked in the named issue before code depends
@@ -892,17 +854,9 @@ on them.
   `POST /load` rolls back on failure (https://caddyserver.com/docs/api). `reverse_proxy h2c://host:port` is a supported
   upstream scheme (https://caddyserver.com/docs/caddyfile/directives/reverse_proxy; v2.8.4
   `modules/caddyhttp/reverseproxy/caddyfile.go`).
-- **F5 Zitadel compose (v4.19.4).** Images `ghcr.io/zitadel/zitadel` and a separate `ghcr.io/zitadel/zitadel-login`;
-  `postgres:17.10-alpine`; `start-from-init --masterkey`; h2c from the proxy to the API, `/ui/v2/login` routed to the
-  login container; `ZITADEL_TLS_ENABLED=false` behind the proxy; healthcheck and `service_healthy`
-  (https://github.com/zitadel/zitadel/tree/v4.19.4/deploy/compose, https://zitadel.com/docs/self-hosting/deploy/compose).
-  Master key exactly 32 characters, cannot be changed after init (same docs page). First-instance machine user with
-  IAM_OWNER, PAT or key file: `ZITADEL_FIRSTINSTANCE_ORG_MACHINE_*`, `…_PATPATH`, `…_MACHINEKEYPATH`; human admin
-  `…_ORG_HUMAN_*`; all apply only at first init (https://github.com/zitadel/zitadel/blob/v4.19.4/cmd/setup/steps.yaml).
-  The master key can be given as `--masterkeyFile`, `--masterkey` or `--masterkeyFromEnv`, exactly one (v4.19.4
-  `cmd/key/masterkey.go`). Zitadel's Caddy guide: `reverse_proxy /ui/v2/login/* http://<login>:3000` and
-  `reverse_proxy h2c://<zitadel>:8080`; a `TE: trailers` header can hang error responses, workaround `header_up -TE`
-  (https://zitadel.com/docs/self-hosting/manage/reverseproxy/caddy). Not yet run on our stack (I-16).
+- **F5 Zitadel.** Latest release v4.19.4 (F0). tagcess only connects to an existing Zitadel (product-decisions §11,
+  2026-10-15), so the Zitadel container setup is not part of this design; the connection uses the APIs already in
+  stack-notes and ADR 0009.
 - **F6 oauth2-proxy.** Image `quay.io/oauth2-proxy/oauth2-proxy`, latest v7.15.5
   (https://oauth2-proxy.github.io/oauth2-proxy/installation); distroless and alpine flavours
   (https://github.com/oauth2-proxy/oauth2-proxy/blob/v7.15.5/Makefile).
