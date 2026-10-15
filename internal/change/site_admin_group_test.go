@@ -3,59 +3,86 @@ package change
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
 
-// Issue #3 (review round 1): the admin group is a Caddy render input. A change applies the system
-// site with the new group under the writer lock; later ordinary applies must not see drift.
+// Issue #3: the admin group is a Caddy render input. A change applies only the Caddyfile, from the
+// group in force to the new one, and refuses any other drift.
 
-func resyncLocked(t *testing.T, h *siteHarness) (SiteResult, error) {
+func applyGroup(t *testing.T, h *siteHarness, from, to string) error {
 	t.Helper()
-	var res SiteResult
 	var err error
 	_ = WithWriterLock(func() error {
-		res, err = h.sp.ResyncLocked(context.Background(), siteActor)
+		err = h.sp.ApplyAdminGroup(context.Background(), siteActor, from, to)
 		return nil
 	})
-	return res, err
+	return err
 }
 
-// After a successful group change, an ordinary site apply passes the drift gate.
-func TestSiteAdminGroup_SiteApplyAfterChange(t *testing.T) {
+func onlyCaddyCalls(calls []string) bool {
+	return !slices.ContainsFunc(calls, func(c string) bool {
+		return strings.HasPrefix(c, "dns") || strings.HasPrefix(c, "uri") || strings.HasPrefix(c, "zitadel")
+	})
+}
+
+// After a successful group change, an ordinary site apply passes the drift gate, and DNS and
+// Zitadel were not touched by the change.
+func TestSiteAdminGroup_AppliesOnlyCaddy(t *testing.T) {
 	h := newSiteHarness(t)
-	h.settings.Caddy.AdminGroup = "ops"
-	res, err := resyncLocked(t, h)
-	if err != nil || res.Status != StatusApplied {
-		t.Fatalf("group resync: %v (%s)", err, res.Status)
+	h.calls.reset()
+	if err := applyGroup(t, h, "", "ops"); err != nil {
+		t.Fatalf("group apply: %v", err)
+	}
+	if !onlyCaddyCalls(h.calls.get()) {
+		t.Fatalf("the change touched more than Caddy: %v", h.calls.get())
 	}
 	if disk, _ := h.caddy.state(); !strings.Contains(disk, "allowed_groups=ops") {
 		t.Fatalf("disk Caddyfile lacks the new group:\n%s", disk)
 	}
-	res, err = h.sp.Submit(context.Background(), addReq(roleSiteRecord("wiki")))
+	h.settings.Caddy.AdminGroup = "ops" // the handler stores the setting after the apply
+	res, err := h.sp.Submit(context.Background(), addReq(roleSiteRecord("wiki")))
 	if err != nil || res.Status != StatusApplied {
 		t.Fatalf("ordinary apply after the change: %v (%s)", err, res.Status)
 	}
 }
 
-// A failed Caddy apply leaves the old group on disk; with the setting restored, ordinary applies
-// still pass (no drift) and the new group never reached the disk.
+// A failing Caddy apply leaves the old group on disk and reports the error.
 func TestSiteAdminGroup_ApplyFailureKeepsOldGroup(t *testing.T) {
 	h := newSiteHarness(t)
 	h.caddy.applyErr = errors.New("caddy rejected the config")
-	h.settings.Caddy.AdminGroup = "ops"
-	res, err := resyncLocked(t, h)
-	if err == nil && res.Status == StatusApplied {
-		t.Fatal("a failing Caddy apply reported applied")
+	if err := applyGroup(t, h, "", "ops"); err == nil {
+		t.Fatal("a failing Caddy apply reported success")
 	}
 	if disk, _ := h.caddy.state(); strings.Contains(disk, "allowed_groups=ops") {
 		t.Fatalf("the new group reached the disk despite the failure:\n%s", disk)
 	}
-	// The handler restores the stored setting; the old group renders the baseline again.
 	h.caddy.applyErr = nil
-	h.settings.Caddy.AdminGroup = ""
-	res, err = h.sp.Submit(context.Background(), addReq(roleSiteRecord("wiki")))
+	res, err := h.sp.Submit(context.Background(), addReq(roleSiteRecord("wiki")))
 	if err != nil || res.Status != StatusApplied {
 		t.Fatalf("ordinary apply after the failed change: %v (%s)", err, res.Status)
+	}
+}
+
+// An emergency edit of the Caddyfile (a tightened role on an unrelated site) is never overwritten:
+// the change is refused, the file keeps the edit and nothing else is applied.
+func TestSiteAdminGroup_UnrelatedDriftRefused(t *testing.T) {
+	h := newSiteHarness(t)
+	disk, _ := h.caddy.state()
+	edited := disk + "\n# emergency: wiki closed\n"
+	h.caddy.mu.Lock()
+	h.caddy.disk = edited
+	h.caddy.mu.Unlock()
+	h.calls.reset()
+	err := applyGroup(t, h, "", "ops")
+	if err == nil || !strings.Contains(err.Error(), "farklı") {
+		t.Fatalf("drifted Caddyfile accepted: %v", err)
+	}
+	if now, _ := h.caddy.state(); now != edited {
+		t.Fatalf("the emergency edit was overwritten:\n%s", now)
+	}
+	if got := h.calls.get(); slices.ContainsFunc(got, func(c string) bool { return strings.HasPrefix(c, "caddy") }) || !onlyCaddyCalls(got) {
+		t.Fatalf("a refused change wrote something: %v", got)
 	}
 }

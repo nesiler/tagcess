@@ -41,9 +41,12 @@ Labels: decisions are in the ADRs; the details of the controls here are **[Propo
    The admitted group is the admin group, `devops` by default **[Proposed]**: the Headscale settings screen's `DevopsGroup`
    (minus `group:`) is its single source. The same value is `allowed_groups` in the generated UI Caddy block; both are
    enforced together, and the name must match `[A-Za-z0-9._-]+` (settings validation is stricter:
-   `group:[a-z0-9_-]{1,32}`). A change is one operation under the writer lock: the saving admin must be in the new
-   group, the Caddy system site is applied with it and validated, and only then does the middleware switch. If the
-   apply fails, the stored value goes back and both gates keep the old group (hard rule 7). The middleware keeps the
+   `group:[a-z0-9_-]{1,32}`). A change is one operation under the writer lock, on its
+   own bounded context (independent of the HTTP request): the saving admin must be in the new group; only the Caddyfile
+   is applied with it (no full resync, no DNS or Zitadel step), and only if the file on disk equals the render with the
+   old group, so unrelated drift refuses the change instead of being overwritten; then the setting is stored; only then
+   does the middleware switch. On any failure the setting, Caddy and the middleware keep the old group (hard rule 7).
+   The middleware keeps the
    last good group if the setting cannot be read, and refuses when it never had one.
    The Caddy snippet **removes** client-supplied `X-Auth-Request-*` headers **before** forward_auth. So the
    headers come only from the oauth2-proxy response. An e2e test checks this: a fake header is sent and

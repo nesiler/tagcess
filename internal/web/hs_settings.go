@@ -72,11 +72,15 @@ type HSSettingsConfig struct {
 	Now func() time.Time
 }
 
-// AdminGroupApplier applies the Caddy system site with the stored admin group. The caller holds the
-// writer lock. *change.SitePipeline satisfies it.
+// AdminGroupApplier applies only the Caddy system site with admin group `to`, refusing any drift
+// from the render with `from`. The caller holds the writer lock. *change.SitePipeline satisfies it.
 type AdminGroupApplier interface {
-	ResyncLocked(ctx context.Context, actor string) (change.SiteResult, error)
+	ApplyAdminGroup(ctx context.Context, actor, from, to string) error
 }
+
+// adminChangeTimeout bounds a whole admin-group change; it runs on its own context so a closed
+// browser tab or the request deadline cannot stop it halfway.
+const adminChangeTimeout = 60 * time.Second
 
 // HSSettingsHandler serves the settings screen.
 type HSSettingsHandler struct {
@@ -488,29 +492,49 @@ func (h *HSSettingsHandler) applyLocked(ctx context.Context, actor string, field
 		h.cfg.AdminState.Pin(cur.AdminGroup()) // the middleware keeps the old group until the apply succeeds
 	}
 
+	if adminChanged {
+		return h.changeAdminGroup(ctx, actor, cur.AdminGroup(), next.AdminGroup(), curRaw, nextRaw, &fields)
+	}
 	if status, msg := h.store(ctx, actor, hsLockedEvent, policydoc.LockedTestsKey, curRaw, nextRaw); msg != "" {
 		o := refuse(status, "%s", msg)
 		o.form = &fields
 		return o
 	}
-	if adminChanged {
-		res, err := h.cfg.AdminApply.ResyncLocked(ctx, actor)
-		if err != nil || (res.Status != change.StatusApplied && res.Status != change.StatusNoChange) {
-			why := res.Status
-			if err != nil {
-				why = err.Error()
-			}
-			// Keep the last good group everywhere: the stored value goes back, the middleware never moved.
-			note := "eski yönetici grubu korundu"
-			if status, msg := h.store(ctx, actor, hsLockedEvent, policydoc.LockedTestsKey, nextRaw, curRaw); msg != "" {
-				note = fmt.Sprintf("kayıtlı ayar eski değerine döndürülemedi (%d: %s); kontrol edin", status, msg)
-			}
-			return fail(http.StatusBadGateway, "yeni yönetici grubu Caddy'ye apply edilemedi ("+why+"); "+note)
-		}
-		h.cfg.AdminState.Set(next.AdminGroup())
-		return outcome{status: http.StatusOK, notice: "kilitli test parametreleri kaydedildi; yönetici grubu Caddy'de ve arayüzde etkin; yeni testler bir sonraki policy kaydında enjekte edilir"}
-	}
 	return outcome{status: http.StatusOK, notice: "kilitli test parametreleri kaydedildi; yeni testler bir sonraki policy kaydında enjekte edilir"}
+}
+
+// changeAdminGroup applies the group to Caddy first (targeted, drift-checked), stores the setting
+// second and switches the middleware last, all on a context detached from the request. Any failure
+// leaves the old group in Caddy, in the setting and in the middleware.
+func (h *HSSettingsHandler) changeAdminGroup(reqCtx context.Context, actor, from, to, curRaw, nextRaw string, fields *hsLockedFields) outcome {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(reqCtx), adminChangeTimeout)
+	defer cancel()
+	fail := func(status int, reason string) outcome {
+		h.auditOutcome(ctx, actor, hsLockedEvent, "failed", audit.Diff{
+			{Field: policydoc.LockedTestsKey, Before: curRaw},
+			{Field: "error", After: reason},
+		})
+		o := refuse(status, "%s", reason)
+		o.form = fields
+		return o
+	}
+	h.auditOutcome(ctx, actor, hsLockedEvent, "started", audit.Diff{
+		{Field: policydoc.LockedTestsKey, Before: curRaw, After: nextRaw},
+	})
+	if err := h.cfg.AdminApply.ApplyAdminGroup(ctx, actor, from, to); err != nil {
+		return fail(http.StatusBadGateway, "yeni yönetici grubu Caddy'ye apply edilemedi; eski grup korundu: "+err.Error())
+	}
+	if status, msg := h.store(ctx, actor, hsLockedEvent, policydoc.LockedTestsKey, curRaw, nextRaw); msg != "" {
+		rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer rcancel()
+		note := "Caddy eski gruba döndürüldü"
+		if err := h.cfg.AdminApply.ApplyAdminGroup(rctx, actor, to, from); err != nil {
+			note = "Caddy eski gruba döndürülemedi (" + err.Error() + "); Caddy ile ayar uyumsuz, kontrol edin"
+		}
+		return fail(status, msg+"; "+note)
+	}
+	h.cfg.AdminState.Set(to)
+	return outcome{status: http.StatusOK, notice: "kilitli test parametreleri kaydedildi; yönetici grubu Caddy'de ve arayüzde etkin; yeni testler bir sonraki policy kaydında enjekte edilir"}
 }
 
 // configWrite handles the H-07 write switch (F3b-021, R2:29 c): the service reads

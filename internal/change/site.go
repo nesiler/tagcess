@@ -405,21 +405,66 @@ func (s *SitePipeline) Submit(ctx context.Context, req SiteRequest) (SiteResult,
 	return s.submitLocked(ctx, req)
 }
 
-// ResyncLocked applies a resync for a caller that already holds the writer lock (WithWriterLock):
-// the admin-group change stores its setting under that lock and must apply before releasing it. A
-// pending first import is refused, so a settings save never becomes the first import.
-func (s *SitePipeline) ResyncLocked(ctx context.Context, actor string) (SiteResult, error) {
+// ApplyAdminGroup is the targeted apply of an admin-group change (issue #3): it renders the stored
+// sites with the admin group `to` and applies only the Caddyfile. The file on disk must equal the
+// render with group `from` (the group in force); any other difference is drift and refuses the
+// change, so an emergency edit is never overwritten. DNS and Zitadel are not touched. The caller
+// holds the writer lock (WithWriterLock) and passes its own bounded context. On an apply error the
+// group `from` is applied again on a recovery context, so the Caddy side keeps the last good group.
+func (s *SitePipeline) ApplyAdminGroup(ctx context.Context, actor, from, to string) error {
 	if err := validateActor(actor); err != nil {
-		return SiteResult{}, err
+		return err
 	}
 	pending, err := s.sites.FirstImportPending(ctx)
 	if err != nil {
-		return SiteResult{}, fmt.Errorf("change: read first-import state: %w", err)
+		return fmt.Errorf("change: read first-import state: %w", err)
 	}
 	if pending {
-		return SiteResult{}, errors.New("ilk site import tamamlanmadı; önce seed apply edilmeli")
+		return errors.New("ilk site import tamamlanmadı; önce seed apply edilmeli")
 	}
-	return s.submitLocked(ctx, SiteRequest{Actor: actor, Op: SiteResync})
+	st, err := s.settings(ctx)
+	if err != nil {
+		return fmt.Errorf("change: read settings: %w", err)
+	}
+	current, err := s.sites.ListSites(ctx)
+	if err != nil {
+		return fmt.Errorf("change: list sites: %w", err)
+	}
+	renderFor := func(group string) (string, error) {
+		cfg := st.Caddy
+		cfg.AdminGroup = group
+		return render.RenderCaddyfile(current, cfg)
+	}
+	base, err := renderFor(from)
+	if err != nil {
+		return fmt.Errorf("change: render the current Caddyfile: %w", err)
+	}
+	target, err := renderFor(to)
+	if err != nil {
+		return fmt.Errorf("change: render the new Caddyfile: %w", err)
+	}
+	disk, err := s.caddy.Current(ctx)
+	if err != nil {
+		return fmt.Errorf("change: read the Caddyfile: %w", err)
+	}
+	if disk != base {
+		return errors.New("Caddyfile kayıtlardan farklı (elle değiştirilmiş olabilir); önce site resync ile uzlaştırın:\n" + lineDiff(base, disk))
+	}
+	if _, err := s.caddy.Live(ctx); err != nil {
+		return fmt.Errorf("change: Caddy admin API unreadable: %w", err)
+	}
+	if err := s.caddy.Apply(ctx, current, target); err != nil {
+		rctx, cancel := recovery(ctx)
+		defer cancel()
+		if rerr := s.caddy.Apply(rctx, current, base); rerr != nil {
+			return fmt.Errorf("change: caddy apply failed (%w) and the previous group could not be restored: %w", err, rerr)
+		}
+		return fmt.Errorf("change: caddy apply failed, previous group restored: %w", err)
+	}
+	if s.applied != nil {
+		s.applied()
+	}
+	return nil
 }
 
 // FirstImport is the G-01 first import: it loads the seed (adds only, idempotent), then re-applies
