@@ -98,11 +98,11 @@ func TestMigrate_FreshDB(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Migrate: %v", err)
 		}
-		if n != 7 {
-			t.Fatalf("applied = %d, want 7", n)
+		if n != 8 {
+			t.Fatalf("applied = %d, want 8", n)
 		}
-		if v, err := userVersion(ctx, d); err != nil || v != 7 {
-			t.Fatalf("user_version = %d (err %v), want 7", v, err)
+		if v, err := userVersion(ctx, d); err != nil || v != 8 {
+			t.Fatalf("user_version = %d (err %v), want 8", v, err)
 		}
 		for _, tbl := range []string{
 			"settings", "changes", "audit_events", "applied_artifacts", "sync_runs", "webhook_events", "alerts",
@@ -123,7 +123,7 @@ func TestMigrate_Idempotent(t *testing.T) {
 	d := openTestDB(t, path)
 	f := realMigrations(t)
 
-	if n, err := Migrate(ctx, d, path, f); err != nil || n != 7 {
+	if n, err := Migrate(ctx, d, path, f); err != nil || n != 8 {
 		t.Fatalf("first Migrate: n=%d err=%v", n, err)
 	}
 	// A no-op run must not touch the existing backup (no new migrations means no new backup).
@@ -155,8 +155,8 @@ func TestMigrate_Idempotent(t *testing.T) {
 	if !bytes.Equal(beforeContent, afterContent) {
 		t.Error("second Migrate changed the backup content")
 	}
-	if v, err := userVersion(ctx, d); err != nil || v != 7 {
-		t.Fatalf("user_version = %d (err %v), want 7", v, err)
+	if v, err := userVersion(ctx, d); err != nil || v != 8 {
+		t.Fatalf("user_version = %d (err %v), want 8", v, err)
 	}
 	// The seeded row must not be inserted twice.
 	var count int

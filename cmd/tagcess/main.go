@@ -40,6 +40,7 @@ import (
 	"github.com/nesiler/tagcess/internal/policyrev"
 	"github.com/nesiler/tagcess/internal/policywriter"
 	"github.com/nesiler/tagcess/internal/render"
+	"github.com/nesiler/tagcess/internal/setup"
 	"github.com/nesiler/tagcess/internal/site"
 	"github.com/nesiler/tagcess/internal/store"
 	"github.com/nesiler/tagcess/internal/store/db"
@@ -82,6 +83,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	saNamespace := fs.String("sa-namespace", "tagcess", "-k8s-manifest: namespace of the reader ServiceAccount")
 	saName := fs.String("sa-name", k8s.DefaultServiceAccountName, "-k8s-manifest: name of the reader ServiceAccount")
 	k8sNamespaces := fs.String("k8s-namespaces", "", "-k8s-manifest: comma-separated namespaces (default: the saved connection profile)")
+	setupToken := fs.Bool("setup-token", false, "replace the setup token, end every setup session and print the new token (needs -config)")
+	setupTokenFile := fs.String("setup-token-file", setup.DefaultTokenFile, "-setup-token: file the plain token is also written to")
 	var boot bootstrapOptions
 	bootstrap := fs.Bool("bootstrap-caddyfile", false, "print the installer's fresh-mode bootstrap Caddyfile for -seed (no -config; read-only)")
 	fs.StringVar(&boot.seedPath, "seed", "", "-bootstrap-caddyfile: site seed JSON")
@@ -120,6 +123,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if *preview {
 		return runImportPreview(cfg, stdout, stderr)
+	}
+	if *setupToken {
+		return runSetupToken(cfg, *setupTokenFile, stdout, stderr)
 	}
 	if *manifest {
 		return runK8sManifest(cfg, *saNamespace, *saName, *k8sNamespaces, stdout, stderr)

@@ -114,11 +114,11 @@ func TestF4Schema_FreshAndExistingDatabaseUpgrade(t *testing.T) {
 	t.Run("fresh database", func(t *testing.T) {
 		path := testDBPath(t)
 		d := openTestDB(t, path)
-		if n, err := Migrate(ctx, d, path, realMigrations(t)); err != nil || n != 7 {
-			t.Fatalf("Migrate: n=%d err=%v, want 7", n, err)
+		if n, err := Migrate(ctx, d, path, realMigrations(t)); err != nil || n != 8 {
+			t.Fatalf("Migrate: n=%d err=%v, want 8", n, err)
 		}
-		if v, err := userVersion(ctx, d); err != nil || v != 7 {
-			t.Fatalf("user_version = %d (err %v), want 7", v, err)
+		if v, err := userVersion(ctx, d); err != nil || v != 8 {
+			t.Fatalf("user_version = %d (err %v), want 8", v, err)
 		}
 		for _, tbl := range f4Tables {
 			if !tableExists(t, d, tbl) {
@@ -136,8 +136,8 @@ func TestF4Schema_FreshAndExistingDatabaseUpgrade(t *testing.T) {
 		}
 		// Reopening the same path keeps the same schema version and the tables.
 		d2 := openTestDB(t, path)
-		if v, err := userVersion(ctx, d2); err != nil || v != 7 {
-			t.Fatalf("reopen user_version = %d (err %v), want 7", v, err)
+		if v, err := userVersion(ctx, d2); err != nil || v != 8 {
+			t.Fatalf("reopen user_version = %d (err %v), want 8", v, err)
 		}
 		if !tableExists(t, d2, "observations") {
 			t.Error("observations missing after reopen")
@@ -160,8 +160,8 @@ func TestF4Schema_FreshAndExistingDatabaseUpgrade(t *testing.T) {
 		if _, err := Migrate(ctx, d, path, realMigrations(t)); err != nil {
 			t.Fatalf("Migrate(all): %v", err)
 		}
-		if v, err := userVersion(ctx, d); err != nil || v != 7 {
-			t.Fatalf("user_version = %d (err %v), want 7", v, err)
+		if v, err := userVersion(ctx, d); err != nil || v != 8 {
+			t.Fatalf("user_version = %d (err %v), want 8", v, err)
 		}
 		for _, tbl := range f4Tables {
 			if !tableExists(t, d, tbl) {
