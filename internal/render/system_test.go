@@ -488,3 +488,27 @@ func TestSystemSite_RenderRefusals(t *testing.T) {
 		})
 	}
 }
+
+// Issue #3 AC4: a changed admin group is carried in allowed_groups; the default stays the F1 text.
+func TestSystemSite_AdminGroup(t *testing.T) {
+	cfg := systemCfg(true)
+	cfg.AdminGroup = "ops.team"
+	out, err := RenderCaddyfile(systemSites(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := siteBlock(t, out, "tagcess.example.test")
+	if !strings.Contains(got, "uri /oauth2/auth?allowed_groups=ops.team\n") || strings.Contains(got, "allowed_groups=devops") {
+		t.Errorf("block does not carry the admin group:\n%s", got)
+	}
+	want := strings.Replace(f1TagcessSnippet(t), "allowed_groups=devops", "allowed_groups=ops.team", 1)
+	if got != want {
+		t.Errorf("only allowed_groups may differ from the F1 snippet\n%s", got)
+	}
+	for _, bad := range []string{"a b", "a&x=1", "a,b", "a\nb", "a}"} {
+		cfg.AdminGroup = bad
+		if _, err := RenderCaddyfile(systemSites(), cfg); err == nil {
+			t.Errorf("admin group %q rendered", bad)
+		}
+	}
+}

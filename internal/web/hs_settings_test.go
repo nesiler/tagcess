@@ -76,6 +76,35 @@ type hsSettingsHarness struct {
 	exec  *hsadmin.Executor
 	csrf  *CSRF
 	chain http.Handler
+	// apply and state are the admin-group coordination (issue #3).
+	apply *fakeAdminApply
+	state *AdminGroupState
+	// cancelRequest cancels the context of the request being served.
+	cancelRequest context.CancelFunc
+}
+
+// fakeAdminApply stands in for the site pipeline's targeted admin-group apply. It records the
+// group the middleware enforced and the stored setting while the apply runs, and the context it ran on.
+type fakeAdminApply struct {
+	err         error
+	calls       []string // "from>to"
+	stateDuring string
+	storedAt    string
+	ctxErrAtEnd error
+	onApply     func() // runs inside the first apply (e.g. cancels the request)
+	state       *AdminGroupState
+	store       HSSettingsStore
+}
+
+func (f *fakeAdminApply) ApplyAdminGroup(ctx context.Context, _, from, to string) error {
+	f.calls = append(f.calls, from+">"+to)
+	f.stateDuring, _ = f.state.Current(ctx)
+	f.storedAt, _ = f.store.GetSetting(ctx, policydoc.LockedTestsKey)
+	if f.onApply != nil {
+		f.onApply()
+	}
+	f.ctxErrAtEnd = ctx.Err()
+	return f.err
 }
 
 func newHSSettingsHarness(t *testing.T) *hsSettingsHarness {
@@ -96,6 +125,10 @@ func newHSSettingsHarnessStore(t *testing.T, wrap func(HSSettingsStore) HSSettin
 		t: t, store: s, hs: &fakeSettingsHS{policy: hsSettingsPolicy},
 		audit: audit.New(s.Queries()), csrf: testCSRF(t),
 	}
+	h.state = NewAdminGroupState(func(ctx context.Context) (string, error) {
+		c, _, err := policydoc.LoadLocked(ctx, s.Queries(), 9000)
+		return c.AdminGroup(), err
+	})
 	h.exec = hsadmin.New(hsadmin.Config{
 		Reader: noopReader{}, Audit: h.audit, Store: s.Queries(),
 		Log: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
@@ -104,16 +137,18 @@ func newHSSettingsHarnessStore(t *testing.T, wrap func(HSSettingsStore) HSSettin
 	if wrap != nil {
 		settings = wrap(settings)
 	}
+	h.apply = &fakeAdminApply{state: h.state, store: s.Queries()}
 	handler, err := NewHSSettingsHandler(HSSettingsConfig{
 		Store: settings, Policy: h.hs, Checker: h.hs, Auditor: h.audit,
 		WebhookPort: 9000, DryRun: &fakeDryRunReader{}, CSRF: h.csrf,
+		AdminApply: h.apply, AdminState: h.state,
 	})
 	if err != nil {
 		t.Fatalf("NewHSSettingsHandler: %v", err)
 	}
 	mux := http.NewServeMux()
 	handler.Register(mux)
-	h.chain = RequireDevops(h.csrf.Protect(mux))
+	h.chain = RequireGroup(h.state.Current, h.csrf.Protect(mux))
 	return h
 }
 
@@ -157,7 +192,10 @@ func (h *hsSettingsHarness) request(method, target string, form url.Values, grou
 	} else {
 		body = strings.NewReader("")
 	}
-	req := httptest.NewRequestWithContext(context.Background(), method, target, body)
+	rctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.cancelRequest = cancel
+	req := httptest.NewRequestWithContext(rctx, method, target, body)
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
@@ -807,4 +845,153 @@ func TestHSSettings_ConfigWriteSwitchFailsClosed(t *testing.T) {
 			t.Error("write error stored a setting")
 		}
 	})
+}
+
+// Issue #3 AC5: an empty admin group or one with characters outside [A-Za-z0-9._-] is refused with
+// a visible error and nothing is stored.
+func TestHSSettings_AdminGroupInvalid(t *testing.T) {
+	h := newHSSettingsHarness(t)
+	for name, val := range map[string]string{
+		"empty": "", "prefix only": "group:", "space": "group:a b", "slash": "group:a/b",
+		"query injection": "group:a&allowed_groups=x", "comma": "group:a,b", "newline": "group:a\nb",
+	} {
+		rec := h.post(hsLockedPath, lockedForm(func(v url.Values) { v.Set("devops_group", val) }))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400", name, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "DevopsGroup") && !strings.Contains(rec.Body.String(), "devops") {
+			t.Errorf("%s: no visible error in the body", name)
+		}
+	}
+	if _, ok := h.setting(policydoc.LockedTestsKey); ok {
+		t.Fatal("an invalid admin group stored a setting")
+	}
+}
+
+func (h *hsSettingsHarness) adminGroupSetting() string {
+	h.t.Helper()
+	c, _, err := policydoc.LoadLocked(context.Background(), h.store.Queries(), 9000)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return c.AdminGroup()
+}
+
+func (h *hsSettingsHarness) saveAdminGroup(groups, group string) *httptest.ResponseRecorder {
+	h.t.Helper()
+	form := lockedForm(func(v url.Values) { v.Set("devops_group", "group:"+group); v.Set("ssh_src", "group:"+group) })
+	form.Set("confirm", "1")
+	form.Set("base", settingBase(h.currentLockedRaw()))
+	return h.request(http.MethodPost, hsLockedPath, form, groups, true)
+}
+
+func (h *hsSettingsHarness) currentLockedRaw() string {
+	h.t.Helper()
+	c, _, err := policydoc.LoadLocked(context.Background(), h.store.Queries(), 9000)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	raw, _ := c.Setting()
+	return raw
+}
+
+// Issue #3 review: a save whose actor is not in the new group is refused (it would lock them, and
+// with disjoint memberships everyone, out); nothing is stored, applied or switched.
+func TestHSSettings_AdminGroupDisjointRefused(t *testing.T) {
+	h := newHSSettingsHarness(t)
+	rec := h.saveAdminGroup("devops", "ops")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status %d, want 403\n%s", rec.Code, rec.Body.String())
+	}
+	if len(h.apply.calls) != 0 {
+		t.Error("Caddy was applied for a refused change")
+	}
+	if g := h.adminGroupSetting(); g != "devops" {
+		t.Errorf("stored group %q, want devops", g)
+	}
+	if got := h.request(http.MethodGet, "/headscale/settings", nil, "devops", false).Code; got != http.StatusOK {
+		t.Errorf("devops lost UI access after a refused change: %d", got)
+	}
+}
+
+// An admin in both groups: the middleware keeps the old group while the apply runs, and switches
+// together with the stored value only after it succeeded.
+func TestHSSettings_AdminGroupSwitchesAfterApply(t *testing.T) {
+	h := newHSSettingsHarness(t)
+	if rec := h.saveAdminGroup("devops,ops", "ops"); rec.Code != http.StatusOK {
+		t.Fatalf("status %d\n%s", rec.Code, rec.Body.String())
+	}
+	if len(h.apply.calls) != 1 || h.apply.stateDuring != "devops" {
+		t.Errorf("calls=%v, middleware group during the apply %q, want 1 and devops", h.apply.calls, h.apply.stateDuring)
+	}
+	if strings.Contains(h.apply.storedAt, "group:ops") {
+		t.Errorf("the setting was stored before Caddy applied: %s", h.apply.storedAt)
+	}
+	if g := h.adminGroupSetting(); g != "ops" {
+		t.Errorf("stored group %q, want ops", g)
+	}
+	if got := h.request(http.MethodGet, "/headscale/settings", nil, "devops", false).Code; got != http.StatusForbidden {
+		t.Errorf("old-only actor: %d, want 403", got)
+	}
+	if got := h.request(http.MethodGet, "/headscale/settings", nil, "ops", false).Code; got != http.StatusOK {
+		t.Errorf("new-group actor: %d, want 200", got)
+	}
+}
+
+// Caddy cannot apply the new group (apply error, e.g. a refused drift or a Caddy failure): the
+// setting is never written, the middleware never moved, and the old group keeps working.
+func TestHSSettings_AdminGroupApplyFailureKeepsOld(t *testing.T) {
+	h := newHSSettingsHarness(t)
+	h.apply.err = errors.New("caddy unreadable")
+	rec := h.saveAdminGroup("devops,ops", "ops")
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status %d, want 502\n%s", rec.Code, rec.Body.String())
+	}
+	if g := h.adminGroupSetting(); g != "devops" {
+		t.Errorf("stored group %q, want devops", g)
+	}
+	if got := h.request(http.MethodGet, "/headscale/settings", nil, "devops", false).Code; got != http.StatusOK {
+		t.Errorf("old group lost access: %d", got)
+	}
+	if got := h.request(http.MethodGet, "/headscale/settings", nil, "ops", false).Code; got != http.StatusForbidden {
+		t.Errorf("new group got in before Caddy had it: %d", got)
+	}
+}
+
+// The setting cannot be stored after Caddy took the new group: Caddy is put back to the old group
+// and the middleware never moves.
+func TestHSSettings_AdminGroupStoreFailureRestoresCaddy(t *testing.T) {
+	h := newHSSettingsHarnessStore(t, func(s HSSettingsStore) HSSettingsStore {
+		return flakySettingsStore{HSSettingsStore: s, failPut: policydoc.LockedTestsKey, err: errors.New("disk full")}
+	})
+	rec := h.saveAdminGroup("devops,ops", "ops")
+	if rec.Code == http.StatusOK {
+		t.Fatalf("a failed store reported success\n%s", rec.Body.String())
+	}
+	if want := []string{"devops>ops", "ops>devops"}; !slices.Equal(h.apply.calls, want) {
+		t.Errorf("apply calls %v, want %v (apply, then restore)", h.apply.calls, want)
+	}
+	if got := h.request(http.MethodGet, "/headscale/settings", nil, "ops", false).Code; got != http.StatusForbidden {
+		t.Errorf("new group got in: %d", got)
+	}
+}
+
+// The request context is cancelled while Caddy is being applied (closed tab, request deadline):
+// the change runs on its own context and completes consistently, setting and middleware together.
+func TestHSSettings_AdminGroupRequestCancelledMidChange(t *testing.T) {
+	h := newHSSettingsHarness(t)
+	h.apply.onApply = func() { h.cancelRequest() }
+	h.saveAdminGroup("devops,ops", "ops")
+	if h.apply.ctxErrAtEnd != nil {
+		t.Errorf("the change ran on the request's context: %v", h.apply.ctxErrAtEnd)
+	}
+	if g := h.adminGroupSetting(); g != "ops" {
+		t.Errorf("stored group %q, want ops (the change must complete)", g)
+	}
+	if got := h.request(http.MethodGet, "/headscale/settings", nil, "ops", false).Code; got != http.StatusOK {
+		t.Errorf("new-group actor: %d, want 200", got)
+	}
+	if got := h.request(http.MethodGet, "/headscale/settings", nil, "devops", false).Code; got != http.StatusForbidden {
+		t.Errorf("old-only actor: %d, want 403", got)
+	}
 }
