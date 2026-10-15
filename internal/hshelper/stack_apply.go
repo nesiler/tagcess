@@ -149,15 +149,27 @@ func (a *stackApplier) render(cur, next stackState, m stack.Manifest, target sta
 	}
 	// An existing Headscale config.yaml is never re-rendered. A setting that would change it is refused instead of
 	// being recorded while the file stays old. allowed_groups is ADR 0021's, so it is held equal.
-	// A config this stack rendered in a failed, not yet verified install stays replaceable.
-	protected := cur.enabled(stack.Headscale) && !cur.failed(stack.Headscale)
-	if _, err := os.Lstat(filepath.Join(a.cfg.StackDir, headscaleConfigRel)); err == nil && protected {
-		held := next.Params
-		held.AdminGroup = cur.Params.AdminGroup
-		oldFiles, err := stack.Render(cur.Params, m)
+	// Only a config this stack rendered in a failed, not yet verified install stays replaceable, and only by a
+	// Headscale request and while the file is still byte-identical to what that install wrote.
+	hsPath := filepath.Join(a.cfg.StackDir, headscaleConfigRel)
+	_, lerr := os.Lstat(hsPath)
+	exists := lerr == nil
+	var oldFiles stack.Files
+	if cur.enabled(stack.Headscale) {
+		oldFiles, err = stack.Render(cur.Params, m)
 		if err != nil {
 			return nil, errSettings{StackSettings}
 		}
+	}
+	replaceable := !cur.enabled(stack.Headscale)
+	if cur.enabled(stack.Headscale) && cur.failed(stack.Headscale) {
+		disk, rerr := os.ReadFile(hsPath) //nolint:gosec // fixed path under the stack dir
+		replaceable = rerr == nil && bytes.Equal(disk, oldFiles[headscaleConfigRel])
+	}
+	rewrite := target == stack.Headscale && (!exists || replaceable)
+	if exists && cur.enabled(stack.Headscale) && !rewrite {
+		held := next.Params
+		held.AdminGroup = cur.Params.AdminGroup
 		newFiles, err := stack.Render(held, m)
 		if err != nil || !bytes.Equal(oldFiles[headscaleConfigRel], newFiles[headscaleConfigRel]) {
 			return nil, errSettings{StackSettings}
@@ -169,13 +181,9 @@ func (a *stackApplier) render(cur, next stackState, m stack.Manifest, target sta
 		case rel == composeRel:
 			out[rel] = b
 		case rel == headscaleConfigRel:
-			if _, err := os.Lstat(filepath.Join(a.cfg.StackDir, rel)); err == nil && protected {
-				continue // exists: never re-rendered, never "repaired"
+			if rewrite {
+				out[rel] = b
 			}
-			if target != stack.Headscale {
-				continue
-			}
-			out[rel] = b
 		case owner(rel) == target:
 			out[rel] = b
 		default:
@@ -550,6 +558,13 @@ func (a *stackApplier) restart() (Outcome, error) {
 		return a.cfg.Docker.Restart(ctx, a.composeFile(), a.req.Component)
 	}); err != nil {
 		return a.fail(StackPhaseStart, StackStartFailed)
+	}
+	if st.failed(a.req.Component) {
+		// The service came back, so the install is no longer unverified: its config is protected from now on.
+		st.Failed = slices.DeleteFunc(slices.Clone(st.Failed), func(x stack.Component) bool { return x == a.req.Component })
+		if err := writeStackState(a.cfg.priv(), st); err != nil {
+			return a.fail(StackPhaseWrite, StackWriteFailed)
+		}
 	}
 	yes := true
 	a.changed = &yes

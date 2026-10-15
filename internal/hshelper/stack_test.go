@@ -1133,3 +1133,41 @@ func TestStackApply_RestoreRestartFailureReported(t *testing.T) {
 		t.Fatalf("result = %+v", r)
 	}
 }
+
+// A Failed Headscale that came back (restart) keeps its config.yaml.
+func TestStackApply_RestartedFailedHeadscaleConfigProtected(t *testing.T) {
+	e := newStackEnv(t)
+	e.docker.fail["up"] = errors.New("slow")
+	if r := e.apply(idA, stack.Headscale); r.ErrorCode != StackStartFailed {
+		t.Fatalf("first install: %+v", r)
+	}
+	e.docker.fail = map[string]error{}
+	e.publish(StackRequest{Version: 1, RequestID: idB, Op: OpServiceRestart, BaseRev: e.rev(), Component: stack.Headscale})
+	e.run()
+	succeeded(t, e.result())
+	req := e.applyReq(idC, stack.Headscale)
+	req.Settings.IssuerURL = "https://idp.example.net"
+	e.publish(req)
+	e.run()
+	if r := e.result(); r.ErrorCode != StackSettings {
+		t.Errorf("config.yaml rewritten after restart: %+v", r)
+	}
+	if bytes.Contains(e.readStack("headscale/config.yaml"), []byte("idp.example.net")) {
+		t.Error("issuer changed on disk")
+	}
+}
+
+// Another component's apply while Headscale is Failed must not record settings config.yaml never got.
+func TestStackApply_OtherApplyWhileHeadscaleFailedRefused(t *testing.T) {
+	e := newStackEnv(t)
+	e.docker.fail["up"] = errors.New("no oidc")
+	e.apply(idA, stack.Headscale)
+	e.docker.fail = map[string]error{}
+	req := e.applyReq(idB, stack.OAuth2Proxy)
+	req.Settings.PrefixV4 = "100.100.0.0/16"
+	e.publish(req)
+	e.run()
+	if r := e.result(); r.ErrorCode != StackSettings {
+		t.Errorf("settings recorded that config.yaml lacks: %+v", r)
+	}
+}
