@@ -29,6 +29,8 @@ type fakeDocker struct {
 	mu    sync.Mutex
 	calls []string
 	fail  map[string]error
+	// failOnce fails the next call of a name once; fail keeps failing.
+	failOnce map[string]bool
 	// onConfig runs inside ConfigQuiet, to look at the host while the candidate is validated.
 	onConfig func(file string)
 }
@@ -41,6 +43,10 @@ func (d *fakeDocker) record(name string, c stack.Component) error {
 		key += ":" + string(c)
 	}
 	d.calls = append(d.calls, key)
+	if d.failOnce[name] {
+		delete(d.failOnce, name)
+		return errors.New("failed once")
+	}
 	return d.fail[name]
 }
 
@@ -425,7 +431,7 @@ func TestStackApply_StartFailureRestoresLastKnownGood(t *testing.T) {
 	compose, rev := e.readStack("compose.yaml"), e.rev()
 
 	e.cfg.Manifest = testStackManifest(stackDigUp)
-	e.docker.fail["up"] = errors.New("unhealthy")
+	e.docker.failOnce = map[string]bool{"up": true}
 	e.publish(StackRequest{Version: 1, RequestID: idB, Op: OpStackUpgrade, BaseRev: rev, Component: stack.Headscale})
 	e.run()
 	r := e.result()
@@ -437,6 +443,7 @@ func TestStackApply_StartFailureRestoresLastKnownGood(t *testing.T) {
 	}
 
 	// A new service whose start fails stays written and marked failed.
+	e.docker.fail["up"] = errors.New("unhealthy")
 	r = e.apply(idC, stack.OAuth2Proxy)
 	if r.ErrorCode != StackStartFailed {
 		t.Fatalf("result = %+v", r)
@@ -1072,4 +1079,57 @@ func jsonUnmarshalStrict(b []byte, v any) error {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	return dec.Decode(v)
+}
+
+// A failed first Headscale install stays repairable: retry, or remove and add again.
+func TestStackApply_FailedHeadscaleInstallRepairable(t *testing.T) {
+	e := newStackEnv(t)
+	e.docker.fail["up"] = errors.New("no oidc")
+	if r := e.apply(idA, stack.Headscale); r.ErrorCode != StackStartFailed {
+		t.Fatalf("first install: %+v", r)
+	}
+	// Retry with changed settings: the unverified config is rendered again.
+	req := e.applyReq(idB, stack.Headscale)
+	req.Settings.PrefixV4 = "100.100.0.0/16"
+	e.docker.fail = map[string]error{}
+	e.publish(req)
+	e.run()
+	succeeded(t, e.result())
+	if !bytes.Contains(e.readStack("headscale/config.yaml"), []byte("100.100.0.0/16")) {
+		t.Error("config.yaml was not rendered again")
+	}
+
+	// Remove and add again, with the config left on disk.
+	e2 := newStackEnv(t)
+	e2.docker.fail["up"] = errors.New("no oidc")
+	e2.apply(idA, stack.Headscale)
+	e2.publish(StackRequest{Version: 1, RequestID: idB, Op: OpStackRemove, BaseRev: e2.rev(), Component: stack.Headscale})
+	e2.run()
+	succeeded(t, e2.result())
+	e2.docker.fail = map[string]error{}
+	succeeded(t, e2.apply(idC, stack.Headscale))
+
+	// A verified config stays protected.
+	req = e2.applyReq("99999999-9999-4999-8999-999999999999", stack.Headscale)
+	req.Settings.PrefixV4 = "100.101.0.0/16"
+	e2.publish(req)
+	e2.run()
+	if r := e2.result(); r.ErrorCode != StackSettings {
+		t.Errorf("verified config not protected: %+v", r)
+	}
+}
+
+// A failed restart after the restore is reported, not hidden behind changed=false.
+func TestStackApply_RestoreRestartFailureReported(t *testing.T) {
+	e := newStackEnv(t)
+	succeeded(t, e.apply(idA, stack.Headscale))
+	rev := e.rev()
+	e.cfg.Manifest = testStackManifest(stackDigUp)
+	e.docker.fail["up"] = errors.New("down") // fails for the upgrade and for the restart
+	e.publish(StackRequest{Version: 1, RequestID: idB, Op: OpStackUpgrade, BaseRev: rev, Component: stack.Headscale})
+	e.run()
+	r := e.result()
+	if r.ErrorCode != StackServiceDown || r.Changed != nil || r.Service != "down" {
+		t.Fatalf("result = %+v", r)
+	}
 }

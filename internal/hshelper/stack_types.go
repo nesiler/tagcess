@@ -90,6 +90,7 @@ const (
 	StackWriteFailed    StackCode = "write_failed"
 	StackPullFailed     StackCode = "pull_failed"
 	StackStartFailed    StackCode = "start_failed"
+	StackServiceDown    StackCode = "service_down"
 	StackUnsupported    StackCode = "unsupported"
 	StackInterrupted    StackCode = "interrupted"
 	StackJournalCorrupt StackCode = "journal_corrupt"
@@ -97,7 +98,7 @@ const (
 
 var stackCodes = []StackCode{
 	StackInvalidRequest, StackStaleBase, StackBusy, StackSettings, StackConfigInvalid, StackHandoffFailed,
-	StackSaveCopyFailed, StackWriteFailed, StackPullFailed, StackStartFailed, StackUnsupported, StackInterrupted,
+	StackSaveCopyFailed, StackWriteFailed, StackPullFailed, StackStartFailed, StackServiceDown, StackUnsupported, StackInterrupted,
 	StackJournalCorrupt,
 }
 
@@ -127,6 +128,8 @@ type StackResult struct {
 	// Changed is nil when the helper cannot tell whether the stack changed.
 	Changed   *bool         `json:"changed"`
 	Installed []HandoffKind `json:"installed"`
+	// Service is "down" when the restored service did not start again; empty otherwise.
+	Service string `json:"service,omitempty"`
 }
 
 var (

@@ -33,6 +33,7 @@ type stackApplier struct {
 	// changed is what the result reports: false until the first write, true after, nil when unknown.
 	changed   *bool
 	installed []HandoffKind
+	service   string
 }
 
 type stackCfgRef = StackConfig
@@ -148,7 +149,9 @@ func (a *stackApplier) render(cur, next stackState, m stack.Manifest, target sta
 	}
 	// An existing Headscale config.yaml is never re-rendered. A setting that would change it is refused instead of
 	// being recorded while the file stays old. allowed_groups is ADR 0021's, so it is held equal.
-	if _, err := os.Lstat(filepath.Join(a.cfg.StackDir, headscaleConfigRel)); err == nil {
+	// A config this stack rendered in a failed, not yet verified install stays replaceable.
+	protected := cur.enabled(stack.Headscale) && !cur.failed(stack.Headscale)
+	if _, err := os.Lstat(filepath.Join(a.cfg.StackDir, headscaleConfigRel)); err == nil && protected {
 		held := next.Params
 		held.AdminGroup = cur.Params.AdminGroup
 		oldFiles, err := stack.Render(cur.Params, m)
@@ -166,7 +169,7 @@ func (a *stackApplier) render(cur, next stackState, m stack.Manifest, target sta
 		case rel == composeRel:
 			out[rel] = b
 		case rel == headscaleConfigRel:
-			if _, err := os.Lstat(filepath.Join(a.cfg.StackDir, rel)); err == nil {
+			if _, err := os.Lstat(filepath.Join(a.cfg.StackDir, rel)); err == nil && protected {
 				continue // exists: never re-rendered, never "repaired"
 			}
 			if target != stack.Headscale {
@@ -326,9 +329,15 @@ func (a *stackApplier) failLastGood(p StackPhase, code StackCode, cur stackState
 		no := false
 		a.changed = &no
 		if p == StackPhaseStart && cur.enabled(a.req.Component) {
-			_ = a.dockerStep(a.cfg.stepTimeout(), func(ctx context.Context) error {
+			if err := a.dockerStep(a.cfg.stepTimeout(), func(ctx context.Context) error {
 				return a.cfg.Docker.Up(ctx, a.composeFile(), a.req.Component)
-			})
+			}); err != nil {
+				// The old configuration did not come back either: the service may be down and the helper cannot tell.
+				a.cfg.logf("stack request %s: restart of %s after the failed start also failed: %v", a.j.RequestID, a.req.Component, err)
+				a.changed = nil
+				a.service = "down"
+				code = StackServiceDown
+			}
 		}
 	}
 	return a.fail(p, code)
@@ -602,7 +611,7 @@ func (a *stackApplier) fail(p StackPhase, code StackCode) (Outcome, error) {
 	a.cfg.logf("stack request %s failed at %s: %s", a.j.RequestID, p, code)
 	return a.finish(StackResult{
 		Version: StackVersion, RequestID: a.j.RequestID, Op: a.req.Op, State: hostpatch.StateFailed, Phase: p,
-		FinishedAt: a.cfg.now(), ErrorCode: code, Changed: a.changed, Installed: a.installed,
+		FinishedAt: a.cfg.now(), ErrorCode: code, Changed: a.changed, Installed: a.installed, Service: a.service,
 	})
 }
 
