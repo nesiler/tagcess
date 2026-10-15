@@ -107,9 +107,12 @@ Labels: **[Decided]** the developer's decision, **[Proposed]** a proposal (not y
      connections are set up step by step with guidance. On an empty server tagcess installs the services; when
      they already exist it builds a migration plan.
   5. When everything is set up, users connect with Tailscale, signing in with their Zitadel account.
-- **[Decided]** On a fresh server the services tagcess installs (tagcess, Caddy, Headscale, Zitadel with its
-  database, the auth proxy) run in Docker (Compose), as NetBird and Pangolin do. Existing installations are connected
+- **[Decided]** On a fresh server the services tagcess installs (tagcess, Caddy, Headscale, the auth proxy) run in
+  Docker (Compose), as NetBird and Pangolin do. Existing installations are connected
   as they are; tagcess does not move them.
+- **[Decided 2026-10-15]** tagcess never installs an identity provider. An existing Zitadel (later another OIDC
+  provider through a driver) is a prerequisite; the setup wizard only connects to it. (Corrects an earlier wording of
+  this section that listed Zitadel among the installed services.)
 - **[Decided]** The first stage keeps oauth2-proxy as the auth proxy; `tagcess-auth` replaces it later.
 - **[Decided]** Everything is chosen in the UI. Nothing stays fixed in code or config files, including the
   Headscale `allowed_groups` set (ADR 0021), the admin group, addresses, CIDRs and paths.
@@ -122,7 +125,7 @@ Labels: **[Decided]** the developer's decision, **[Proposed]** a proposal (not y
   machine and the lab, not in CI (closes the ADR 0014 question).
 - **[Open]** Release flow. **[Proposed]**: a release is only tagcess itself (the backend with the embedded UI, later
   `tagcess-auth`): a tag `v0.1.x` builds linux amd64/arm64 binaries, a container image on GHCR, checksums and the
-  install script. Headscale, Caddy and Zitadel are not bundled: the setup wizard installs their official
+  install script. Headscale and Caddy are not bundled: the setup wizard installs their official
   images/packages at versions pinned and tested for that tagcess release, or connects to existing ones. Each
   release lists those tested versions.
 - **[Decided]** Test lab. The parts that can run in Kubernetes (Zitadel, the k8s target) stay on the developer's
