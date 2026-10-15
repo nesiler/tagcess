@@ -45,6 +45,9 @@ type Config struct {
 	RequestUID uint32
 	// Now defaults to time.Now.
 	Now func() time.Time
+	// StackRoot is the stack channel's root (/var/lib/tagcess-host), or empty when there is none. A request is
+	// refused while the stack journal is not terminal (setup-flow.md §5.3); both channels share this root's flock.
+	StackRoot string
 	// Projector reads the live config for status.json (NewFileProjector in production).
 	Projector Projector
 
@@ -219,6 +222,10 @@ func intake(cfg Config) (Outcome, error) {
 	}
 	if found && !j.State.Terminal() {
 		return reject(id, hostpatch.CodeBusy, "", "journal not terminal")
+	}
+
+	if stackChannelBusy(cfg.StackRoot) {
+		return reject(id, hostpatch.CodeBusy, "", "the stack channel has an unfinished operation")
 	}
 
 	rb, err := readSafe(dirfd, id+".json", cfg.RequestUID, hostpatch.MaxRequestBytes)

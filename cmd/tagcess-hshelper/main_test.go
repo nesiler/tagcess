@@ -151,3 +151,31 @@ func TestHelperMain_MissingDirsExitOne(t *testing.T) {
 		t.Errorf("exit = %d, want 1; stderr: %s", code, stderr.String())
 	}
 }
+
+func TestHelperMain_StackFlags(t *testing.T) {
+	uid := strconv.Itoa(os.Getuid() + 1) // a non-root uid even when the tests run as root
+	good := []string{"--host-root", "/var/lib/tagcess-host", "--stack-dir", "/etc/tagcess/stack", "--secrets-dir", "/etc/tagcess/secrets", "--request-uid", uid}
+	for _, mode := range []string{"stack-run", "stack-boot", "stack-finalize", "stack-sweep"} {
+		if _, _, err := parseStackArgs(append([]string{mode}, good...)); err != nil {
+			t.Errorf("%s: %v", mode, err)
+		}
+	}
+	bad := map[string][]string{
+		"unknown mode":    append([]string{"stack-apply"}, good...),
+		"no host root":    {"stack-run", "--stack-dir", "/e", "--secrets-dir", "/s", "--request-uid", uid},
+		"relative path":   {"stack-run", "--host-root", "rel", "--stack-dir", "/e", "--secrets-dir", "/s", "--request-uid", uid},
+		"unclean path":    {"stack-run", "--host-root", "/a/../b", "--stack-dir", "/e", "--secrets-dir", "/s", "--request-uid", uid},
+		"root uid":        {"stack-run", "--host-root", "/h", "--stack-dir", "/e", "--secrets-dir", "/s", "--request-uid", "0"},
+		"extra arguments": append(append([]string{"stack-run"}, good...), "extra"),
+		"unknown flag":    append(append([]string{"stack-run"}, good...), "--image", "evil"),
+	}
+	for name, args := range bad {
+		if _, _, err := parseStackArgs(args); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	var stderr bytes.Buffer
+	if code := run([]string{"stack-run"}, &stderr); code != 2 {
+		t.Errorf("exit code = %d, want 2", code)
+	}
+}

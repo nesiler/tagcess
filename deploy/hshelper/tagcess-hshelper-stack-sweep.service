@@ -1,0 +1,8 @@
+[Unit]
+Description=Delete stale tagcess handoff files (oneshot)
+
+[Service]
+Type=oneshot
+TimeoutStartSec=120
+KillMode=control-group
+ExecStart=/usr/local/bin/tagcess-hshelper stack-sweep --host-root /var/lib/tagcess-host --stack-dir /etc/tagcess/stack --secrets-dir /etc/tagcess/secrets --headscale-root /var/lib/tagcess-headscale --request-uid 10001

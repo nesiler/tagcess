@@ -12,29 +12,29 @@ import (
 // Params are the typed settings of setup-flow.md §5.3.1. Paths of the managed stack are not parameters: they are
 // fixed per release in the templates.
 type Params struct {
-	Components []Component // enabled services; order does not matter
+	Components []Component `json:"components,omitempty"` // enabled services; order does not matter
 
-	HeadscaleHost    string // public host of Headscale, e.g. hs.example.com
-	MagicDNSDomain   string // MagicDNS base domain
-	PrefixV4         string // inside 100.64.0.0/10, canonical
-	PrefixV6         string // inside fd7a:115c:a1e0::/48, canonical
-	HeadscalePort    int    // loopback listener behind Caddy
-	HeadscaleMetrics int    // loopback metrics listener
-	OAuth2ProxyPort  int    // loopback listener
-	SetupPort        int    // tagcess setup listener on 127.0.0.1 until sealed
-	EmbeddedDERP     bool
+	HeadscaleHost    string `json:"headscale_host"`    // public host of Headscale, e.g. hs.example.com
+	MagicDNSDomain   string `json:"magicdns_domain"`   // MagicDNS base domain
+	PrefixV4         string `json:"prefix_v4"`         // inside 100.64.0.0/10, canonical
+	PrefixV6         string `json:"prefix_v6"`         // inside fd7a:115c:a1e0::/48, canonical
+	HeadscalePort    int    `json:"headscale_port"`    // loopback listener behind Caddy
+	HeadscaleMetrics int    `json:"headscale_metrics"` // loopback metrics listener
+	OAuth2ProxyPort  int    `json:"oauth2_proxy_port"` // loopback listener
+	SetupPort        int    `json:"setup_port"`        // tagcess setup listener on 127.0.0.1 until sealed
+	EmbeddedDERP     bool   `json:"embedded_derp"`
 
-	IssuerURL         string // https://host of the OIDC provider
-	HeadscaleClientID string
-	ProxyClientID     string
-	ProxyHost         string // public host of the auth proxy (redirect URL)
-	CookieDomain      string
-	CookieLifetime    string // Go duration, 5m to 24h
-	AdminGroup        string
+	IssuerURL         string `json:"issuer_url"` // https://host of the OIDC provider
+	HeadscaleClientID string `json:"headscale_client_id"`
+	ProxyClientID     string `json:"proxy_client_id"`
+	ProxyHost         string `json:"proxy_host"` // public host of the auth proxy (redirect URL)
+	CookieDomain      string `json:"cookie_domain"`
+	CookieLifetime    string `json:"cookie_lifetime"` // Go duration, 5m to 24h
+	AdminGroup        string `json:"admin_group"`
 
-	CaddyGID     int // host group IDs passed as group_add
-	HeadscaleGID int
-	SocketGID    int // dedicated group of the Headscale socket directory
+	CaddyGID     int `json:"caddy_gid"` // host group IDs passed as group_add
+	HeadscaleGID int `json:"headscale_gid"`
+	SocketGID    int `json:"socket_gid"` // dedicated group of the Headscale socket directory
 }
 
 var (

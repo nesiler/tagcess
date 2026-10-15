@@ -5,5 +5,5 @@ Description=Apply one requested tagcess Headscale config change (oneshot)
 Type=oneshot
 TimeoutStartSec=120
 KillMode=control-group
-ExecStart=/usr/local/bin/tagcess-hshelper run --config /etc/headscale/config.yaml --root /var/lib/tagcess-headscale --unit headscale.service --service-user headscale --health http://127.0.0.1:8080/health --socket /var/run/headscale/headscale.sock --request-uid 10001
-ExecStopPost=/usr/local/bin/tagcess-hshelper finalize --config /etc/headscale/config.yaml --root /var/lib/tagcess-headscale --unit headscale.service --service-user headscale --health http://127.0.0.1:8080/health --socket /var/run/headscale/headscale.sock --request-uid 10001
+ExecStart=/usr/local/bin/tagcess-hshelper run --config /etc/headscale/config.yaml --root /var/lib/tagcess-headscale --unit headscale.service --service-user headscale --health http://127.0.0.1:8080/health --socket /var/run/headscale/headscale.sock --request-uid 10001 --stack-root /var/lib/tagcess-host
+ExecStopPost=/usr/local/bin/tagcess-hshelper finalize --config /etc/headscale/config.yaml --root /var/lib/tagcess-headscale --unit headscale.service --service-user headscale --health http://127.0.0.1:8080/health --socket /var/run/headscale/headscale.sock --request-uid 10001 --stack-root /var/lib/tagcess-host

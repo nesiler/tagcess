@@ -1,0 +1,9 @@
+[Unit]
+Description=Run one requested tagcess stack operation (oneshot)
+
+[Service]
+Type=oneshot
+TimeoutStartSec=900
+KillMode=control-group
+ExecStart=/usr/local/bin/tagcess-hshelper stack-run --host-root /var/lib/tagcess-host --stack-dir /etc/tagcess/stack --secrets-dir /etc/tagcess/secrets --headscale-root /var/lib/tagcess-headscale --request-uid 10001
+ExecStopPost=/usr/local/bin/tagcess-hshelper stack-finalize --host-root /var/lib/tagcess-host --stack-dir /etc/tagcess/stack --secrets-dir /etc/tagcess/secrets --headscale-root /var/lib/tagcess-headscale --request-uid 10001
