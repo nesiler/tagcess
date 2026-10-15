@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strings"
 )
 
 // LockedTestsKey is the settings key holding the locked test parameters as JSON (F3-020, R2
@@ -129,3 +130,7 @@ func (c LockedConfig) Weakens(next LockedConfig) []string {
 	add("SSHDst", missing)
 	return out
 }
+
+// AdminGroup is the identity-provider group that may use the tagcess UI: DevopsGroup without its
+// "group:" prefix. DevopsGroup is the single source of it (issue #3); validated configs only.
+func (c LockedConfig) AdminGroup() string { return strings.TrimPrefix(c.DevopsGroup, "group:") }

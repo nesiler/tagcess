@@ -1,12 +1,13 @@
 // Package web serves tagcess's own interface. The interface only listens on a unix socket that
 // Caddy proxies to (ADR 0004, NFR-02): identity headers are trusted only there, and only requests
-// whose groups contain "devops" pass. State-changing requests must carry a CSRF token (NFR-03).
+// whose groups contain the admin group (default "devops") pass. State-changing requests must carry a CSRF token (NFR-03).
 package web
 
 import (
 	"context"
 	"net/http"
 	"strings"
+	"sync"
 	"unicode"
 )
 
@@ -19,8 +20,12 @@ const (
 	headerGroups = "X-Auth-Request-Groups"
 )
 
-// devopsGroup is the only group allowed into the interface (NFR-02).
+// devopsGroup is the admin group while no setting says otherwise (NFR-02).
 const devopsGroup = "devops"
+
+// AdminGroupSource returns the group allowed into the interface; it is read on every request so a
+// changed setting applies without a restart.
+type AdminGroupSource func(ctx context.Context) (string, error)
 
 // Actor is the authenticated devops user bound to a request by RequireDevops.
 type Actor struct {
@@ -51,13 +56,34 @@ func ActorFrom(ctx context.Context) (Actor, bool) {
 // the body is empty because the identity comes from Caddy and is not tagcess's to explain. The
 // parsed actor is bound to the request context for handlers downstream.
 func RequireDevops(h http.Handler) http.Handler {
+	return RequireGroup(nil, h)
+}
+
+// RequireGroup is RequireDevops with the admitted group read from src. A nil src means "devops". If
+// src fails or returns nothing, the last good group is kept (fail safe, never widened); with none
+// yet, the request is refused.
+func RequireGroup(src AdminGroupSource, h http.Handler) http.Handler {
+	var mu sync.Mutex
+	last := ""
+	current := func(ctx context.Context) string {
+		if src == nil {
+			return devopsGroup
+		}
+		g, err := src(ctx)
+		mu.Lock()
+		defer mu.Unlock()
+		if err == nil && g != "" {
+			last = g
+		}
+		return last
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		actor := Actor{
 			User:   r.Header.Get(headerUser),
 			Email:  r.Header.Get(headerEmail),
 			Groups: parseGroups(r.Header.Values(headerGroups)),
 		}
-		if !actor.HasGroup(devopsGroup) {
+		if g := current(r.Context()); g == "" || !actor.HasGroup(g) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}

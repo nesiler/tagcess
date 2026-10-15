@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -104,5 +105,62 @@ func TestActorFrom_NoActor(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
 	if _, ok := ActorFrom(req.Context()); ok {
 		t.Fatal("ActorFrom reported an actor for a bare request")
+	}
+}
+
+// Issue #3 AC2: with the admin group set to "ops", only actors in "ops" are admitted.
+func TestRequireGroup_ConfiguredGroup(t *testing.T) {
+	cases := []struct {
+		name   string
+		src    AdminGroupSource
+		groups string
+		want   int
+	}{
+		{"ops admitted", func(context.Context) (string, error) { return "ops", nil }, "vpn-users,ops", http.StatusOK},
+		{"devops refused when ops set", func(context.Context) (string, error) { return "ops", nil }, "devops", http.StatusForbidden},
+		{"prefix refused", func(context.Context) (string, error) { return "ops", nil }, "ops-readonly", http.StatusForbidden},
+		{"no groups", func(context.Context) (string, error) { return "ops", nil }, "", http.StatusForbidden},
+		{"nil source is devops", nil, "devops", http.StatusOK},
+		{"nil source refuses ops", nil, "ops", http.StatusForbidden},
+		{"source error, nothing known: refuse", func(context.Context) (string, error) { return "", errors.New("boom") }, "devops", http.StatusForbidden},
+		{"empty group: refuse", func(context.Context) (string, error) { return "", nil }, "devops", http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
+			req.Header.Set(headerGroups, tc.groups)
+			rec := httptest.NewRecorder()
+			RequireGroup(tc.src, inner).ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.want)
+			}
+		})
+	}
+}
+
+// A failing source keeps the last good group instead of widening or opening access.
+func TestRequireGroup_KeepsLastGoodOnError(t *testing.T) {
+	fail := false
+	src := func(context.Context) (string, error) {
+		if fail {
+			return "", errors.New("db down")
+		}
+		return "ops", nil
+	}
+	h := RequireGroup(src, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	do := func(groups string) int {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
+		req.Header.Set(headerGroups, groups)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if do("ops") != http.StatusOK {
+		t.Fatal("ops not admitted")
+	}
+	fail = true
+	if do("ops") != http.StatusOK || do("devops") != http.StatusForbidden {
+		t.Fatal("last good group not kept on source error")
 	}
 }

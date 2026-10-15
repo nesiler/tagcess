@@ -38,6 +38,11 @@ Labels: decisions are in the ADRs; the details of the controls here are **[Propo
 ## 3. Trust boundaries
 1. **Browser → Caddy → tagcess (ui.sock):** The identity comes from the `X-Auth-Request-User`, `-Email` and `-Groups` headers.
    They are read only on requests coming from ui.sock. If `devops` is not in `groups` the request gets 403.
+   The admitted group is the admin group, `devops` by default **[Proposed]**: the Headscale settings screen's `DevopsGroup`
+   (minus `group:`) is its single source. The same value is `allowed_groups` in the generated UI Caddy block; both are
+   read fresh (the middleware keeps the last good value if the setting cannot be read, and refuses when it never had one),
+   and the name must match `[A-Za-z0-9._-]+` (settings validation is stricter: `group:[a-z0-9_-]{1,32}`). A changed
+   value reaches Caddy with the next site apply.
    The Caddy snippet **removes** client-supplied `X-Auth-Request-*` headers **before** forward_auth. So the
    headers come only from the oauth2-proxy response. An e2e test checks this: a fake header is sent and
    403 is expected.

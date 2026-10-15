@@ -155,6 +155,8 @@ type CaddyConfig struct {
 	// K8sUpstream is the (k8s) snippet's upstream, https://host[:port]. Empty means the default
 	// K8sUpstream.
 	K8sUpstream string
+	// AdminGroup is the group the tagcess UI block admits (allowed_groups). Empty means DefaultAdminGroup.
+	AdminGroup string
 }
 
 // k8sUpstream is the checked (k8s) upstream: only a plain https origin survives (the snippet's

@@ -132,3 +132,22 @@ func TestLockedConfig_Weakens(t *testing.T) {
 		})
 	}
 }
+
+// Issue #3 AC1/AC5: DevopsGroup is the single admin-group source; bad names are refused on save.
+func TestLockedSetting_AdminGroup(t *testing.T) {
+	cfg := DefaultLockedConfig(9000)
+	if got := cfg.AdminGroup(); got != "devops" {
+		t.Fatalf("default AdminGroup = %q, want devops", got)
+	}
+	cfg.DevopsGroup = "group:ops"
+	if got := cfg.AdminGroup(); got != "ops" {
+		t.Fatalf("AdminGroup = %q, want ops", got)
+	}
+	for _, bad := range []string{"group:", "", "group:a b", "group:a/b", "group:a?b", "group:a&allowed_groups=x", "group:a,b", "group:ä"} {
+		c := DefaultLockedConfig(9000)
+		c.DevopsGroup = bad
+		if _, err := c.Setting(); err == nil {
+			t.Errorf("Setting accepted DevopsGroup %q", bad)
+		}
+	}
+}

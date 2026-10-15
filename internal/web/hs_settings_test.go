@@ -808,3 +808,24 @@ func TestHSSettings_ConfigWriteSwitchFailsClosed(t *testing.T) {
 		}
 	})
 }
+
+// Issue #3 AC5: an empty admin group or one with characters outside [A-Za-z0-9._-] is refused with
+// a visible error and nothing is stored.
+func TestHSSettings_AdminGroupInvalid(t *testing.T) {
+	h := newHSSettingsHarness(t)
+	for name, val := range map[string]string{
+		"empty": "", "prefix only": "group:", "space": "group:a b", "slash": "group:a/b",
+		"query injection": "group:a&allowed_groups=x", "comma": "group:a,b", "newline": "group:a\nb",
+	} {
+		rec := h.post(hsLockedPath, lockedForm(func(v url.Values) { v.Set("devops_group", val) }))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400", name, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "DevopsGroup") && !strings.Contains(rec.Body.String(), "devops") {
+			t.Errorf("%s: no visible error in the body", name)
+		}
+	}
+	if _, ok := h.setting(policydoc.LockedTestsKey); ok {
+		t.Fatal("an invalid admin group stored a setting")
+	}
+}

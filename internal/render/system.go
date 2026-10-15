@@ -2,6 +2,7 @@ package render
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/nesiler/tagcess/internal/site"
@@ -23,11 +24,21 @@ var caddySystemOrder = []string{
 	site.TemplateTagcess,
 }
 
+// DefaultAdminGroup is the admin group while the setting is unchanged; the deploy reference
+// snippet and the golden test use it.
+const DefaultAdminGroup = "devops"
+
+var validAdminGroup = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
 // caddyTagcessBody is the body of the tagcess block, between the host line and the closing
 // brace. With them it is byte-identical to deploy/caddy/tagcess.caddy (the F1 reference snippet); TestSystemSite_TagcessGolden
 // compares the two. Only devops reaches the UI, only from the tailnet, and the client's own
 // identity headers are stripped before forward_auth (security.md §3.1, S-05.2).
-const caddyTagcessBody = "\t@tailnet remote_ip 100.64.0.0/10\n" +
+func caddyTagcessBody(adminGroup string) string {
+	return caddyTagcessHead + adminGroup + caddyTagcessTail
+}
+
+const caddyTagcessHead = "\t@tailnet remote_ip 100.64.0.0/10\n" +
 	"\thandle @tailnet {\n" +
 	"\t\t# oauth2-proxy's login endpoints (start/callback) must reach oauth2-proxy itself.\n" +
 	"\t\thandle /oauth2/* {\n" +
@@ -41,7 +52,9 @@ const caddyTagcessBody = "\t@tailnet remote_ip 100.64.0.0/10\n" +
 	"\t\t\trequest_header -X-Auth-Request-Email\n" +
 	"\t\t\trequest_header -X-Auth-Request-Groups\n" +
 	"\t\t\tforward_auth 127.0.0.1:4180 {\n" +
-	"\t\t\t\turi /oauth2/auth?allowed_groups=devops\n" +
+	"\t\t\t\turi /oauth2/auth?allowed_groups="
+
+const caddyTagcessTail = "\n" +
 	"\t\t\t\tcopy_headers X-Auth-Request-User X-Auth-Request-Email X-Auth-Request-Groups\n" +
 	"\t\t\t\t# oauth2-proxy returns 401 when there is no session; send the browser to sign in.\n" +
 	"\t\t\t\t@unauthenticated status 401\n" +
@@ -104,7 +117,14 @@ func renderCaddySystemSite(s site.Site, cfg CaddyConfig) (string, error) {
 		if cert != "" {
 			b.WriteString("\ttls /etc/letsencrypt/live/" + cert + "/fullchain.pem /etc/letsencrypt/live/" + cert + "/privkey.pem\n")
 		}
-		b.WriteString(caddyTagcessBody)
+		admin := cfg.AdminGroup
+		if admin == "" {
+			admin = DefaultAdminGroup
+		}
+		if !validAdminGroup.MatchString(admin) {
+			return "", fmt.Errorf("admin group %q: allowed characters are A-Z a-z 0-9 . _ -", admin)
+		}
+		b.WriteString(caddyTagcessBody(admin))
 		b.WriteString("}\n")
 
 	case site.TemplateHeadscale:

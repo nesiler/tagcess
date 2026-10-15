@@ -709,6 +709,10 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	rerunLoops := f4s.loops.Trigger
 	siteApplied.Store(&rerunLoops)
 	pages := uiPages{
+		AdminGroup: func(ctx context.Context) (string, error) {
+			c, _, err := policydoc.LoadLocked(ctx, st.Queries(), webhookPortNum)
+			return c.AdminGroup(), err
+		},
 		Audit:         auditPage,
 		Sync:          syncPage,
 		Sites:         sitesPage,
@@ -871,6 +875,11 @@ func siteSettingsReader(q *db.Queries, sites *site.Store, cfg *config.Config) fu
 		if err != nil {
 			return change.SiteSettings{}, err
 		}
+		// The UI block admits the policy settings' admin group (issue #3); a bad stored value blocks the plan.
+		locked, _, err := policydoc.LoadLocked(ctx, q, 0)
+		if err != nil {
+			return change.SiteSettings{}, err
+		}
 		return change.SiteSettings{
 			Caddy: render.CaddyConfig{
 				ACMEEmail: cfg.Sites.ACMEEmail,
@@ -882,6 +891,7 @@ func siteSettingsReader(q *db.Queries, sites *site.Store, cfg *config.Config) fu
 				LogoutReturnURL: logoutReturnURL(cfg),
 				// The (k8s) upstream the first-import parity was checked with is the one every apply writes.
 				K8sUpstream: cfg.Sites.K8sUpstream,
+				AdminGroup:  locked.AdminGroup(),
 			},
 			DNS:       render.DNSConfig{AValue: cfg.Sites.VPNAddress},
 			ManualDNS: manual,
@@ -930,6 +940,8 @@ type uiPages struct {
 	RecoveryPage  registrar
 	// Maintenance feeds the section-wide maintenance band on every Headscale tab (F3b-020).
 	Maintenance web.MaintenanceBannerSource
+	// AdminGroup reads the group admitted to the UI; nil means "devops" (tests).
+	AdminGroup web.AdminGroupSource
 	// Shell feeds the top bar's dry-run and pending-change pills on every page.
 	Shell web.ShellStatusSource
 	// The F4 pages (F4-031): the root dashboard, alerts, monitoring settings and the k8s screens.
@@ -963,7 +975,7 @@ func newUIHandler(csrf *web.CSRF, p uiPages) http.Handler {
 		mux.Handle("GET /{$}", root)
 	}
 	mux.Handle("/", http.NotFoundHandler())
-	h := web.RequireDevops(csrf.Protect(mux))
+	h := web.RequireGroup(p.AdminGroup, csrf.Protect(mux))
 	// The maintenance band on every Headscale tab (F3b-020 AC4): the reader is bound once here.
 	if p.Maintenance != nil {
 		h = web.WithMaintenanceBanner(p.Maintenance, h)
