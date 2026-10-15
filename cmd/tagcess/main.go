@@ -687,9 +687,15 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// The admin group the middleware enforces moves only after the Caddy gate carries it too (issue #3).
+	adminState := web.NewAdminGroupState(func(ctx context.Context) (string, error) {
+		c, _, err := policydoc.LoadLocked(ctx, st.Queries(), webhookPort)
+		return c.AdminGroup(), err
+	})
 	hsSettings, err := web.NewHSSettingsHandler(web.HSSettingsConfig{
 		Store: st.Queries(), Policy: hs, Checker: hs, Auditor: auditor,
 		WebhookPort: webhookPort, DryRun: st, CSRF: csrf,
+		AdminApply: sitePipeline, AdminState: adminState,
 	})
 	if err != nil {
 		return err
@@ -709,10 +715,7 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	rerunLoops := f4s.loops.Trigger
 	siteApplied.Store(&rerunLoops)
 	pages := uiPages{
-		AdminGroup: func(ctx context.Context) (string, error) {
-			c, _, err := policydoc.LoadLocked(ctx, st.Queries(), webhookPortNum)
-			return c.AdminGroup(), err
-		},
+		AdminGroup:    adminState.Current,
 		Audit:         auditPage,
 		Sync:          syncPage,
 		Sites:         sitesPage,

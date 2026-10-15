@@ -405,6 +405,23 @@ func (s *SitePipeline) Submit(ctx context.Context, req SiteRequest) (SiteResult,
 	return s.submitLocked(ctx, req)
 }
 
+// ResyncLocked applies a resync for a caller that already holds the writer lock (WithWriterLock):
+// the admin-group change stores its setting under that lock and must apply before releasing it. A
+// pending first import is refused, so a settings save never becomes the first import.
+func (s *SitePipeline) ResyncLocked(ctx context.Context, actor string) (SiteResult, error) {
+	if err := validateActor(actor); err != nil {
+		return SiteResult{}, err
+	}
+	pending, err := s.sites.FirstImportPending(ctx)
+	if err != nil {
+		return SiteResult{}, fmt.Errorf("change: read first-import state: %w", err)
+	}
+	if pending {
+		return SiteResult{}, errors.New("ilk site import tamamlanmadı; önce seed apply edilmeli")
+	}
+	return s.submitLocked(ctx, SiteRequest{Actor: actor, Op: SiteResync})
+}
+
 // FirstImport is the G-01 first import: it loads the seed (adds only, idempotent), then re-applies
 // the stored records over today's artifacts. The first apply is held back by the parity gate until
 // the generated Caddyfile is equivalent to today's file, and the gate is closed only after that

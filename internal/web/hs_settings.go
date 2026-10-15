@@ -63,8 +63,19 @@ type HSSettingsConfig struct {
 	WebhookPort int
 	DryRun      change.DryRun
 	CSRF        *CSRF
+	// AdminApply and AdminState make an admin-group change (DevopsGroup) one operation: the new
+	// group reaches the Caddy gate and is validated before the middleware switches (issue #3).
+	// Both are required for such a change; without them it is refused.
+	AdminApply AdminGroupApplier
+	AdminState *AdminGroupState
 	// Now stamps the stored value; it defaults to time.Now.
 	Now func() time.Time
+}
+
+// AdminGroupApplier applies the Caddy system site with the stored admin group. The caller holds the
+// writer lock. *change.SitePipeline satisfies it.
+type AdminGroupApplier interface {
+	ResyncLocked(ctx context.Context, actor string) (change.SiteResult, error)
 }
 
 // HSSettingsHandler serves the settings screen.
@@ -461,10 +472,43 @@ func (h *HSSettingsHandler) applyLocked(ctx context.Context, actor string, field
 		}}
 	}
 
+	adminChanged := cur.AdminGroup() != next.AdminGroup()
+	if adminChanged {
+		// The new group must pass both gates before it takes effect, and the saving admin must
+		// still get in afterwards, or nobody could reach the UI to undo it (S-05, hard rule 7).
+		switch me, _ := ActorFrom(ctx); {
+		case h.cfg.AdminApply == nil || h.cfg.AdminState == nil:
+			return fail(http.StatusServiceUnavailable, "yönetici grubu değişikliği Caddy'ye apply edilemiyor (site pipeline bağlı değil); değişiklik yapılmadı")
+		case !me.HasGroup(next.AdminGroup()):
+			return fail(http.StatusForbidden, "yeni yönetici grubuna ("+next.AdminGroup()+") siz de üye değilsiniz; kendinizi kilitleyeceğiniz için kaydedilmedi")
+		}
+		if on, err := h.cfg.DryRun.DryRun(ctx); err != nil || on {
+			return fail(http.StatusConflict, "dry-run açıkken veya okunamazken yönetici grubu değiştirilemez; Caddy'ye apply edilemez")
+		}
+		h.cfg.AdminState.Pin(cur.AdminGroup()) // the middleware keeps the old group until the apply succeeds
+	}
+
 	if status, msg := h.store(ctx, actor, hsLockedEvent, policydoc.LockedTestsKey, curRaw, nextRaw); msg != "" {
 		o := refuse(status, "%s", msg)
 		o.form = &fields
 		return o
+	}
+	if adminChanged {
+		res, err := h.cfg.AdminApply.ResyncLocked(ctx, actor)
+		if err != nil || (res.Status != change.StatusApplied && res.Status != change.StatusNoChange) {
+			why := res.Status
+			if err != nil {
+				why = err.Error()
+			}
+			// Keep the last good group everywhere: the stored value goes back, the middleware never moved.
+			note := "eski yönetici grubu korundu"
+			if status, msg := h.store(ctx, actor, hsLockedEvent, policydoc.LockedTestsKey, nextRaw, curRaw); msg != "" {
+				note = fmt.Sprintf("kayıtlı ayar eski değerine döndürülemedi (%d: %s); kontrol edin", status, msg)
+			}
+			return fail(http.StatusBadGateway, "yeni yönetici grubu Caddy'ye apply edilemedi ("+why+"); "+note)
+		}
+		h.cfg.AdminState.Set(next.AdminGroup())
+		return outcome{status: http.StatusOK, notice: "kilitli test parametreleri kaydedildi; yönetici grubu Caddy'de ve arayüzde etkin; yeni testler bir sonraki policy kaydında enjekte edilir"}
 	}
 	return outcome{status: http.StatusOK, notice: "kilitli test parametreleri kaydedildi; yeni testler bir sonraki policy kaydında enjekte edilir"}
 }

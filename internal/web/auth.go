@@ -27,6 +27,48 @@ const devopsGroup = "devops"
 // changed setting applies without a restart.
 type AdminGroupSource func(ctx context.Context) (string, error)
 
+// AdminGroupState is the admin group the UI middleware enforces right now. A group change moves it
+// only after the generated Caddy gate carries the same group (hs_settings), so the two gates never
+// disagree; until then the previous group stays in force. Until set it loads from load once.
+type AdminGroupState struct {
+	mu    sync.Mutex
+	group string
+	load  AdminGroupSource
+}
+
+// NewAdminGroupState returns a state whose first value comes from load (the stored setting).
+func NewAdminGroupState(load AdminGroupSource) *AdminGroupState { return &AdminGroupState{load: load} }
+
+// Current is the effective group; an unreadable first load returns the error and stays unset.
+func (s *AdminGroupState) Current(ctx context.Context) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.group == "" && s.load != nil {
+		g, err := s.load(ctx)
+		if err != nil {
+			return "", err
+		}
+		s.group = g
+	}
+	return s.group, nil
+}
+
+// Set makes g the effective group.
+func (s *AdminGroupState) Set(g string) {
+	s.mu.Lock()
+	s.group = g
+	s.mu.Unlock()
+}
+
+// Pin fixes g as the effective group unless one is already in force.
+func (s *AdminGroupState) Pin(g string) {
+	s.mu.Lock()
+	if s.group == "" {
+		s.group = g
+	}
+	s.mu.Unlock()
+}
+
 // Actor is the authenticated devops user bound to a request by RequireDevops.
 type Actor struct {
 	User   string
