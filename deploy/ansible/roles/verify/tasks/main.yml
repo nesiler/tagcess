@@ -1,4 +1,4 @@
-# verify (F6-008): one read-only report: services, ui.sock mode, a header-less socket request (403), an unsigned hook
+# verify (F6-008): one read-only report: services, ui.sock mode, a header-less socket request (403), the header-less /healthz (200), an unsigned hook
 # POST (401), the UI from a non-tailnet source (403), oauth2-proxy /ping, the first-import parity (tagcess
 # -import-preview; the one accepted difference is s06_open_start, developer decision 2026-10-07, and it is shown as a
 # prominent warning, never silently), the users without a vpn role (information only) and every phase's
@@ -93,6 +93,7 @@
             'detail': 'started=' ~ p.tagcess_started ~ ' errors=' ~ p.tagcess_errors}) -%}
         {%- set _ = c.append({'name': 'ui.sock srw-rw---- 10001 caddy', 'ok': p.sock == 'srw-rw---- ' ~ tagcess_uid ~ ' caddy', 'detail': p.sock or 'yok'}) -%}
         {%- set _ = c.append({'name': 'Başlıksız soket isteği 403', 'ok': p.sock_code == '403', 'detail': p.sock_code}) -%}
+        {%- set _ = c.append({'name': 'Soket /healthz 200 (başlıksız)', 'ok': p.healthz_code == '200', 'detail': p.healthz_code}) -%}
         {%- set _ = c.append({'name': 'İmzasız hook POST 401', 'ok': p.hook_code == '401', 'detail': p.hook_code}) -%}
         {%- set _ = c.append({'name': 'Tailnet dışı kaynaktan arayüz 403 (host loopback)', 'ok': p.ui_code == '403', 'detail': p.ui_code}) -%}
         {%- set _ = c.append({'name': 'oauth2-proxy /ping 200', 'ok': p.ping_code == '200', 'detail': p.ping_code}) -%}

@@ -12,12 +12,13 @@ verify_probe_cmd: |
   tagcess_errors=$(docker logs --since "$(docker inspect -f '{{ '{{' }}.State.StartedAt{{ '}}' }}' tagcess)" tagcess 2>&1 | grep -c 'level=ERROR')
   sock=$(stat -c '%A %u %G' /run/tagcess/ui.sock 2>/dev/null)
   sock_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 --unix-socket /run/tagcess/ui.sock http://tagcess/ 2>/dev/null)
+  healthz_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 --unix-socket /run/tagcess/ui.sock http://tagcess/healthz 2>/dev/null)
   hook_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X POST -H 'Content-Type: application/json' -d '{}' http://{{ vpn_tailnet_ip_effective | default('') }}:{{ headscale_hook_port }}/hook 2>/dev/null)
   ui_code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 --resolve {{ tagcess_host }}:443:127.0.0.1 https://{{ tagcess_host }}/ 2>/dev/null)
   ping_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 {{ oauth2_proxy_ping_url }} 2>/dev/null)
   hs=$(systemctl is-active headscale 2>/dev/null); caddy=$(systemctl is-active caddy 2>/dev/null)
-  printf '{"tagcess_started": %s, "tagcess_errors": %s, "sock": "%s", "sock_code": "%s", "hook_code": "%s", "ui_code": "%s", "ping_code": "%s", "headscale": "%s", "caddy": "%s"}\n' \
-    "${tagcess_started:-0}" "${tagcess_errors:-0}" "$sock" "$sock_code" "$hook_code" "$ui_code" "$ping_code" "$hs" "$caddy"
+  printf '{"tagcess_started": %s, "tagcess_errors": %s, "sock": "%s", "sock_code": "%s", "healthz_code": "%s", "hook_code": "%s", "ui_code": "%s", "ping_code": "%s", "headscale": "%s", "caddy": "%s"}\n' \
+    "${tagcess_started:-0}" "${tagcess_errors:-0}" "$sock" "$sock_code" "$healthz_code" "$hook_code" "$ui_code" "$ping_code" "$hs" "$caddy"
 verify_preview_cmd: >-
   docker run --rm --network host -v {{ app_config_path | default('/etc/tagcess/config.yaml') }}:/etc/tagcess/config.yaml:ro
   -v /var/lib/tagcess:/var/lib/tagcess:ro -v {{ caddy_dir }}:{{ caddy_dir }}:ro

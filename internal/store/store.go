@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/url"
+	"os"
 	"strconv"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver
@@ -82,6 +83,29 @@ func OpenDB(ctx context.Context, path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
 	return sqldb, nil
+}
+
+// CheckReadable is the liveness read: the database file must still exist at its path (an unlinked
+// file stays readable through the open handle) and PRAGMA quick_check on a fresh connection must
+// report "ok". The caller bounds it with ctx.
+func (s *Store) CheckReadable(ctx context.Context) error {
+	if _, err := os.Stat(s.path); err != nil {
+		return fmt.Errorf("store: database file: %w", err)
+	}
+	// A fresh handle: the pooled connections keep cached pages and never notice a rewritten file.
+	probe, err := OpenDB(ctx, s.path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = probe.Close() }()
+	var res string
+	if err := probe.QueryRowContext(ctx, "PRAGMA quick_check(1)").Scan(&res); err != nil {
+		return fmt.Errorf("store: quick_check: %w", err)
+	}
+	if res != "ok" {
+		return fmt.Errorf("store: quick_check: %s", res)
+	}
+	return nil
 }
 
 // Close closes the underlying database.
