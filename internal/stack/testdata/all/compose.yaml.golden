@@ -18,6 +18,7 @@ services:
     volumes:
       - "/etc/caddy:/etc/caddy:ro"
       - "/var/lib/tagcess-stack/caddy/data:/data"
+      - "/run/tagcess:/run/tagcess"
     healthcheck:
       test: ["CMD", "caddy", "version"]
       interval: 10s
@@ -37,8 +38,10 @@ services:
       - /tmp
     group_add:
       - "992"
+    command: ["serve"]
     volumes:
       - "/etc/tagcess/stack/headscale:/etc/headscale:ro"
+      - "/etc/tagcess/stack/secrets/headscale:/etc/headscale/secrets:ro"
       - "/var/lib/headscale:/var/lib/headscale"
       - "/var/run/headscale:/var/run/headscale"
       - "/var/lib/tagcess-dns:/var/lib/tagcess-dns:ro"
@@ -76,7 +79,7 @@ services:
       - "/etc/tagcess/config.yaml:/etc/tagcess/config.yaml:ro"
       - "/etc/tagcess/secrets:/etc/tagcess/secrets:ro"
     healthcheck:
-      test: ["CMD", "/tagcess", "-healthcheck"]
+      test: ["CMD", "/usr/local/bin/tagcess", "-config", "/etc/tagcess/config.yaml", "-check"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -90,6 +93,7 @@ services:
       - ALL
     security_opt:
       - "no-new-privileges:true"
+    command: ["--config=/etc/oauth2-proxy/oauth2-proxy.cfg"]
     volumes:
       - "/etc/tagcess/stack/oauth2-proxy:/etc/oauth2-proxy:ro"
       - "/etc/tagcess/stack/secrets/oauth2-proxy:/run/secrets/oauth2-proxy:ro"

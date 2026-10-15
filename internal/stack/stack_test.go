@@ -69,8 +69,12 @@ func TestRender_Golden(t *testing.T) {
 				}
 				g := filepath.Join("testdata", name, filepath.FromSlash(path)+".golden")
 				if *update {
-					os.MkdirAll(filepath.Dir(g), 0o755)
-					os.WriteFile(g, b, 0o644)
+					if err := os.MkdirAll(filepath.Dir(g), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(g, b, 0o644); err != nil {
+						t.Fatal(err)
+					}
 				}
 				want, err := os.ReadFile(g)
 				if err != nil {
@@ -178,7 +182,7 @@ func TestManifest_Validate(t *testing.T) {
 }
 
 func TestEmbeddedManifest_EveryServicePinned(t *testing.T) {
-	m, err := Load(manifestJSONForTest(t))
+	m, err := Load(manifestJSONForTest(t), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +219,7 @@ func TestTagcessBinaryHasNoManifest(t *testing.T) {
 		t.Skip("go tool not available")
 	}
 	for _, cmd := range []string{"./cmd/tagcess", "./cmd/tagcess-ui"} {
-		c := exec.Command("go", "list", "-deps", cmd)
+		c := exec.CommandContext(t.Context(), "go", "list", "-deps", cmd)
 		c.Dir = "../.."
 		out, err := c.CombinedOutput()
 		if err != nil {
@@ -226,5 +230,53 @@ func TestTagcessBinaryHasNoManifest(t *testing.T) {
 				t.Errorf("%s depends on %s", cmd, line)
 			}
 		}
+	}
+}
+
+func TestLoad_RejectsPlaceholderDigest(t *testing.T) {
+	b := manifestJSONForTest(t)
+	if _, err := Load(b, false); err == nil || !strings.Contains(err.Error(), "placeholder") {
+		t.Fatalf("Load without allow: err = %v", err)
+	}
+	m, err := Load(b, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.AllowPlaceholder = false
+	if _, err := Render(baseParams(), m); err == nil {
+		t.Fatal("Render accepted the placeholder digest")
+	}
+	m.AllowPlaceholder = true
+	if _, err := Render(baseParams(), m); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRender_RuntimeWiring(t *testing.T) {
+	files, err := Render(baseParams(), testManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := string(files["compose.yaml"])
+	for _, want := range []string{
+		`command: ["serve"]`,
+		`command: ["--config=/etc/oauth2-proxy/oauth2-proxy.cfg"]`,
+		`/etc/tagcess/stack/secrets/headscale:/etc/headscale/secrets:ro`,
+		`"/run/tagcess:/run/tagcess"`,
+		`["CMD", "/usr/local/bin/tagcess", "-config", "/etc/tagcess/config.yaml", "-check"]`,
+	} {
+		if !strings.Contains(c, want) {
+			t.Errorf("compose.yaml lacks %s", want)
+		}
+	}
+	if strings.Contains(string(files["oauth2-proxy/oauth2-proxy.cfg"]), "allowed_groups") {
+		t.Error("oauth2-proxy config sets a global allowed_groups")
+	}
+	df, err := os.ReadFile("../../deploy/Dockerfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(df), tagcessBinary) {
+		t.Errorf("Dockerfile does not install %s", tagcessBinary)
 	}
 }

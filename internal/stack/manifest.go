@@ -61,17 +61,26 @@ func (i Image) Ref() string { return i.Name + ":" + i.Tag + "@" + i.Digest }
 type Manifest struct {
 	Release string              `json:"release"`
 	Images  map[Component]Image `json:"images"`
+	// AllowPlaceholder accepts the all-zero digest that a dev build carries until the release flow stamps the real
+	// one (#18). Tests and development only; never set by a helper that installs a server.
+	AllowPlaceholder bool `json:"-"`
 }
+
+// placeholderDigest is the unstamped digest of a dev manifest; it can never be pulled.
+const placeholderDigest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 // Load parses and validates a manifest: unknown fields and components are errors, and every component must be
 // present.
-func Load(b []byte) (Manifest, error) {
+//
+// The placeholder digest is rejected unless allowPlaceholder is set (tests and dev builds only).
+func Load(b []byte, allowPlaceholder bool) (Manifest, error) {
 	var m Manifest
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&m); err != nil {
 		return Manifest{}, fmt.Errorf("manifest: %w", err)
 	}
+	m.AllowPlaceholder = allowPlaceholder
 	if err := m.Validate(); err != nil {
 		return Manifest{}, err
 	}
@@ -92,6 +101,9 @@ func (m Manifest) Validate() error {
 		}
 		if err := img.Validate(); err != nil {
 			return fmt.Errorf("manifest: %s: %w", c, err)
+		}
+		if img.Digest == placeholderDigest && !m.AllowPlaceholder {
+			return fmt.Errorf("manifest: %s: digest is the unstamped placeholder; the release build must set it", c)
 		}
 	}
 	var extra []string

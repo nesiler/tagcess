@@ -16,6 +16,9 @@ const (
 	proxyDir     = stackDir + "/oauth2-proxy"
 )
 
+// tagcessBinary is where deploy/Dockerfile installs the binary.
+const tagcessBinary = "/usr/local/bin/tagcess"
+
 // Files maps a path relative to /etc/tagcess/stack to its content.
 type Files map[string][]byte
 
@@ -57,6 +60,9 @@ func compose(p Params, m Manifest) string {
 		for _, line := range svc.extra {
 			b.WriteString("    " + line + "\n")
 		}
+		if len(svc.command) > 0 {
+			b.WriteString("    command: [" + strings.Join(quoteAll(svc.command), ", ") + "]\n")
+		}
 		if deps := svc.dependsOn(p); len(deps) > 0 {
 			b.WriteString("    depends_on:\n")
 			for _, d := range deps {
@@ -87,6 +93,7 @@ type svcDef struct {
 	extra   []string
 	volumes []string
 	health  []string
+	command []string
 	deps    []Component
 }
 
@@ -115,7 +122,7 @@ func service(c Component, p Params) svcDef {
 	case Caddy:
 		return svcDef{
 			extra:   append(append([]string{}, hardening...), "tmpfs:", "  - /tmp", "cap_add:", "  - NET_BIND_SERVICE"),
-			volumes: []string{"/etc/caddy:/etc/caddy:ro", stackState + "/caddy/data:/data"},
+			volumes: []string{"/etc/caddy:/etc/caddy:ro", stackState + "/caddy/data:/data", "/run/tagcess:/run/tagcess"},
 			health:  []string{"CMD", "caddy", "version"},
 		}
 	case Headscale:
@@ -123,9 +130,11 @@ func service(c Component, p Params) svcDef {
 		extra = append(extra, "tmpfs:", "  - /tmp")
 		extra = append(extra, gids(p.SocketGID)...)
 		return svcDef{
-			extra: extra,
+			extra:   extra,
+			command: []string{"serve"},
 			volumes: []string{
 				headscaleDir + ":/etc/headscale:ro",
+				secretsDir + "/headscale:/etc/headscale/secrets:ro",
 				"/var/lib/headscale:/var/lib/headscale",
 				"/var/run/headscale:/var/run/headscale",
 				"/var/lib/tagcess-dns:/var/lib/tagcess-dns:ro",
@@ -146,12 +155,13 @@ func service(c Component, p Params) svcDef {
 				"/etc/tagcess/config.yaml:/etc/tagcess/config.yaml:ro",
 				"/etc/tagcess/secrets:/etc/tagcess/secrets:ro",
 			},
-			health: []string{"CMD", "/tagcess", "-healthcheck"},
+			health: []string{"CMD", tagcessBinary, "-config", "/etc/tagcess/config.yaml", "-check"},
 			deps:   []Component{Headscale, Caddy},
 		}
 	case OAuth2Proxy:
 		return svcDef{
-			extra: hardening,
+			extra:   hardening,
+			command: []string{"--config=/etc/oauth2-proxy/oauth2-proxy.cfg"},
 			volumes: []string{
 				proxyDir + ":/etc/oauth2-proxy:ro",
 				secretsDir + "/oauth2-proxy:/run/secrets/oauth2-proxy:ro",
@@ -216,7 +226,8 @@ func oauth2ProxyConfig(p Params) string {
 	w("redirect_url = %s", q("https://"+p.ProxyHost+"/oauth2/callback"))
 	w("code_challenge_method = \"S256\"")
 	w("email_domains = [\"*\"]")
-	w("allowed_groups = [%s]", q(p.AdminGroup))
+	// No global allowed_groups: it would lock out every user who is not an admin from all protected sites. The
+	// admin restriction belongs to the tagcess UI gate (a per-site allowed_groups query), the sites keep theirs.
 	w("reverse_proxy = true")
 	w("set_xauthrequest = true")
 	w("upstreams = [\"static://202\"]")

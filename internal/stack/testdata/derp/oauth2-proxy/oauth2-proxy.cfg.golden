@@ -11,7 +11,6 @@ cookie_refresh = "0"
 redirect_url = "https://auth.example.com/oauth2/callback"
 code_challenge_method = "S256"
 email_domains = ["*"]
-allowed_groups = ["admins"]
 reverse_proxy = true
 set_xauthrequest = true
 upstreams = ["static://202"]

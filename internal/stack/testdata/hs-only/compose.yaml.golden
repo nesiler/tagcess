@@ -15,8 +15,10 @@ services:
       - /tmp
     group_add:
       - "992"
+    command: ["serve"]
     volumes:
       - "/etc/tagcess/stack/headscale:/etc/headscale:ro"
+      - "/etc/tagcess/stack/secrets/headscale:/etc/headscale/secrets:ro"
       - "/var/lib/headscale:/var/lib/headscale"
       - "/var/run/headscale:/var/run/headscale"
       - "/var/lib/tagcess-dns:/var/lib/tagcess-dns:ro"
