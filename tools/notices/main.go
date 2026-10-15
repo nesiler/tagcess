@@ -328,17 +328,6 @@ func containsAny(text string, subs []string) bool {
 	return false
 }
 
-// jsLicences maps the npm packages bundled into internal/web/static/editor.js to their
-// licence. A package that is not listed fails the check, so a new editor dependency must
-// be classified before it can ship.
-var jsLicences = map[string]string{
-	"@codemirror/commands": "MIT",
-	"@codemirror/language": "MIT",
-	"@codemirror/state":    "MIT",
-	"@codemirror/view":     "MIT",
-	"@lezer/highlight":     "MIT",
-}
-
 // htmx is vendored directly as internal/web/static/htmx.min.js. Keep the version in sync
 // with internal/web/static/README.md when the file is updated.
 var embeddedHTMX = component{
@@ -349,29 +338,40 @@ var embeddedHTMX = component{
 }
 
 // embeddedAssets lists the JavaScript libraries bundled into the embedded web assets: htmx
-// and the CodeMirror/Lezer packages the editor build (tools/editor/build.sh) packs into
-// editor.js. esbuild only builds the bundle, so it does not ship.
+// and every non-dev package in tools/editor/package-lock.json (the CodeMirror/Lezer
+// packages and their transitive dependencies, which esbuild packs into editor.js). Dev
+// packages (esbuild and its platform binaries) only build the bundle, so they do not ship.
+// The licence comes from the lockfile; a package without one fails the check.
 func embeddedAssets(root string) ([]component, error) {
 	assets := []component{embeddedHTMX}
-	data, err := os.ReadFile(filepath.Join(root, "tools", "editor", "package.json")) // #nosec G304 -- a fixed repo path
+	data, err := os.ReadFile(filepath.Join(root, "tools", "editor", "package-lock.json")) // #nosec G304 -- a fixed repo path
 	if err != nil {
 		return nil, err
 	}
-	var pkg struct {
-		Dependencies map[string]string `json:"dependencies"`
+	var lock struct {
+		Packages map[string]struct {
+			Version string `json:"version"`
+			License string `json:"license"`
+			Dev     bool   `json:"dev"`
+		} `json:"packages"`
 	}
-	if err := json.Unmarshal(data, &pkg); err != nil {
-		return nil, fmt.Errorf("parse tools/editor/package.json: %w", err)
+	if err := json.Unmarshal(data, &lock); err != nil {
+		return nil, fmt.Errorf("parse tools/editor/package-lock.json: %w", err)
 	}
-	for name, version := range pkg.Dependencies {
-		licence, ok := jsLicences[name]
-		if !ok {
-			return nil, fmt.Errorf("no licence recorded for editor dependency %s; add it to jsLicences", name)
+	const marker = "node_modules/"
+	for path, pkg := range lock.Packages {
+		i := strings.LastIndex(path, marker)
+		if i < 0 || pkg.Dev {
+			continue // the root project entry, or a build-only package
+		}
+		name := path[i+len(marker):]
+		if pkg.License == "" {
+			return nil, fmt.Errorf("package-lock.json records no licence for editor dependency %s", name)
 		}
 		assets = append(assets, component{
 			name:    name,
-			version: version,
-			licence: licence,
+			version: pkg.Version,
+			licence: pkg.License,
 			source:  "https://www.npmjs.com/package/" + name,
 		})
 	}

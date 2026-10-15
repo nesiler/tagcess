@@ -68,5 +68,11 @@ Embedded JavaScript
 | `@codemirror/language` | 6.12.4 | MIT | https://www.npmjs.com/package/@codemirror/language |
 | `@codemirror/state` | 6.7.6 | MIT | https://www.npmjs.com/package/@codemirror/state |
 | `@codemirror/view` | 6.43.13 | MIT | https://www.npmjs.com/package/@codemirror/view |
+| `@lezer/common` | 1.5.3 | MIT | https://www.npmjs.com/package/@lezer/common |
 | `@lezer/highlight` | 1.2.5 | MIT | https://www.npmjs.com/package/@lezer/highlight |
+| `@lezer/lr` | 1.4.10 | MIT | https://www.npmjs.com/package/@lezer/lr |
+| `@marijn/find-cluster-break` | 1.0.4 | MIT | https://www.npmjs.com/package/@marijn/find-cluster-break |
+| `crelt` | 1.0.7 | MIT | https://www.npmjs.com/package/crelt |
 | `htmx` | 2.0.11 | 0BSD | https://unpkg.com/htmx.org@2.0.11/dist/htmx.min.js |
+| `style-mod` | 4.1.4 | MIT | https://www.npmjs.com/package/style-mod |
+| `w3c-keyname` | 2.2.8 | MIT | https://www.npmjs.com/package/w3c-keyname |

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -306,5 +307,47 @@ func TestGenerateListsShippedComponents(t *testing.T) {
 	// The `go tool` dependencies do not ship in a binary, so they must not be listed.
 	if strings.Contains(string(content), "github.com/sqlc-dev/sqlc") {
 		t.Errorf("%s lists sqlc, which is a build tool and does not ship", noticesFile)
+	}
+}
+
+// TestGenerateListsEveryBundledJSPackage guards the transitive npm packages: every non-dev
+// entry of the editor lockfile ships inside editor.js, so each must appear in the file.
+func TestGenerateListsEveryBundledJSPackage(t *testing.T) {
+	root, err := repoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "tools", "editor", "package-lock.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lock struct {
+		Packages map[string]struct {
+			Dev bool `json:"dev"`
+		} `json:"packages"`
+	}
+	if err := json.Unmarshal(raw, &lock); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(root, noticesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	shipped := 0
+	for path, pkg := range lock.Packages {
+		_, name, found := strings.Cut(path, "node_modules/")
+		if !found || pkg.Dev {
+			continue
+		}
+		shipped++
+		if !strings.Contains(string(content), "| `"+name+"` |") {
+			t.Errorf("%s does not list bundled package %s", noticesFile, name)
+		}
+	}
+	if shipped < 10 {
+		t.Errorf("found only %d bundled packages in the lockfile; the test is not reading it correctly", shipped)
+	}
+	if strings.Contains(string(content), "`esbuild`") || strings.Contains(string(content), "`@esbuild/") {
+		t.Errorf("%s lists esbuild, which is a build tool and does not ship", noticesFile)
 	}
 }
