@@ -35,6 +35,8 @@ RUN test -n "${CADDY_GID}" && test -n "${HEADSCALE_GID}" \
  && chown tagcess:tagcess /var/lib/tagcess /run/tagcess \
  && chmod 0750 /var/lib/tagcess /run/tagcess
 COPY --from=build /out/tagcess /usr/local/bin/tagcess
+# Licence notices for the dependencies that ship in the binary (issue #12).
+COPY THIRD_PARTY_NOTICES /usr/share/doc/tagcess/THIRD_PARTY_NOTICES
 USER tagcess
 ENTRYPOINT ["/usr/local/bin/tagcess"]
 CMD ["-config", "/etc/tagcess/config.yaml"]

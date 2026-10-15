@@ -56,6 +56,17 @@ jobs:
       # templ and sqlc are `go tool` dependencies pinned in go.mod.
       - run: make generate-check
 
+  notices:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      # Fails on a stale THIRD_PARTY_NOTICES or a dependency licensed off the allowlist.
+      - run: make notices-check notices-test
+
   govulncheck:
     runs-on: ubuntu-latest
     steps:

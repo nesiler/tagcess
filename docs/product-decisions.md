@@ -53,8 +53,11 @@ Labels: **[Decided]** the developer's decision, **[Proposed]** a proposal (not y
 - **[Decided]** All features are free for now. This may change in the future.
 - **[Proposed]** Zitadel is not embedded in the tagcess package; compose refers to the official image. (Reason: Zitadel is AGPL; distributing
   a modified version creates a source obligation. Talking over the API does not; this is an inference, not legal advice.)
-- **[Proposed]** Before release: `THIRD_PARTY_NOTICES` (dependencies are permissive; confirmed with a `go-licenses` scan)
-  and a note in the README "not affiliated with Tailscale Inc.".
+- **[Decided 2026-10-15]** The licence allowlist for shipped dependencies is **MIT, BSD-2-Clause, BSD-3-Clause,
+  Apache-2.0, ISC, 0BSD, Unlicense and OFL-1.1**; anything else fails CI. `THIRD_PARTY_NOTICES` lists every Go
+  module reachable from `./cmd/...` and every embedded JS library with its licence, and CI fails when it is
+  stale (`make notices`, `make notices-check`; issue #12). The check covers only what ships in the binary.
+- **[Proposed]** Before release: a note in the README "not affiliated with Tailscale Inc.".
 - **[Decided 2026-10-14]** No trademark search and no legal review now. The priority is a usable product.
 
 ## 6. Repository
