@@ -62,7 +62,8 @@ hs_k8s_tag: tag:k8s             # the k8s node's tag
 # --- oauth2-proxy -------------------------------------------------------------------------------------
 oauth2_proxy_runtime: container        # container (lab/fresh) | systemd (existing binary)
 oauth2_proxy_dir: /etc/oauth2-proxy
-oauth2_proxy_ping_url: http://127.0.0.1:4180/ping
+oauth2_proxy_http_address: 127.0.0.1:4180   # the one auth-proxy address: ping URL, UI block and gate.upstream derive from it
+oauth2_proxy_ping_url: "http://{{ oauth2_proxy_http_address }}/ping"
 
 # --- Zitadel ------------------------------------------------------------------------------------------
 zitadel_install_enabled: false         # fresh/lab only (F6-012); never in an existing installation

@@ -248,6 +248,11 @@ The tagcess container keeps the mounts below in both layouts.
 
 ### 8.1 oauth2-proxy gate cookie
 The operator configures oauth2-proxy; tagcess neither produces nor reads this file. The recommended settings are in
+
+**Gate address.** The generated Caddyfile reaches oauth2-proxy (`reverse_proxy` for `/oauth2/*`, `forward_auth` for the
+role check, in the snippets and the tagcess block) at `gate.upstream` (host:port). Unset keeps `127.0.0.1:4180`, and the
+output is byte-identical to before. An invalid value fails config validation and the render. The installer writes
+`oauth2_proxy_http_address` into `gate.upstream` when it differs from the default.
 `deploy/oauth2-proxy.example.cfg`:
 - **Single cookie:** `cookie_domains` = the parent domain of the `sites.allowed_domains` entries (with a leading dot, for example `.example.com`).
   When the browser signs in on one site, it passes on all sites.

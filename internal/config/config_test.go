@@ -427,3 +427,25 @@ func TestConfig_GateClientID(t *testing.T) {
 		t.Errorf("client_id without tagcess_host: %v", err)
 	}
 }
+
+// TestConfig_GateUpstream is AC3 of issue #5: gate.upstream is optional and must be host:port.
+func TestConfig_GateUpstream(t *testing.T) {
+	line := "sync:\n"
+	with := func(v string) string {
+		return strings.Replace(validYAML, line, "gate:\n  upstream: \""+v+"\"\n"+line, 1)
+	}
+	if c, err := parse(t, validYAML); err != nil || c.Gate.Upstream != "" {
+		t.Fatalf("default: %v %+v", err, c)
+	}
+	for _, ok := range []string{"127.0.0.1:4181", "oauth2-proxy:4180", "[::1]:4180"} {
+		c, err := parse(t, with(ok))
+		if err != nil || c.Gate.Upstream != ok {
+			t.Errorf("%q: %v %+v", ok, err, c)
+		}
+	}
+	for _, bad := range []string{"nohost", "host:", ":4180", "host:0", "host:70000", "host:abc", "a b:1", "http://h:1", "h:1/x", "h:1 {", "::1:4180"} {
+		if _, err := parse(t, with(bad)); err == nil || !strings.Contains(err.Error(), "gate.upstream") {
+			t.Errorf("%q accepted or wrong error: %v", bad, err)
+		}
+	}
+}

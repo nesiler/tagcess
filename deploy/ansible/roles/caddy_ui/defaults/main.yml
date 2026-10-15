@@ -4,6 +4,7 @@
 caddy_ui_sites_dir: "{{ caddy_sites_dir or (caddy_dir ~ '/sites') }}"
 caddy_ui_file: "{{ caddy_ui_sites_dir }}/tagcess.caddy"
 caddy_ui_reference_host: tagcess.example.com
+caddy_ui_reference_upstream: 127.0.0.1:4180   # the reference text's auth-proxy address; replaced by oauth2_proxy_http_address
 # The certbot certificate that covers tagcess_host, by the renderer's cert:auto rule (internal/render caddyCert: the
 # longest name in cert_names that is the host or its direct parent, as a wildcard covers one label only; ties go to
 # the smaller name). The block gets that

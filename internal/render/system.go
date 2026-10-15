@@ -34,15 +34,17 @@ var validAdminGroup = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 // brace. With them it is byte-identical to deploy/caddy/tagcess.caddy (the F1 reference snippet); TestSystemSite_TagcessGolden
 // compares the two. Only devops reaches the UI, only from the tailnet, and the client's own
 // identity headers are stripped before forward_auth (security.md §3.1, S-05.2).
-func caddyTagcessBody(adminGroup string) string {
-	return caddyTagcessHead + adminGroup + caddyTagcessTail
+func caddyTagcessBody(adminGroup, gate string) string {
+	return caddyTagcessHead1 + gate + caddyTagcessHead2 + gate + caddyTagcessHead3 + adminGroup + caddyTagcessTail
 }
 
-const caddyTagcessHead = "\t@tailnet remote_ip 100.64.0.0/10\n" +
+const caddyTagcessHead1 = "\t@tailnet remote_ip 100.64.0.0/10\n" +
 	"\thandle @tailnet {\n" +
 	"\t\t# oauth2-proxy's login endpoints (start/callback) must reach oauth2-proxy itself.\n" +
 	"\t\thandle /oauth2/* {\n" +
-	"\t\t\treverse_proxy 127.0.0.1:4180\n" +
+	"\t\t\treverse_proxy "
+
+const caddyTagcessHead2 = "\n" +
 	"\t\t}\n" +
 	"\n" +
 	"\t\t# Strip the client's own X-Auth-Request-* headers before forward_auth, so the only source of\n" +
@@ -51,7 +53,9 @@ const caddyTagcessHead = "\t@tailnet remote_ip 100.64.0.0/10\n" +
 	"\t\t\trequest_header -X-Auth-Request-User\n" +
 	"\t\t\trequest_header -X-Auth-Request-Email\n" +
 	"\t\t\trequest_header -X-Auth-Request-Groups\n" +
-	"\t\t\tforward_auth 127.0.0.1:4180 {\n" +
+	"\t\t\tforward_auth "
+
+const caddyTagcessHead3 = " {\n" +
 	"\t\t\t\turi /oauth2/auth?allowed_groups="
 
 const caddyTagcessTail = "\n" +
@@ -124,7 +128,11 @@ func renderCaddySystemSite(s site.Site, cfg CaddyConfig) (string, error) {
 		if !validAdminGroup.MatchString(admin) {
 			return "", fmt.Errorf("admin group %q: allowed characters are A-Z a-z 0-9 . _ -", admin)
 		}
-		b.WriteString(caddyTagcessBody(admin))
+		gate, err := cfg.gateUpstream()
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(caddyTagcessBody(admin, gate))
 		b.WriteString("}\n")
 
 	case site.TemplateHeadscale:

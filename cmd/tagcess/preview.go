@@ -154,7 +154,7 @@ func runImportPreview(cfg *config.Config, stdout, stderr io.Writer) int {
 	ccfg := render.CaddyConfig{
 		ACMEEmail: cfg.Sites.ACMEEmail, S06Open: true, Certs: cfg.Sites.Certificates,
 		ZitadelIssuer: cfg.Zitadel.Issuer, GateClientID: cfg.Gate.ClientID, LogoutReturnURL: logoutReturnURL(cfg),
-		K8sUpstream: cfg.Sites.K8sUpstream,
+		K8sUpstream: cfg.Sites.K8sUpstream, GateUpstream: cfg.Gate.Upstream,
 	}
 	res, err := render.SeedParity(ctx, cf.AdaptJSON, current, compared, ccfg)
 	var parity *render.ParityError

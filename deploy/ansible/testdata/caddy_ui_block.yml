@@ -10,7 +10,9 @@
       ansible.builtin.set_fact:
         caddy_ui_block: >-
           {{ lookup('ansible.builtin.file', playbook_dir ~ '/../../caddy/tagcess.caddy', rstrip=false)
-             | replace(caddy_ui_reference_host | default('tagcess.example.com'), tagcess_host) }}
+             | replace(caddy_ui_reference_host | default('tagcess.example.com'), tagcess_host)
+             | replace('reverse_proxy 127.0.0.1:4180', 'reverse_proxy ' ~ oauth2_proxy_http_address)
+             | replace('forward_auth 127.0.0.1:4180', 'forward_auth ' ~ oauth2_proxy_http_address) }}
     - name: Write it
       ansible.builtin.copy:
         content: "{{ caddy_ui_block }}"

@@ -13,7 +13,8 @@
   ansible.builtin.set_fact:
     caddy_ui_block: >-
       {%- set ref = lookup('ansible.builtin.file', tagcess_repo_root ~ '/deploy/caddy/tagcess.caddy', rstrip=false)
-          | replace(caddy_ui_reference_host, tagcess_host) -%}
+          | replace(caddy_ui_reference_host, tagcess_host) | replace('reverse_proxy ' ~ caddy_ui_reference_upstream, 'reverse_proxy ' ~ oauth2_proxy_http_address)
+          | replace('forward_auth ' ~ caddy_ui_reference_upstream, 'forward_auth ' ~ oauth2_proxy_http_address) -%}
       {%- if caddy_ui_cert_name | length > 0 -%}
       {{ ref | replace(tagcess_host ~ ' {', tagcess_host ~ ' {' ~ caddy_ui_nl ~ caddy_ui_tab ~ 'tls /etc/letsencrypt/live/' ~ caddy_ui_cert_name ~ '/fullchain.pem /etc/letsencrypt/live/' ~ caddy_ui_cert_name ~ '/privkey.pem', 1) }}
       {%- else -%}

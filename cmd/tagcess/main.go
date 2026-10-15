@@ -908,8 +908,9 @@ func siteSettingsReader(q *db.Queries, sites *site.Store, cfg *config.Config) fu
 				GateClientID:    cfg.Gate.ClientID,
 				LogoutReturnURL: logoutReturnURL(cfg),
 				// The (k8s) upstream the first-import parity was checked with is the one every apply writes.
-				K8sUpstream: cfg.Sites.K8sUpstream,
-				AdminGroup:  locked.AdminGroup(),
+				K8sUpstream:  cfg.Sites.K8sUpstream,
+				GateUpstream: cfg.Gate.Upstream,
+				AdminGroup:   locked.AdminGroup(),
 			},
 			DNS:       render.DNSConfig{AValue: cfg.Sites.VPNAddress},
 			ManualDNS: manual,

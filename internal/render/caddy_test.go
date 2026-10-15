@@ -808,3 +808,51 @@ func TestCaddyRender_ForbiddenPage(t *testing.T) {
 		t.Error("the page holds braces; Caddy would treat them as placeholders")
 	}
 }
+
+// TestCaddyRender_GateUpstream is AC1 and AC2 of issue #5: a configured gate upstream replaces
+// every oauth2-proxy address (the snippets' reverse_proxy and forward_auth, and the tagcess block);
+// unset keeps 127.0.0.1:4180, byte for byte.
+func TestCaddyRender_GateUpstream(t *testing.T) {
+	const def = "127.0.0.1:4180"
+	render := func(t *testing.T, up string) string {
+		t.Helper()
+		cfg := systemCfg(true)
+		cfg.GateUpstream = up
+		out, err := RenderCaddyfile(append(goldSiteSet(), systemSites()...), cfg)
+		if err != nil {
+			t.Fatalf("RenderCaddyfile(%q): %v", up, err)
+		}
+		return out
+	}
+	base := render(t, "")
+	if n := strings.Count(base, "reverse_proxy "+def) + strings.Count(base, "forward_auth "+def); n < 3 {
+		t.Fatalf("default output names %s %d times, want at least 3", def, n)
+	}
+
+	t.Run("unset equals the default", func(t *testing.T) {
+		if got := render(t, def); got != base {
+			t.Error("explicit 127.0.0.1:4180 differs from the unset output")
+		}
+	})
+	t.Run("set replaces every address", func(t *testing.T) {
+		for _, up := range []string{"127.0.0.1:4181", "oauth2-proxy:4180", "[::1]:4180"} {
+			got := render(t, up)
+			if strings.Contains(got, def) {
+				t.Errorf("%s: output still names %s", up, def)
+			}
+			want := strings.ReplaceAll(base, def, up)
+			if got != want {
+				t.Errorf("%s: output differs from the default with the address swapped", up)
+			}
+		}
+	})
+	t.Run("invalid is refused", func(t *testing.T) {
+		for _, up := range []string{"nohost", "host:0", "host:99999", "a b:1", "host:80 {", "http://h:1", "h:1/x", ":4180", "h:1\nrespond 200"} {
+			cfg := systemCfg(true)
+			cfg.GateUpstream = up
+			if _, err := RenderCaddyfile(systemSites(), cfg); err == nil {
+				t.Errorf("gate upstream %q accepted", up)
+			}
+		}
+	})
+}

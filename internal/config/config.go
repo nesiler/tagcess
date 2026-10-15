@@ -53,6 +53,9 @@ type Config struct {
 // links only clear the oauth2-proxy cookie, which leaves the Zitadel session open.
 type Gate struct {
 	ClientID string `yaml:"client_id"`
+	// Upstream is the oauth2-proxy address (host:port) the generated Caddyfile's reverse_proxy and
+	// forward_auth lines use. Optional: unset is 127.0.0.1:4180.
+	Upstream string `yaml:"upstream"`
 }
 
 // HostApply is the pair of directories shared with the Headscale host helper (ADR 0021 b):
@@ -321,6 +324,9 @@ func (c *Config) validate() error {
 			invalid = append(invalid, "sites.tagcess_host: required when gate.client_id is set (post-logout return page)")
 		}
 	}
+	if up := c.Gate.Upstream; up != "" && !validHostPort(up) {
+		invalid = append(invalid, "gate.upstream: must be host:port")
+	}
 	if c.Sync.Interval <= 0 {
 		invalid = append(invalid, "sync.interval: must be positive")
 	}
@@ -336,6 +342,22 @@ func (c *Config) validate() error {
 }
 
 // validPort reports whether p is empty (no port) or a plain decimal port in 1..65535.
+// validHostPort reports whether s is host:port with a plain DNS name or IP literal host (IPv6 in
+// brackets) and a port 1-65535, so it is safe to write into a Caddyfile line.
+func validHostPort(s string) bool {
+	host, port, err := net.SplitHostPort(s)
+	if err != nil || host == "" || port == "" || !validPort(port) {
+		return false
+	}
+	for _, r := range host {
+		letter := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
+		if !letter && (r < '0' || r > '9') && !strings.ContainsRune("._:-", r) {
+			return false
+		}
+	}
+	return true
+}
+
 func validPort(p string) bool {
 	if p == "" {
 		return true

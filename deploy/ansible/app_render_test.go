@@ -189,3 +189,65 @@ func TestCaddyUI_MatchesReferenceTemplate(t *testing.T) {
 		t.Fatalf("block differs from the reference:\n%s", got)
 	}
 }
+
+// Issue #5: oauth2_proxy_http_address flows into gate.upstream; the default address writes nothing.
+func TestAppRole_GateUpstream(t *testing.T) {
+	t.Parallel()
+	base := appVarSets(t)["lab"]
+	for addr, want := range map[string]string{"127.0.0.1:4181": "127.0.0.1:4181", "127.0.0.1:4180": ""} {
+		v := adopttarget.Merge(base, map[string]any{"oauth2_proxy_http_address": addr})
+		res, out := renderApp(t, v)
+		if res.ExitCode != 0 {
+			t.Fatalf("render %s:\n%s", addr, res.Output)
+		}
+		c, err := config.Load(filepath.Join(out, "config.yaml"))
+		if err != nil {
+			t.Fatalf("the rendered config does not load: %v", err)
+		}
+		if c.Gate.Upstream != want {
+			t.Errorf("oauth2_proxy_http_address %s: gate.upstream = %q, want %q", addr, c.Gate.Upstream, want)
+		}
+	}
+}
+
+// Issue #5: the UI block and the ping URL follow oauth2_proxy_http_address (fix round 1).
+func TestCaddyUI_BlockFollowsAuthProxyAddress(t *testing.T) {
+	t.Parallel()
+	out := filepath.Join(t.TempDir(), "block.caddy")
+	res := adopttarget.RunPlaybook(t, adopttarget.PlaybookOpts{Playbook: "testdata/caddy_ui_block.yml", Inventories: []string{localInventory(t)},
+		Vars: map[string]any{"install_env": "t", "tagcess_domain": "c.example.test", "install_mode": "adopt", "caddy_ui_out": out,
+			"oauth2_proxy_http_address": "127.0.0.1:4181"}})
+	if res.ExitCode != 0 {
+		t.Fatalf("render:\n%s", res.Output)
+	}
+	got, err := os.ReadFile(out) // #nosec G304 -- test temp dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(got), "reverse_proxy 127.0.0.1:4181") != 1 || strings.Count(string(got), "forward_auth 127.0.0.1:4181") != 1 || strings.Contains(string(got), "reverse_proxy 127.0.0.1:4180") {
+		t.Fatalf("the block does not use the configured address:\n%s", got)
+	}
+}
+
+// Issue #5: oauth2_proxy_ping_url (gate, caddy_ui and verify checks) derives from oauth2_proxy_http_address.
+func TestConfigRole_PingURLFollowsAuthProxyAddress(t *testing.T) {
+	t.Parallel()
+	for addr, want := range map[string]string{"127.0.0.1:4181": "http://127.0.0.1:4181/ping", "": "http://127.0.0.1:4180/ping"} {
+		out := filepath.Join(t.TempDir(), "ping")
+		vars := map[string]any{"install_env": "t", "tagcess_domain": "c.example.test", "install_mode": "adopt", "ping_out": out}
+		if addr != "" {
+			vars["oauth2_proxy_http_address"] = addr
+		}
+		res := adopttarget.RunPlaybook(t, adopttarget.PlaybookOpts{Playbook: "testdata/ping_url.yml", Inventories: []string{localInventory(t)}, Vars: vars})
+		if res.ExitCode != 0 {
+			t.Fatalf("render:\n%s", res.Output)
+		}
+		got, err := os.ReadFile(out) // #nosec G304 -- test temp dir
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Errorf("address %q: ping url %q, want %q", addr, got, want)
+		}
+	}
+}
