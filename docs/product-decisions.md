@@ -133,3 +133,6 @@ Labels: **[Decided]** the developer's decision, **[Proposed]** a proposal (not y
   fitting type in a separate Hetzner Cloud project, with a fixed (primary) IP. The VM is not kept running: it lives as
   a snapshot and is created from it only for the end-of-day acceptance tests, then snapshotted and deleted again.
   (Hetzner bills a stopped server like a running one; only deleting it stops the cost.)
+- **[Decided 2026-10-15]** The managed stack's host paths are fixed and shown read-only (an exception to "paths are
+  chosen in the UI"; `docs/setup-flow.md` §5.3.1). Setup-token rate limits: the SSH-tunnel path has its own budget,
+  IPv6 is counted per /64 (`docs/setup-flow.md` §2).

@@ -128,6 +128,8 @@ cannot work. Setup mode is the only way into tagcess without the gate, and it en
 - **Brute force:** the token has 256 bits, so guessing is not a practical attack; the limits only stop noise. The
   exchange endpoint allows 5 failed attempts per minute per source and 60 per minute in total; a limited request gets
   `429`. There is no lockout that burns the token, so strangers cannot lock the admin out. Comparison is constant time.
+  **[Decided 2026-10-15]** Loopback requests without the Caddy header (the SSH-tunnel path) have their own budget,
+  so the public global limit cannot lock the server owner out; IPv6 sources are counted per /64.
 - **Source address:** behind Caddy every request reaches the setup listener from loopback. The bootstrap Caddyfile sets
   `header_up X-Tagcess-Client-IP {remote_host}`, which overwrites any client value; the setup listener reads only this
   header and only on loopback connections. Through an SSH tunnel the source is the tunnel (loopback).
@@ -815,9 +817,8 @@ The developer answered on PR #27 (2026-10-15). The text above applies these answ
 - **O7** Rejected. It asked where "install new Zitadel" is proven; that path is removed with the rest of the IdP
   installation (step 2 offers only *connect existing*; no Zitadel, login UI or Postgres in the stack).
 
-Still **[Open]**: the host paths of the managed stack as an exception to "paths are chosen in the UI" (§5.3.1).
-Recommendation: accept the exception (a path in a root helper request is a host-write primitive; these paths are
-internal to the stack and shown read-only). Script distribution before the release flow is not a separate question:
+**[Decided 2026-10-15]** The host paths of the managed stack are an exception to "paths are chosen in the UI"
+(§5.3.1): they are fixed and shown read-only, because a path in a root helper request is a host-write primitive. Script distribution before the release flow is not a separate question:
 §1.6 is **[Proposed]** and follows #18.
 
 ## 11. Verified facts and sources
