@@ -176,6 +176,18 @@ type Setting struct {
 	UpdatedAt string
 }
 
+type SetupState struct {
+	ID                int64
+	TokenHash         string
+	TokenExpiresAt    string
+	SessionHash       string
+	SessionCreatedAt  string
+	SessionLastSeenAt string
+	SealedAt          string
+	SealedIdentity    string
+	ReopenCount       int64
+}
+
 type Site struct {
 	ID                int64
 	Kind              string

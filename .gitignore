@@ -25,3 +25,7 @@ __pycache__/
 
 # agent worktrees
 .claude/worktrees/
+/tagcess
+/tagcess-ui
+/tagcess-hshelper
+/tagcess-zitadel-adopt
