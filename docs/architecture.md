@@ -24,6 +24,10 @@ the decision itself.
 ```
 tagcess is not in the path traffic takes (NFR-01). Caddy's site traffic goes to oauth2-proxy, not to tagcess.
 
+The diagram shows the adopt layout (Headscale and Caddy under systemd on the host). On a fresh server the same
+components run as one Docker Compose project managed through the host helper; see §8.2 and
+[setup-flow.md](setup-flow.md) **[Proposed]**.
+
 ## 2. Packages
 | Package | Responsibility |
 |---|---|
@@ -48,6 +52,10 @@ tagcess is not in the path traffic takes (NFR-01). Caddy's site traffic goes to 
 | `internal/netpolicy` | **[Proposed]** Shared IP/CIDR/port validation and dial checks for API/probe with separate scopes, on top of the existing settings; a UI manages it. Single policy owner **[Decided]** |
 | `internal/monitor` | **[Proposed]** observation scheduler, freshness, drift evidence and the monitoring alarm lifecycle. It does not take over ownership of operational alarms from sync and Headscale management |
 | `internal/gitlog` | Commits generated artifacts to the local git repository (`git`, exec with arguments) |
+| `internal/setup` | **[Proposed]** Setup mode (setup-flow.md §2, §4): setup token and session, the wizard step pipeline (precheck → render → validate → preview → apply → prove), last known good per step, sealing |
+| `internal/discover` | **[Proposed]** Read-only host scan run by the host helper (setup-flow.md §3); the Go port of the installer's `probe.py` checks. Copies only allow-listed, secret-free attributes |
+| `internal/stack` | **[Proposed]** Deterministic rendering of the fresh-server Compose project and service configs from typed parameters and the release's version manifest; used by the host helper, golden-tested (setup-flow.md §5) |
+| `cmd/tagcess-hshelper` | Host helper (ADR 0008/0021). **[Proposed]** A second, typed stack channel for `discover`, `stack.apply` (one component at a time), `stack.remove`, `service.restart`, `stack.upgrade` and `handoff.cleanup`, with a stack `base_rev`; a one-way credential handoff directory for secret values from tagcess to the helper; a Compose backend for Headscale config changes. Both channels share one host lock, and after creation the Headscale `config.yaml` is changed only through the ADR 0021 patch flow. The release's version manifest is embedded only in this binary (setup-flow.md §5.3-§5.5) |
 | `internal/web` | templ components, handlers, identity middleware, CSRF, embedded assets (ADR 0007) |
 | `deploy/` | Dockerfile, compose, systemd helper (ADR 0008), Caddy snippet |
 | `test/compose/` | Integration environment: local Headscale, Caddy, oauth2-proxy (compose). Zitadel runs in the lab (`test/lab/`, a small k3s cluster, ADR 0014). The k8s contracts are tested with local fixtures and optional personal k3s namespace tests (§9) |
@@ -76,6 +84,10 @@ tagcess is not in the path traffic takes (NFR-01). Caddy's site traffic goes to 
 | `discovery_drafts` | **[Proposed]** separate persistent incomplete site suggestion, site model field choices, snapshot/provenance, conflict and review status; it is not a running site record |
 | `health_results` | **[Proposed]** site/host, target or Caddy gate, vantage, endpoint, Host/SNI/path, time, TCP/HTTP/TLS result and duration; no body/header is stored |
 | `tls_observations` | **[Proposed]** presented fingerprint/NotAfter/validation per host/SNI and source; Certificate metadata mapping is not part of the first release; no key/Secret |
+| `setup_scans`, `setup_findings` | **[Proposed]** Setup staging: scan runs and their secret-free findings; a partial run does not replace the last complete one (setup-flow.md §3.3) |
+| `setup_state` | **[Proposed]** Single row: setup token hash and expiry, failure counter, setup session hash, `sealed_at` and the sealing identity |
+| `setup_steps` | **[Proposed]** Wizard step: choice (`install`/`connect`/`migrate`/`skip`), state, secret-free parameters, the findings it was based on, last verified parameters and evidence |
+| `setup_migration_items` | **[Proposed]** One proposed import action per finding, with its own approval, its prerequisites (setup-flow.md §6 order), state including `uncertain`, and a link to the `changes` record or helper request |
 | `settings` (monitoring additions) | **[Proposed]** monitoring intervals/thresholds, target/domain/IP/port allow lists, site path/expected status/maintenance. Non-secret profile and scope are managed from the UI; the credential value is not stored here |
 
 ## 4. Change pipeline (all writes go through here)
@@ -180,7 +192,7 @@ and a periodic reconcile is mandatory (stack notes). On the Zitadel side the tar
 | Caddy | HTTP `localhost:2019` admin API + `/etc/caddy/Caddyfile` | none (localhost only) | `/adapt` only converts; `/load` (`text/caddyfile`) builds the new config in isolation and leaves the old one untouched if it fails. Because systemd starts it without `--resume`, the Caddyfile on disk is read on restart; so the file is written too |
 | Zitadel | HTTPS `auth.example.com`, API paths only from the VPN | Service user (JWT profile key), `PROJECT_OWNER` in the `vpn` project | v2 `ListAuthorizations` (filtered by project_id), `ListUsers`, `UpdateApplication` |
 | k8s | HTTPS API defined in the UI, CA and, if needed, a separate TLS server name | Time-limited read-only ServiceAccount token; upload/manual renewal from the UI **[Decided]** | **[Proposed]** Ingress/Service/IngressClass get/list; Certificate metadata deferred; no watch/Secret/token creation/resource writes. SSAR POST is only evidence of the chosen effective permission; it is not proof that all authorizers are narrow |
-| Host helper | Patch request (request directory, written by the container) + result/status file (result directory, read-only for the container); the candidate is built on the host | File permissions | ADR 0008 (update), ADR 0021 |
+| Host helper | Patch request (request directory, written by the container) + result/status file (result directory, read-only for the container); the candidate is built on the host | File permissions | ADR 0008 (update), ADR 0021. **[Proposed]** a second stack channel `/var/lib/tagcess-host/` with the same file rules for typed stack operations; the helper renders the Compose project itself (setup-flow.md §5.3) |
 | DNS | `/var/lib/tagcess/dns/extra-records.json` (directory owned by tagcess; Headscale `extra_records_path` is pointed here) | File permissions: file `0640` group `headscale`, `x` on directories for Headscale | Headscale watches the file with fsnotify, loads it without a restart and pushes to clients; there is no API for extra records (ADR 0013) |
 | TLS observation | Credentialless connection to the allowed Caddy and internal listener from the UI with each host/SNI | Standard CA/hostname verification; the profile CA if needed | **[Proposed]** the presented leaf expiry is the primary source; cert-manager Certificate metadata is deferred from the first release. Expiry is not read from a private key/Secret/file mount |
 
@@ -201,6 +213,9 @@ and a periodic reconcile is mandatory (stack notes). On the Zitadel side the tar
 ## 8. Deployment
 Installation and rollback (`fresh` for a new installation, `adopt` for an existing one) are done with the installer: `deploy/install.sh` + `deploy/ansible/`; guide:
 docs/install.md. The mount, unit and ordering rules below are applied in that tool's roles.
+**[Proposed]** A fresh server is installed with the install script and the setup wizard instead (§8.2,
+[setup-flow.md](setup-flow.md)); Ansible keeps only adopt mode until the wizard covers it (setup-flow.md §7).
+The tagcess container keeps the mounts below in both layouts.
 
 - **Image:** distroless or alpine based. It contains the `tagcess` binary and `git` and runs with a non-root UID.
 - **Container:** `network_mode: host`, `read_only: true`. Only the mounts below are writable. `restart: unless-stopped`.
@@ -239,6 +254,33 @@ The operator configures oauth2-proxy; tagcess neither produces nor reads this fi
 - **Short lifetime:** `cookie_expire = "1h"`, `cookie_refresh` off. The cookie lifetime equals the delay of a role revocation:
   a role taken away in Zitadel takes effect at the latest when the cookie ends. Because the Zitadel session continues, re-login is not noticeable to the user.
 - **Sign-out:** the top menu of every tagcess page has "Sign out"; on the 403 page "Sign in with another account" uses the same address. If `gate.client_id` is set the address is `/oauth2/sign_out?rd=<url-encoded https://<issuer>/oidc/v1/end_session?client_id=<id>&post_logout_redirect_uri=https://<tagcess_host>/>`: it deletes the shared cookie and then also ends the Zitadel session (otherwise `/oauth2/start` signs straight back in with the same user). tagcess **only adds** `https://<tagcess_host>/` to the post-logout redirect URI list of the oauth2-proxy app (in the same run as the redirect URI sync, with verified read-back; it does not delete or change what exists); oauth2-proxy `whitelist_domains` must contain the Zitadel host. If `gate.client_id` is empty the old behaviour: `/oauth2/sign_out?rd=%2F` (cookie only).
+
+### 8.2 Fresh install layout **[Proposed]**
+Details and rationale: [setup-flow.md](setup-flow.md) §5. **[Decided 2026-10-15]** tagcess never installs an identity provider; an existing
+Zitadel is a prerequisite and is only connected (product-decisions §11). The stack therefore has no IdP service.
+- **Compose project `tagcess`:** the compose file and service configs under `/etc/tagcess/stack/` are written only by the
+  host helper (root), rendered from typed parameters and the release's version manifest (images by tag and digest);
+  tagcess never writes them and never gets the Docker socket (ADR 0008/0021 rule kept; **[Decided 2026-10-15]**, setup-flow.md O1).
+- **Networks:** Caddy, Headscale, tagcess, oauth2-proxy and the Tailscale client use `network_mode: host` (ADR 0004
+  reasons: client IPs, localhost APIs, the tailnet interface).
+- **Public ports:** 80/tcp, 443/tcp, 443/udp (Caddy) and 41641/udp (Tailscale). Everything else is loopback or tailnet.
+- **Host state of the managed services** (the tagcess mounts are the table above):
+
+  | Host path | Service | Mode |
+  |---|---|---|
+  | `/etc/tagcess/stack/` | all (each service mounts only its own config) | ro |
+  | `/etc/tagcess/stack/secrets/<service>/` | the owning service only | ro |
+  | `/var/lib/tagcess-stack/caddy/data` | caddy (`/data`: certificates and keys) | rw |
+  | `/var/lib/headscale` | headscale | rw |
+  | `/var/run/headscale` | headscale rw; tagcess rw (socket directory, as above) | rw |
+  | `/var/lib/tagcess-stack/tailscale` | tailscale (node state) | rw |
+  | `/var/lib/tagcess-host/requests`, `/results` | tagcess rw / ro (stack channel of the host helper) | rw / ro |
+  | `/var/lib/tagcess-host/handoff/` | tagcess (writes `in/` only); one-way credential handoff, setup-flow.md §5.4 | rw |
+
+- **Group IDs** for the shared sockets are passed at runtime with `group_add`; the image no longer bakes in host GIDs.
+- **Upgrades:** a release is activated by installing its host helper, which carries the manifest (`install.sh
+  --upgrade`, until signed releases allow it from the UI, #18); then one service at a time through the host helper,
+  with backup and proof; a stateful service is not put back on its old image automatically (setup-flow.md §5.6).
 
 ## 9. Test architecture
 - **Unit:** model validation, render (golden files), diff, sync decisions (table tests), migrator.
