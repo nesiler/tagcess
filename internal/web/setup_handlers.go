@@ -2,7 +2,12 @@ package web
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"html/template"
 	"log/slog"
 	"net"
@@ -35,20 +40,27 @@ type SetupSessions interface {
 // session. It reads no identity headers and serves nothing outside /setup/*.
 type SetupHandler struct {
 	sessions SetupSessions
-	csrf     *CSRF
+	csrf     *setupCSRF
 	audit    *audit.Logger
 	log      *slog.Logger
 	mux      *http.ServeMux
 }
 
-// NewSetupHandler returns the handler for the setup listener. Every state change needs CSRF.
-func NewSetupHandler(sessions SetupSessions, csrf *CSRF, aud *audit.Logger, log *slog.Logger) http.Handler {
+// NewSetupHandler returns the handler for the setup listener. Every state change needs a setup CSRF
+// token bound to the setup session (to no session for the token exchange). The token key is derived
+// from csrfKey under a setup-only label, so tokens minted by the public setup page never verify
+// in the gated UI and the other way round.
+func NewSetupHandler(sessions SetupSessions, csrfKey []byte, aud *audit.Logger, log *slog.Logger) (http.Handler, error) {
+	csrf, err := newSetupCSRF(csrfKey)
+	if err != nil {
+		return nil, err
+	}
 	h := &SetupHandler{sessions: sessions, csrf: csrf, audit: aud, log: log, mux: http.NewServeMux()}
 	h.mux.HandleFunc("GET /setup", h.page)
 	h.mux.HandleFunc("GET /setup/{$}", h.page)
 	h.mux.HandleFunc("POST /setup/session", h.exchange)
 	h.mux.HandleFunc("POST /setup/logout", h.logout)
-	return csrf.Protect(h)
+	return h, nil
 }
 
 func (h *SetupHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -60,7 +72,38 @@ func (h *SetupHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if !isSafeMethod(r.Method) && !h.csrfOK(w, r) {
+		return
+	}
 	h.mux.ServeHTTP(w, r)
+}
+
+// csrfOK checks the CSRF token of a state-changing request and writes the refusal itself. The token
+// exchange is bound to "no session"; every other change needs a valid session the token is bound to.
+func (h *SetupHandler) csrfOK(w http.ResponseWriter, r *http.Request) bool {
+	if r.ContentLength > maxFormBody {
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		return false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
+	bind := ""
+	if r.URL.Path != "/setup/session" {
+		sess, ok := h.session(r)
+		if !ok {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return false
+		}
+		bind = sess.Hash
+	}
+	token := r.Header.Get(CSRFHeader)
+	if token == "" {
+		token = r.PostFormValue(CSRFParam)
+	}
+	if !h.csrf.valid(token, bind) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return false
+	}
+	return true
 }
 
 // sourceAddr is the address the attempt limits and the audit use. The forwarded header counts only
@@ -100,12 +143,12 @@ var setupPage = template.Must(template.New("setup").Parse(`<!doctype html>
 `))
 
 func (h *SetupHandler) page(w http.ResponseWriter, r *http.Request) {
-	_, authed := h.session(r)
+	sess, authed := h.session(r)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = setupPage.Execute(w, struct {
 		Authenticated bool
 		CSRF          string
-	}{authed, h.csrf.Token()})
+	}{authed, h.csrf.token(sess.Hash)})
 }
 
 func (h *SetupHandler) session(r *http.Request) (setup.Session, bool) {
@@ -172,4 +215,47 @@ func (h *SetupHandler) record(ctx context.Context, actor, event, source string) 
 	if _, err := h.audit.Write(ctx, audit.Entry{Actor: actor, Event: event, Target: "setup", Result: "source=" + source}); err != nil {
 		h.log.Error("setup audit failed", "event", event, "error", err)
 	}
+}
+
+// setupCSRF signs CSRF tokens for the setup listener. A token is a nonce and an HMAC over the nonce
+// and the setup session hash, so it works only for the session it was minted for.
+type setupCSRF struct{ key []byte }
+
+const setupCSRFLabel = "tagcess setup csrf v1"
+
+func newSetupCSRF(key []byte) (*setupCSRF, error) {
+	if len(key) < csrfKeySize {
+		return nil, fmt.Errorf("web: csrf key must be at least %d bytes, got %d", csrfKeySize, len(key))
+	}
+	m := hmac.New(sha256.New, key)
+	m.Write([]byte(setupCSRFLabel))
+	return &setupCSRF{key: m.Sum(nil)}, nil
+}
+
+func (c *setupCSRF) mac(nonce []byte, session string) []byte {
+	m := hmac.New(sha256.New, c.key)
+	m.Write(nonce)
+	m.Write([]byte{0})
+	m.Write([]byte(session))
+	return m.Sum(nil)
+}
+
+// token returns a fresh token bound to session ("" before a session exists).
+func (c *setupCSRF) token(session string) string {
+	nonce := make([]byte, csrfNonceLen)
+	_, _ = rand.Read(nonce)
+	return base64.RawURLEncoding.EncodeToString(nonce) + "." + base64.RawURLEncoding.EncodeToString(c.mac(nonce, session))
+}
+
+func (c *setupCSRF) valid(token, session string) bool {
+	noncePart, macPart, ok := strings.Cut(token, ".")
+	if !ok {
+		return false
+	}
+	nonce, err := base64.RawURLEncoding.DecodeString(noncePart)
+	if err != nil || len(nonce) != csrfNonceLen {
+		return false
+	}
+	got, err := base64.RawURLEncoding.DecodeString(macPart)
+	return err == nil && hmac.Equal(got, c.mac(nonce, session))
 }

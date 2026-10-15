@@ -101,23 +101,30 @@ func (s *Service) NewToken(ctx context.Context) (string, error) {
 // consumed only by a success.
 func (s *Service) Exchange(ctx context.Context, token, source string) (string, error) {
 	now := s.now()
-	if !s.lim.allow(now, source) {
+	// The attempt is counted up front, in the same locked step as the check, so concurrent
+	// attempts cannot all pass before any failure is recorded. Only a success refunds it.
+	if !s.lim.reserve(now, source) {
 		return "", ErrRateLimited
 	}
+	success := false
+	defer func() {
+		if success {
+			s.lim.refund(source)
+		}
+	}()
 	raw, ok := parseToken(token)
 	if !ok {
-		s.lim.fail(now, source)
 		return "", ErrInvalidToken
 	}
 	st, err := s.q.GetSetupState(ctx)
 	if err != nil {
+		s.lim.refund(source)
 		return "", fmt.Errorf("setup: read state: %w", err)
 	}
 	sum := sha256.Sum256(raw)
 	hash := hex.EncodeToString(sum[:])
 	// Constant-time comparison; an empty stored hash never matches.
 	if st.TokenHash == "" || subtle.ConstantTimeCompare([]byte(hash), []byte(st.TokenHash)) != 1 {
-		s.lim.fail(now, source)
 		return "", ErrInvalidToken
 	}
 	sess := make([]byte, tokenBytes)
@@ -136,9 +143,9 @@ func (s *Service) Exchange(ctx context.Context, token, source string) (string, e
 		return "", fmt.Errorf("setup: consume token: %w", err)
 	}
 	if n != 1 { // expired, sealed or lost a race with another exchange
-		s.lim.fail(now, source)
 		return "", ErrInvalidToken
 	}
+	success = true
 	if s.tokenFile != "" {
 		_ = os.Remove(s.tokenFile) // the token is spent; a stale file would only mislead
 	}
@@ -268,7 +275,8 @@ func prune(ts []time.Time, now time.Time) []time.Time {
 	return ts[i:]
 }
 
-func (l *limiter) allow(now time.Time, src string) bool {
+// reserve checks the limits and records the attempt in one locked step.
+func (l *limiter) reserve(now time.Time, src string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.global = prune(l.global, now)
@@ -276,21 +284,29 @@ func (l *limiter) allow(now time.Time, src string) bool {
 		return false
 	}
 	if l.bySrc == nil {
-		return true
+		l.bySrc = map[string][]time.Time{}
 	}
 	l.bySrc[src] = prune(l.bySrc[src], now)
-	if len(l.bySrc[src]) == 0 {
-		delete(l.bySrc, src)
-	}
-	return len(l.bySrc[src]) < PerSourceFailures
-}
-
-func (l *limiter) fail(now time.Time, src string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.bySrc == nil {
-		l.bySrc = map[string][]time.Time{}
+	if len(l.bySrc[src]) >= PerSourceFailures {
+		return false
 	}
 	l.bySrc[src] = append(l.bySrc[src], now)
 	l.global = append(l.global, now)
+	return true
+}
+
+// refund releases one reserved attempt of src (a success, or an internal error that is not the
+// caller's fault).
+func (l *limiter) refund(src string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if ts := l.bySrc[src]; len(ts) > 0 {
+		l.bySrc[src] = ts[:len(ts)-1]
+		if len(l.bySrc[src]) == 0 {
+			delete(l.bySrc, src)
+		}
+	}
+	if len(l.global) > 0 {
+		l.global = l.global[:len(l.global)-1]
+	}
 }

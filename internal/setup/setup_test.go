@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -241,5 +243,36 @@ func TestExchange_SealedRejects(t *testing.T) {
 	}
 	if _, err := svc.Exchange(ctx, tok, "a"); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("sealed exchange err = %v", err)
+	}
+}
+
+func TestRateLimit_ConcurrentBurst(t *testing.T) {
+	svc, _, _ := newService(t)
+	ctx := context.Background()
+	if _, err := svc.NewToken(ctx); err != nil {
+		t.Fatal(err)
+	}
+	const n = 50
+	var wg sync.WaitGroup
+	var reached, limited atomic.Int32
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := svc.Exchange(ctx, "0000-0000-0000-0000-0000-0000-0000-0000-0000-0000-0000-0000-0000", "198.51.100.1")
+			if errors.Is(err, ErrRateLimited) {
+				limited.Add(1)
+			} else {
+				reached.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if reached.Load() > PerSourceFailures {
+		t.Fatalf("%d attempts reached the token check, want at most %d", reached.Load(), PerSourceFailures)
+	}
+	// one source cannot fill the shared bucket: another source still gets through to the check
+	if _, err := svc.Exchange(ctx, "x", "203.0.113.9"); errors.Is(err, ErrRateLimited) {
+		t.Fatal("global bucket filled by one source")
 	}
 }

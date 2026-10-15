@@ -19,7 +19,8 @@ import (
 type setupEnv struct {
 	h     http.Handler
 	svc   *setup.Service
-	csrf  *CSRF
+	csrf  *setupCSRF
+	key   []byte
 	token string
 	logs  *bytes.Buffer
 	aud   *audit.Logger
@@ -38,16 +39,18 @@ func newSetupEnv(t *testing.T) *setupEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	csrf, err := NewCSRF(bytes.Repeat([]byte("k"), 32))
+	key := bytes.Repeat([]byte("k"), 32)
+	csrf, err := newSetupCSRF(key)
 	if err != nil {
 		t.Fatal(err)
 	}
 	logs := &bytes.Buffer{}
 	aud := audit.New(st.Queries())
-	return &setupEnv{
-		h:   NewSetupHandler(svc, csrf, aud, slog.New(slog.NewTextHandler(logs, nil))),
-		svc: svc, csrf: csrf, token: tok, logs: logs, aud: aud,
+	h, err := NewSetupHandler(svc, key, aud, slog.New(slog.NewTextHandler(logs, nil)))
+	if err != nil {
+		t.Fatal(err)
 	}
+	return &setupEnv{h: h, svc: svc, csrf: csrf, key: key, token: tok, logs: logs, aud: aud}
 }
 
 func (e *setupEnv) post(path, remote, clientIP string, form url.Values, cookie *http.Cookie) *httptest.ResponseRecorder {
@@ -66,7 +69,7 @@ func (e *setupEnv) post(path, remote, clientIP string, form url.Values, cookie *
 }
 
 func (e *setupEnv) form(token string) url.Values {
-	return url.Values{setupTokenField: {token}, CSRFParam: {e.csrf.Token()}}
+	return url.Values{setupTokenField: {token}, CSRFParam: {e.csrf.token("")}}
 }
 
 func sessionCookie(t *testing.T, w *httptest.ResponseRecorder) *http.Cookie {
@@ -168,10 +171,10 @@ func TestSetup_StateChangeNeedsCSRF(t *testing.T) {
 		t.Fatalf("session ended without csrf: %v", err)
 	}
 	// logout without a session is refused even with CSRF
-	if w := e.post("/setup/logout", "127.0.0.1:1", "", url.Values{CSRFParam: {e.csrf.Token()}}, nil); w.Code != http.StatusForbidden {
+	if w := e.post("/setup/logout", "127.0.0.1:1", "", url.Values{CSRFParam: {e.csrf.token("")}}, nil); w.Code != http.StatusForbidden {
 		t.Fatalf("logout without session: %d", w.Code)
 	}
-	if w := e.post("/setup/logout", "127.0.0.1:1", "", url.Values{CSRFParam: {e.csrf.Token()}}, c); w.Code != http.StatusSeeOther {
+	if w := e.post("/setup/logout", "127.0.0.1:1", "", url.Values{CSRFParam: {e.csrf.token(sessHash(t, e, c))}}, c); w.Code != http.StatusSeeOther {
 		t.Fatalf("logout: %d", w.Code)
 	}
 	if _, err := e.svc.Validate(context.Background(), c.Value); err == nil {
@@ -213,5 +216,60 @@ func TestSetup_TokenNeverLeaks(t *testing.T) {
 		if strings.Contains(text, e.token) || strings.Contains(text, bare) || strings.Contains(text, badToken) {
 			t.Errorf("token leaked into %s", name)
 		}
+	}
+}
+
+func sessHash(t *testing.T, e *setupEnv, c *http.Cookie) string {
+	t.Helper()
+	sess, err := e.svc.Validate(context.Background(), c.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sess.Hash
+}
+
+func TestSetup_CSRFBoundToSession(t *testing.T) {
+	e := newSetupEnv(t)
+	c1 := sessionCookie(t, e.post("/setup/session", "127.0.0.1:1", "", e.form(e.token), nil))
+	good := e.csrf.token(sessHash(t, e, c1))
+	// minted publicly (no session) is refused for logout, session intact
+	if w := e.post("/setup/logout", "127.0.0.1:1", "", url.Values{CSRFParam: {e.csrf.token("")}}, c1); w.Code != http.StatusForbidden {
+		t.Fatalf("session-less token: %d", w.Code)
+	}
+	// a token minted for another session is refused
+	if w := e.post("/setup/logout", "127.0.0.1:1", "", url.Values{CSRFParam: {e.csrf.token("another-session")}}, c1); w.Code != http.StatusForbidden {
+		t.Fatalf("other-session token: %d", w.Code)
+	}
+	// the page served to an authenticated session carries a session-bound token
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/setup", nil)
+	r.AddCookie(c1)
+	rec := httptest.NewRecorder()
+	e.h.ServeHTTP(rec, r)
+	if strings.Contains(rec.Body.String(), "csrf_token") && !strings.Contains(rec.Body.String(), "End session") {
+		t.Fatal("unexpected page")
+	}
+	if _, err := e.svc.Validate(context.Background(), c1.Value); err != nil {
+		t.Fatalf("session ended by a refused request: %v", err)
+	}
+	if w := e.post("/setup/logout", "127.0.0.1:1", "", url.Values{CSRFParam: {good}}, c1); w.Code != http.StatusSeeOther {
+		t.Fatalf("bound token: %d", w.Code)
+	}
+}
+
+func TestSetup_CSRFKeySeparate(t *testing.T) {
+	e := newSetupEnv(t)
+	plain, err := NewCSRF(e.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// a token of the gated UI signer is no setup token, and the reverse
+	if e.csrf.valid(plain.Token(), "") {
+		t.Fatal("gated-UI token accepted by setup")
+	}
+	if plain.Valid(e.csrf.token("")) {
+		t.Fatal("setup token accepted by the gated UI")
+	}
+	if w := e.post("/setup/session", "127.0.0.1:1", "", url.Values{setupTokenField: {e.token}, CSRFParam: {plain.Token()}}, nil); w.Code != http.StatusForbidden {
+		t.Fatalf("exchange with UI token: %d", w.Code)
 	}
 }
