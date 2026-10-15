@@ -260,6 +260,29 @@ func TestGenerateMatchesCommitted(t *testing.T) {
 	}
 }
 
+// TestGenerateIgnoresHostTarget is the regression test for the macOS/Linux mismatch: the
+// generator pins GOOS/GOARCH, so setting a different host target must not change the output.
+func TestGenerateIgnoresHostTarget(t *testing.T) {
+	root, err := repoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := generate(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOOS", "darwin")
+	t.Setenv("GOARCH", "arm64")
+	t.Setenv("CGO_ENABLED", "1")
+	got, err := generate(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Error("generate() output depends on the host GOOS/GOARCH; pin the shipping target")
+	}
+}
+
 func TestGenerateListsShippedComponents(t *testing.T) {
 	root, err := repoRoot()
 	if err != nil {
