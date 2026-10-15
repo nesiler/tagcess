@@ -96,7 +96,7 @@ func runStack(args []string, stderr io.Writer) int {
 	}
 	cfg := hshelper.StackConfig{
 		Root: s.root, StackDir: s.stackDir, TagcessSecretsDir: s.secretsDir, HeadscaleRoot: s.headscaleRoot,
-		RequestUID: s.uid, Manifest: m, Docker: hshelper.NewSystemDocker(), Logf: logger.Printf,
+		RequestUID: s.uid, SecretOwner: hshelper.DefaultSecretOwner(s.uid), Manifest: m, Docker: hshelper.NewSystemDocker(), Logf: logger.Printf,
 	}
 	var out hshelper.Outcome
 	switch mode {

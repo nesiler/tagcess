@@ -402,15 +402,112 @@ func TestStackApply_Order(t *testing.T) {
 	if r.Changed == nil || !*r.Changed || r.Phase != StackPhaseStart {
 		t.Errorf("result = %+v", r)
 	}
-	// A failed pull is reported with the phase and leaves the written files and state consistent.
+	// A failed pull changes nothing: files, state and base_rev stay the last known good.
+	compose, rev := e.readStack("compose.yaml"), e.rev()
 	e.docker.fail["pull"] = errors.New("registry down")
 	r = e.apply(idB, stack.OAuth2Proxy)
 	if r.ErrorCode != StackPullFailed || r.Phase != StackPhasePull {
 		t.Fatalf("result = %+v", r)
 	}
 	st, _ = readStackState(e.path("private"))
-	if !st.enabled(stack.OAuth2Proxy) {
-		t.Error("state does not match the written files after a failed pull")
+	if st.enabled(stack.OAuth2Proxy) || e.rev() != rev || !bytes.Equal(compose, e.readStack("compose.yaml")) {
+		t.Error("a failed pull changed the files or the state")
+	}
+	if _, err := os.Lstat(filepath.Join(e.stack, "oauth2-proxy", "oauth2-proxy.cfg")); err == nil {
+		t.Error("a failed pull left a component file")
+	}
+}
+
+// A failed start of a running component restores its files and state; a failed new service stays marked failed.
+func TestStackApply_StartFailureRestoresLastKnownGood(t *testing.T) {
+	e := newStackEnv(t)
+	succeeded(t, e.apply(idA, stack.Headscale))
+	compose, rev := e.readStack("compose.yaml"), e.rev()
+
+	e.cfg.Manifest = testStackManifest(stackDigUp)
+	e.docker.fail["up"] = errors.New("unhealthy")
+	e.publish(StackRequest{Version: 1, RequestID: idB, Op: OpStackUpgrade, BaseRev: rev, Component: stack.Headscale})
+	e.run()
+	r := e.result()
+	if r.ErrorCode != StackStartFailed || r.Changed == nil || *r.Changed {
+		t.Fatalf("result = %+v", r)
+	}
+	if !bytes.Equal(compose, e.readStack("compose.yaml")) || e.rev() != rev {
+		t.Error("compose.yaml or the state is not the last known good")
+	}
+
+	// A new service whose start fails stays written and marked failed.
+	r = e.apply(idC, stack.OAuth2Proxy)
+	if r.ErrorCode != StackStartFailed {
+		t.Fatalf("result = %+v", r)
+	}
+	st, _ := readStackState(e.path("private"))
+	if !st.enabled(stack.OAuth2Proxy) || !st.failed(stack.OAuth2Proxy) {
+		t.Errorf("state = %+v", st)
+	}
+}
+
+// AC5: a changed Headscale setting is refused while config.yaml exists; nothing is recorded.
+func TestStackApply_HeadscaleSettingChangeRefused(t *testing.T) {
+	e := newStackEnv(t)
+	succeeded(t, e.apply(idA, stack.Headscale))
+	cfg, compose, rev := e.readStack("headscale/config.yaml"), e.readStack("compose.yaml"), e.rev()
+
+	for i, target := range []stack.Component{stack.Headscale, stack.OAuth2Proxy} {
+		req := e.applyReq(fmt.Sprintf("9999999%d-9999-4999-8999-999999999999", i), target)
+		req.Settings.HeadscaleHost = "other.example.com"
+		req.Settings.PrefixV4 = "100.100.0.0/16"
+		e.publish(req)
+		e.run()
+		if r := e.result(); r.ErrorCode != StackSettings || r.Changed == nil || *r.Changed {
+			t.Fatalf("%s: result = %+v", target, r)
+		}
+		if e.rev() != rev || !bytes.Equal(cfg, e.readStack("headscale/config.yaml")) || !bytes.Equal(compose, e.readStack("compose.yaml")) {
+			t.Fatalf("%s: a refused request changed the host", target)
+		}
+	}
+}
+
+// §5.3: stack.remove takes only a service a failed install added, never tagcess.
+func TestStackRemove_OnlyFailedNewServices(t *testing.T) {
+	e := newStackEnv(t)
+	succeeded(t, e.apply(idA, stack.Headscale))
+	succeeded(t, e.apply(idB, stack.OAuth2Proxy))
+	remove := func(id string, c stack.Component) StackResult {
+		e.publish(StackRequest{Version: 1, RequestID: id, Op: OpStackRemove, BaseRev: e.rev(), Component: c})
+		e.run()
+		return e.result()
+	}
+	if r := remove(idC, stack.OAuth2Proxy); r.ErrorCode != StackInvalidRequest {
+		t.Errorf("a healthy service was removable: %+v", r)
+	}
+	e.docker.fail["up"] = errors.New("unhealthy")
+	if r := e.apply("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", stack.Tagcess); r.ErrorCode != StackStartFailed {
+		t.Fatalf("result = %+v", r)
+	}
+	if r := remove("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", stack.Tagcess); r.ErrorCode != StackInvalidRequest {
+		t.Errorf("tagcess was removable: %+v", r)
+	}
+}
+
+// §5.4: secrets belong to the service's uid, in a directory it can enter.
+func TestStackApply_SecretOwnerPerComponent(t *testing.T) {
+	e := newStackEnv(t)
+	var asked []stack.Component
+	e.cfg.SecretOwner = func(c stack.Component) (int, int, bool) {
+		asked = append(asked, c)
+		return os.Getuid(), os.Getgid(), true
+	}
+	e.drop(idA, KindOIDCSecretOAuth2Proxy, canary)
+	succeeded(t, e.apply(idA, stack.OAuth2Proxy, KindOIDCSecretOAuth2Proxy))
+	if len(asked) != 2 || asked[0] != stack.OAuth2Proxy || asked[1] != stack.OAuth2Proxy {
+		t.Errorf("owner asked for %v, want oauth2-proxy twice (client and cookie secret)", asked)
+	}
+	for c, want := range map[stack.Component][2]int{stack.Tagcess: {10001, 10001}, stack.OAuth2Proxy: {65532, 65532}, stack.Headscale: {0, 0}} {
+		uid, gid, ok := DefaultSecretOwner(10001)(c)
+		if !ok || uid != want[0] || gid != want[1] {
+			t.Errorf("DefaultSecretOwner(%s) = %d:%d %v", c, uid, gid, ok)
+		}
 	}
 }
 
@@ -884,6 +981,11 @@ func TestStackOps_RemoveRestartUpgradeDiscoverCleanup(t *testing.T) {
 		}
 	})
 	t.Run("remove keeps data and other services", func(t *testing.T) {
+		st, _ := readStackState(e.path("private"))
+		st.Failed = []stack.Component{stack.OAuth2Proxy}
+		if err := writeStackState(e.path("private"), st); err != nil {
+			t.Fatal(err)
+		}
 		hs := e.readStack("headscale/config.yaml")
 		e.publish(StackRequest{Version: 1, RequestID: "66666666-6666-4666-8666-666666666666", Op: OpStackRemove, BaseRev: e.rev(), Component: stack.OAuth2Proxy})
 		e.run()
@@ -891,7 +993,7 @@ func TestStackOps_RemoveRestartUpgradeDiscoverCleanup(t *testing.T) {
 		if !strings.HasSuffix(e.docker.joined(), "rm:oauth2-proxy") {
 			t.Errorf("calls: %s", e.docker.joined())
 		}
-		st, _ := readStackState(e.path("private"))
+		st, _ = readStackState(e.path("private"))
 		if st.enabled(stack.OAuth2Proxy) || !st.enabled(stack.Headscale) {
 			t.Errorf("state = %+v", st.Params.Components)
 		}

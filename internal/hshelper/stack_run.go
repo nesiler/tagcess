@@ -476,3 +476,20 @@ func preserveCorruptFile(dir, name string, now time.Time) error {
 	}
 	return syncDir(dir)
 }
+
+// DefaultSecretOwner is the fixed owner of each component's secret files: the uid and gid its container runs as.
+// It never comes from a request. tagcess runs as the configured request uid; the oauth2-proxy image runs as
+// 65532 (nonroot); the Headscale container reads its secret as root.
+func DefaultSecretOwner(tagcessUID uint32) func(stack.Component) (int, int, bool) {
+	return func(c stack.Component) (int, int, bool) {
+		switch c {
+		case stack.Tagcess:
+			return int(tagcessUID), int(tagcessUID), true
+		case stack.OAuth2Proxy:
+			return 65532, 65532, true
+		case stack.Headscale:
+			return 0, 0, true
+		}
+		return -1, -1, false
+	}
+}

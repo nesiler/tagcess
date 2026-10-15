@@ -30,7 +30,11 @@ type stackState struct {
 	Version int                             `json:"version"`
 	Params  stack.Params                    `json:"params"`
 	Images  map[stack.Component]stack.Image `json:"images"`
+	// Failed lists components a failed "install new" added: written, but never started. Only these may be removed.
+	Failed []stack.Component `json:"failed,omitempty"`
 }
+
+func (s stackState) failed(c stack.Component) bool { return slices.Contains(s.Failed, c) }
 
 func newStackState() stackState {
 	return stackState{Version: StackVersion, Images: map[stack.Component]stack.Image{}}

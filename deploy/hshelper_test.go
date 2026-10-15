@@ -62,6 +62,12 @@ func TestHelperUnits_Static(t *testing.T) {
 	if !strings.Contains(boot, "ExecStart="+helperBinary+" boot ") {
 		t.Errorf("tagcess-hshelper-boot.service: ExecStart is not `%s boot …`", helperBinary)
 	}
+	// AC6, reverse direction: both units must name the stack channel root.
+	for name, unit := range map[string]string{"tagcess-hshelper.service": service, "tagcess-hshelper-boot.service": boot} {
+		if !strings.Contains(unit, "--stack-root /var/lib/tagcess-host") {
+			t.Errorf("%s: missing --stack-root /var/lib/tagcess-host", name)
+		}
+	}
 	for _, want := range []string{"WantedBy=multi-user.target", "Before=tagcess-hshelper.path"} {
 		if !strings.Contains(boot, want) {
 			t.Errorf("tagcess-hshelper-boot.service: missing %q", want)
@@ -91,7 +97,7 @@ func TestHelperUnits_Static(t *testing.T) {
 	}
 
 	// No Docker socket, no D-Bus, and no path outside the fixed list.
-	allowedPath := regexp.MustCompile(`^(/usr/local/bin/tagcess-hshelper|/etc/headscale|/var/lib/tagcess-headscale|/var/run/headscale)(/|$)`)
+	allowedPath := regexp.MustCompile(`^(/usr/local/bin/tagcess-hshelper|/etc/headscale|/var/lib/tagcess-headscale|/var/lib/tagcess-host|/var/run/headscale)(/|$)`)
 	pathToken := regexp.MustCompile(`(?:^|[\s=])(/[A-Za-z0-9._/-]+)`)
 	for _, unit := range helperUnits {
 		content := readHelper(t, unit)

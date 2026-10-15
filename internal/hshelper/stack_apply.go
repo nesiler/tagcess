@@ -146,6 +146,20 @@ func (a *stackApplier) render(cur, next stackState, m stack.Manifest, target sta
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, errSettings{StackWriteFailed}
 	}
+	// An existing Headscale config.yaml is never re-rendered. A setting that would change it is refused instead of
+	// being recorded while the file stays old. allowed_groups is ADR 0021's, so it is held equal.
+	if _, err := os.Lstat(filepath.Join(a.cfg.StackDir, headscaleConfigRel)); err == nil {
+		held := next.Params
+		held.AdminGroup = cur.Params.AdminGroup
+		oldFiles, err := stack.Render(cur.Params, m)
+		if err != nil {
+			return nil, errSettings{StackSettings}
+		}
+		newFiles, err := stack.Render(held, m)
+		if err != nil || !bytes.Equal(oldFiles[headscaleConfigRel], newFiles[headscaleConfigRel]) {
+			return nil, errSettings{StackSettings}
+		}
+	}
 	out := stack.Files{}
 	for rel, b := range files {
 		switch {
@@ -245,12 +259,24 @@ func (a *stackApplier) install(cur, next stackState, files stack.Files, secrets 
 		return a.fail(StackPhaseSaveCopy, StackSaveCopyFailed)
 	}
 
+	// Pull first, from the candidate compose file: a registry failure changes nothing on the host.
+	if start {
+		if err := a.enter(StackPhasePull); err != nil {
+			return a.abort(err)
+		}
+		if err := a.dockerStep(a.cfg.stepTimeout(), func(ctx context.Context) error {
+			return a.cfg.Docker.Pull(ctx, filepath.Join(cand, composeRel), target)
+		}); err != nil {
+			return a.fail(StackPhasePull, StackPullFailed)
+		}
+	}
+
 	if err := a.enter(StackPhaseWrite); err != nil {
 		return a.abort(err)
 	}
 	a.changed = nil // from here on the helper cannot tell what a failure left behind
 	if err := a.writeSecrets(target, secrets); err != nil {
-		return a.fail(StackPhaseWrite, StackWriteFailed)
+		return a.failLastGood(StackPhaseWrite, StackWriteFailed, cur, files)
 	}
 	// Component files first, compose.yaml last: a crash between leaves a compose file that still matches the state.
 	rels := make([]string, 0, len(files))
@@ -263,11 +289,12 @@ func (a *stackApplier) install(cur, next stackState, files stack.Files, secrets 
 	rels = append(rels, composeRel)
 	for _, rel := range rels {
 		if err := writeUnder(a.cfg.StackDir, rel, files[rel], 0o644); err != nil {
-			return a.fail(StackPhaseWrite, StackWriteFailed)
+			return a.failLastGood(StackPhaseWrite, StackWriteFailed, cur, files)
 		}
 	}
+	next.Failed = slices.DeleteFunc(slices.Clone(next.Failed), func(x stack.Component) bool { return x == target })
 	if err := writeStackState(priv, next); err != nil {
-		return a.fail(StackPhaseWrite, StackWriteFailed)
+		return a.failLastGood(StackPhaseWrite, StackWriteFailed, cur, files)
 	}
 	yes := true
 	a.changed = &yes
@@ -275,23 +302,62 @@ func (a *stackApplier) install(cur, next stackState, files stack.Files, secrets 
 		return a.succeed()
 	}
 
-	if err := a.enter(StackPhasePull); err != nil {
-		return a.abort(err)
-	}
-	if err := a.dockerStep(a.cfg.stepTimeout(), func(ctx context.Context) error {
-		return a.cfg.Docker.Pull(ctx, a.composeFile(), target)
-	}); err != nil {
-		return a.fail(StackPhasePull, StackPullFailed)
-	}
 	if err := a.enter(StackPhaseStart); err != nil {
 		return a.abort(err)
 	}
 	if err := a.dockerStep(a.cfg.stepTimeout(), func(ctx context.Context) error {
 		return a.cfg.Docker.Up(ctx, a.composeFile(), target)
 	}); err != nil {
-		return a.fail(StackPhaseStart, StackStartFailed)
+		if !cur.enabled(target) {
+			// A new service stays written, marked failed, so the UI can retry or remove it.
+			next.Failed = withComponent(next.Failed, target)
+			_ = writeStackState(priv, next)
+			return a.fail(StackPhaseStart, StackStartFailed)
+		}
+		return a.failLastGood(StackPhaseStart, StackStartFailed, cur, files)
 	}
 	return a.succeed()
+}
+
+// failLastGood puts the files of this request and the state back to the last known good copy, then reports the
+// failure. A service that was already running is started again from the restored compose file (best effort).
+func (a *stackApplier) failLastGood(p StackPhase, code StackCode, cur stackState, files stack.Files) (Outcome, error) {
+	if a.putBack(cur, files) {
+		no := false
+		a.changed = &no
+		if p == StackPhaseStart && cur.enabled(a.req.Component) {
+			_ = a.dockerStep(a.cfg.stepTimeout(), func(ctx context.Context) error {
+				return a.cfg.Docker.Up(ctx, a.composeFile(), a.req.Component)
+			})
+		}
+	}
+	return a.fail(p, code)
+}
+
+// putBack returns every file of files to its saved copy (or removes it when there was none) and rewrites the
+// previous state. It reports whether everything went back.
+func (a *stackApplier) putBack(cur stackState, files stack.Files) bool {
+	dir := filepath.Join(a.cfg.priv(), "previous-"+a.req.RequestID)
+	ok := true
+	for rel := range files {
+		b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel))) //nolint:gosec // fixed layout
+		switch {
+		case err == nil:
+			if writeUnder(a.cfg.StackDir, rel, b, 0o644) != nil {
+				ok = false
+			}
+		case errors.Is(err, os.ErrNotExist):
+			if e := os.Remove(filepath.Join(a.cfg.StackDir, filepath.FromSlash(rel))); e != nil && !errors.Is(e, os.ErrNotExist) {
+				ok = false
+			}
+		default:
+			ok = false
+		}
+	}
+	if writeStackState(a.cfg.priv(), cur) != nil {
+		ok = false
+	}
+	return ok
 }
 
 // saveCopy copies the files this request is about to replace into private/previous-<id>/.
@@ -378,6 +444,12 @@ func (a *stackApplier) writeSecret(c stack.Component, path string, data []byte) 
 	if a.cfg.SecretOwner != nil {
 		uid, gid, own = a.cfg.SecretOwner(c)
 	}
+	if own {
+		// The service must be able to enter the directory too.
+		if err := os.Chown(dir, uid, gid); err != nil {
+			return err
+		}
+	}
 	tmp := path + ".tmp"
 	_ = os.Remove(tmp)
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o400) //nolint:gosec // fixed secret layout
@@ -418,10 +490,12 @@ func writeUnder(dir, rel string, data []byte, perm os.FileMode) error {
 func (a *stackApplier) remove() (Outcome, error) {
 	st, m, err := a.state()
 	c := a.req.Component
-	if err != nil || !st.enabled(c) {
+	// Only a service that a failed "install new" added may go; tagcess never.
+	if err != nil || !st.enabled(c) || c == stack.Tagcess || !st.failed(c) {
 		return a.fail(StackPhaseValidate, StackInvalidRequest)
 	}
 	next := st
+	next.Failed = slices.DeleteFunc(slices.Clone(st.Failed), func(x stack.Component) bool { return x == c })
 	next.Params.Components = slices.DeleteFunc(slices.Clone(st.Params.Components), func(x stack.Component) bool { return x == c })
 	next.Images = map[stack.Component]stack.Image{}
 	for _, x := range next.Params.Components {
