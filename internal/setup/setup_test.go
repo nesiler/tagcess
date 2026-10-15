@@ -276,3 +276,29 @@ func TestRateLimit_ConcurrentBurst(t *testing.T) {
 		t.Fatal("global bucket filled by one source")
 	}
 }
+
+func TestLimiter_RefundRemovesTheReservedEntry(t *testing.T) {
+	var l limiter
+	t0 := time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)
+	first, ok := l.reserve(t0, "s")
+	if !ok {
+		t.Fatal("first reserve denied")
+	}
+	for i := 0; i < PerSourceFailures-1; i++ {
+		if _, ok := l.reserve(t0.Add(time.Second), "s"); !ok {
+			t.Fatalf("failure %d denied", i)
+		}
+	}
+	l.refund(first)
+	// the four failures at t=1s are still inside the window at t=60.5s
+	t1 := t0.Add(60*time.Second + 500*time.Millisecond)
+	admitted := 0
+	for i := 0; i < 2; i++ {
+		if _, ok := l.reserve(t1, "s"); ok {
+			admitted++
+		}
+	}
+	if admitted != 1 {
+		t.Fatalf("admitted %d of 2 at t=60.5s, want 1 (never %d failures within 60s)", admitted, PerSourceFailures+1)
+	}
+}

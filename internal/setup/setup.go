@@ -103,13 +103,14 @@ func (s *Service) Exchange(ctx context.Context, token, source string) (string, e
 	now := s.now()
 	// The attempt is counted up front, in the same locked step as the check, so concurrent
 	// attempts cannot all pass before any failure is recorded. Only a success refunds it.
-	if !s.lim.reserve(now, source) {
+	res, allowed := s.lim.reserve(now, source)
+	if !allowed {
 		return "", ErrRateLimited
 	}
 	success := false
 	defer func() {
 		if success {
-			s.lim.refund(source)
+			s.lim.refund(res)
 		}
 	}()
 	raw, ok := parseToken(token)
@@ -118,7 +119,7 @@ func (s *Service) Exchange(ctx context.Context, token, source string) (string, e
 	}
 	st, err := s.q.GetSetupState(ctx)
 	if err != nil {
-		s.lim.refund(source)
+		s.lim.refund(res)
 		return "", fmt.Errorf("setup: read state: %w", err)
 	}
 	sum := sha256.Sum256(raw)
@@ -263,50 +264,71 @@ func writeFile0600(path, content string) error {
 // limiter counts failed exchange attempts in a sliding one-minute window.
 type limiter struct {
 	mu     sync.Mutex
-	bySrc  map[string][]time.Time
-	global []time.Time
+	seq    uint64
+	bySrc  map[string][]attempt
+	global []attempt
 }
 
-func prune(ts []time.Time, now time.Time) []time.Time {
+// attempt is one reservation; id identifies it so a refund removes exactly that entry.
+type attempt struct {
+	id uint64
+	at time.Time
+}
+
+// reservation is the handle reserve returns; pass it to refund.
+type reservation struct {
+	src string
+	id  uint64
+}
+
+func prune(ts []attempt, now time.Time) []attempt {
 	i := 0
-	for i < len(ts) && now.Sub(ts[i]) >= attemptWindow {
+	for i < len(ts) && now.Sub(ts[i].at) >= attemptWindow {
 		i++
 	}
 	return ts[i:]
 }
 
+func remove(ts []attempt, id uint64) []attempt {
+	for i := range ts {
+		if ts[i].id == id {
+			return append(ts[:i:i], ts[i+1:]...)
+		}
+	}
+	return ts
+}
+
 // reserve checks the limits and records the attempt in one locked step.
-func (l *limiter) reserve(now time.Time, src string) bool {
+func (l *limiter) reserve(now time.Time, src string) (reservation, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.global = prune(l.global, now)
 	if len(l.global) >= TotalFailures {
-		return false
+		return reservation{}, false
 	}
 	if l.bySrc == nil {
-		l.bySrc = map[string][]time.Time{}
+		l.bySrc = map[string][]attempt{}
 	}
 	l.bySrc[src] = prune(l.bySrc[src], now)
 	if len(l.bySrc[src]) >= PerSourceFailures {
-		return false
+		return reservation{}, false
 	}
-	l.bySrc[src] = append(l.bySrc[src], now)
-	l.global = append(l.global, now)
-	return true
+	l.seq++
+	a := attempt{id: l.seq, at: now}
+	l.bySrc[src] = append(l.bySrc[src], a)
+	l.global = append(l.global, a)
+	return reservation{src: src, id: a.id}, true
 }
 
-// refund releases one reserved attempt of src (a success, or an internal error that is not the
-// caller's fault).
-func (l *limiter) refund(src string) {
+// refund releases exactly the reserved attempt r (a success, or an internal error that is not
+// the caller's fault). An attempt already pruned from the window is a no-op.
+func (l *limiter) refund(r reservation) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if ts := l.bySrc[src]; len(ts) > 0 {
-		l.bySrc[src] = ts[:len(ts)-1]
-		if len(l.bySrc[src]) == 0 {
-			delete(l.bySrc, src)
-		}
+	if ts := remove(l.bySrc[r.src], r.id); len(ts) > 0 {
+		l.bySrc[r.src] = ts
+	} else {
+		delete(l.bySrc, r.src)
 	}
-	if len(l.global) > 0 {
-		l.global = l.global[:len(l.global)-1]
-	}
+	l.global = remove(l.global, r.id)
 }
