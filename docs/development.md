@@ -156,8 +156,12 @@ The coordinator runs workers and reviewers as child sessions in Herdr panes (tmu
 | Gate | Where | Contents |
 |---|---|---|
 | `make check-fast` | Claude Stop hook, any time | gofmt, `go vet`, `go test ./...` |
-| `make check` | before every PR | `agents-check`, `guard-test`, `coord-test`, `installer-lint`, golangci-lint, `go test -race`, `generate-check`, `generate-test` |
-| CI (`.github/workflows/ci.yml`) | every PR and push to `main` | the `make check` pieces that run without local tools: `agents-check`, `guard-test`, `generate-check`, `generate-test`, golangci-lint, `go test -race` (`coord-test` and `installer-lint` stay local: they need tmux, ansible-lint, shellcheck) |
+| `make check` | before every PR | `agents-check`, `guard-test`, `coord-test`, `installer-lint`, `notices-check`, `notices-test`, golangci-lint, `go test -race`, `generate-check`, `generate-test` |
+| CI (`.github/workflows/ci.yml`) | every PR and push to `main` | the `make check` pieces that run without local tools: `agents-check`, `guard-test`, `notices-check`, `notices-test`, `generate-check`, `generate-test`, golangci-lint, `go test -race` (`coord-test` and `installer-lint` stay local: they need tmux, ansible-lint, shellcheck) |
+
+`THIRD_PARTY_NOTICES` lists the licences of the dependencies that ship in the binaries (built from
+`./cmd/...`) and the embedded web assets. `make notices` regenerates it; `make notices-check` fails
+when it is out of date or a licence is off the allowlist (issue #12, `docs/product-decisions.md` §5).
 
 A PR is mergeable only with green CI. Integration and e2e targets (`make lab-integration`, `make e2e`, …) need a
 lab and run on demand; the PR says when they were run.

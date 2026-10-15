@@ -6,7 +6,7 @@ COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 VERSION_PKG := github.com/nesiler/tagcess/internal/version
 LDFLAGS := -s -w -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(COMMIT)
 
-.PHONY: build version agents agents-check guard-test coord-test check-fast check go-fast go-full generate generate-check generate-test image-test lab-up lab-down lab-integration hostlab-up hostlab-down hostlab-ui hostlab-e2e e2e ui ui-down k8s-lab f4-e2e installer-lint installer-test adopt-target-up adopt-target-down
+.PHONY: build version agents agents-check guard-test coord-test check-fast check go-fast go-full generate generate-check generate-test notices notices-check notices-test image-test lab-up lab-down lab-integration hostlab-up hostlab-down hostlab-ui hostlab-e2e e2e ui ui-down k8s-lab f4-e2e installer-lint installer-test adopt-target-up adopt-target-down
 
 build:         ## Build every cmd binary into bin/ with the version stamped in
 	@mkdir -p bin
@@ -47,6 +47,15 @@ generate-check: ## Fail if generated code is stale
 generate-test: ## TestGenerate_UpToDate: generate + generate-check on fixtures in a temp copy
 	@scripts/test-generate.sh
 
+notices:       ## Regenerate THIRD_PARTY_NOTICES from ./cmd/... and the embedded web assets
+	go run ./tools/notices generate
+
+notices-check: ## Fail if THIRD_PARTY_NOTICES is stale or a licence is off the allowlist
+	go run ./tools/notices check
+
+notices-test:  ## TestNotices_Stale: check/generate round-trip in a throwaway copy of the repo
+	@scripts/test-notices.sh
+
 image-test:    ## Build deploy/Dockerfile and check it runs non-root with git (needs Docker)
 	go test -tags=image -count=1 -run TestImage ./deploy/...
 
@@ -82,7 +91,7 @@ ui-down:       ## Stop the stack `make ui` started
 
 check-fast: go-fast   ## Quick gate (Stop hook): gofmt, vet, go test
 
-check: agents-check guard-test coord-test installer-lint go-full   ## Full gate (before a PR; CI runs the pieces that need no local-only tools)
+check: agents-check guard-test coord-test installer-lint notices-check notices-test go-full   ## Full gate (before a PR; CI runs the pieces that need no local-only tools)
 
 go-fast:
 ifneq ($(HAS_GO),)
