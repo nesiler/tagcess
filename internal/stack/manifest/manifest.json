@@ -1,0 +1,30 @@
+{
+  "release": "v0.1.0-dev",
+  "images": {
+    "caddy": {
+      "name": "docker.io/library/caddy",
+      "tag": "2.11.7",
+      "digest": "sha256:685ae3d7c34d9b5f8caeddc5d14051db7bbd88ff1f5a2fa0c16bd8ca328fb7af"
+    },
+    "headscale": {
+      "name": "docker.io/headscale/headscale",
+      "tag": "v0.29.5",
+      "digest": "sha256:780ed2f9e85719a2211277433f2c8afb45105d0d25031949a6848a485f9e216d"
+    },
+    "tagcess": {
+      "name": "ghcr.io/nesiler/tagcess",
+      "tag": "v0.1.0-dev",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "oauth2-proxy": {
+      "name": "quay.io/oauth2-proxy/oauth2-proxy",
+      "tag": "v7.15.5",
+      "digest": "sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916"
+    },
+    "tailscale": {
+      "name": "docker.io/tailscale/tailscale",
+      "tag": "v1.104.1",
+      "digest": "sha256:87c55d6be56ad85b3d8bceca5f87f73de288c609131460dd1be1874c250cc41d"
+    }
+  }
+}
