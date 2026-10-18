@@ -1,0 +1,356 @@
+{
+  "version": 1,
+  "result": "complete",
+  "findings": [
+    {
+      "kind": "caddy",
+      "subject": "caddy/systemd",
+      "attrs": {
+        "admin_reachable": true,
+        "caddyfile_path": "/etc/caddy/Caddyfile",
+        "container": "",
+        "container_state": "",
+        "disk_equals_running": "yes",
+        "image": "",
+        "tagcess_marker": true,
+        "unit": "caddy",
+        "unit_state": "active",
+        "validate": "ok",
+        "version": "2.8.4"
+      },
+      "evidence": "unit/container, caddy validate, admin GET /config/"
+    },
+    {
+      "kind": "container",
+      "subject": "container/authentik-server",
+      "attrs": {
+        "compose_project": "authentik",
+        "image": "ghcr.io/goauthentik/server:2024.8",
+        "name": "authentik-server",
+        "ports": [],
+        "state": "running"
+      },
+      "evidence": "docker ps"
+    },
+    {
+      "kind": "container",
+      "subject": "container/other-web",
+      "attrs": {
+        "compose_project": "",
+        "image": "nginx:1.27",
+        "name": "other-web",
+        "ports": [
+          "8080/tcp"
+        ],
+        "state": "running"
+      },
+      "evidence": "docker ps"
+    },
+    {
+      "kind": "docker",
+      "subject": "docker/engine",
+      "attrs": {
+        "compose_version": "2.29.7",
+        "installed": true,
+        "running": true,
+        "version": "27.3.1"
+      },
+      "evidence": "docker version"
+    },
+    {
+      "kind": "headscale",
+      "subject": "headscale/systemd",
+      "attrs": {
+        "configtest": "ok",
+        "container": "",
+        "container_state": "",
+        "database_type": "sqlite",
+        "dns_extra_records_path": "/var/lib/headscale/extra-records.json",
+        "image": "",
+        "oidc_issuer": "https://idp.example.com",
+        "policy_check": "ok",
+        "policy_mode": "file",
+        "policy_sha256": "a37eda80c9ce45a1edef45c711f71810c9e8d8c44c710ca309d97cc89b1c09f7",
+        "server_url": "https://hs.example.com:443/",
+        "socket": "/var/run/headscale/headscale.sock",
+        "unit": "headscale",
+        "unit_state": "active",
+        "version": "0.26.1"
+      },
+      "evidence": "unit/container, configtest, policy check"
+    },
+    {
+      "kind": "host",
+      "subject": "host",
+      "attrs": {
+        "arch": "x86_64",
+        "cpus": 2,
+        "disk_free_mb": 60000,
+        "kernel": "6.1.0-27-amd64",
+        "mem_mb": 3952,
+        "os_id": "debian",
+        "os_name": "Debian GNU/Linux 12 (bookworm)",
+        "os_version": "12",
+        "systemd": true
+      },
+      "evidence": "os-release, proc, uname, df"
+    },
+    {
+      "kind": "idp",
+      "subject": "idp/authentik/docker",
+      "attrs": {
+        "container": "authentik-server",
+        "container_state": "running",
+        "image": "ghcr.io/goauthentik/server:2024.8",
+        "name": "authentik",
+        "unit": "",
+        "unit_state": ""
+      },
+      "evidence": "unit or image name"
+    },
+    {
+      "kind": "idp",
+      "subject": "idp/zitadel/systemd",
+      "attrs": {
+        "container": "",
+        "container_state": "",
+        "image": "",
+        "name": "zitadel",
+        "unit": "zitadel",
+        "unit_state": "inactive"
+      },
+      "evidence": "unit or image name"
+    },
+    {
+      "kind": "k8s",
+      "subject": "k8s/host",
+      "attrs": {
+        "k3s_kubeconfig_present": true,
+        "root_kubeconfig_present": true,
+        "units": [
+          "k3s=inactive"
+        ]
+      },
+      "evidence": "unit presence, file existence"
+    },
+    {
+      "kind": "listener",
+      "subject": "listener/2019/tcp",
+      "attrs": {
+        "listening": true,
+        "owner": "caddy",
+        "owner_kind": "process",
+        "port": 2019,
+        "proto": "tcp"
+      },
+      "evidence": "ss"
+    },
+    {
+      "kind": "listener",
+      "subject": "listener/3478/udp",
+      "attrs": {
+        "listening": false,
+        "port": 3478,
+        "proto": "udp"
+      },
+      "evidence": "ss"
+    },
+    {
+      "kind": "listener",
+      "subject": "listener/41641/udp",
+      "attrs": {
+        "listening": true,
+        "owner": "tailscaled",
+        "owner_kind": "process",
+        "port": 41641,
+        "proto": "udp"
+      },
+      "evidence": "ss"
+    },
+    {
+      "kind": "listener",
+      "subject": "listener/4180/tcp",
+      "attrs": {
+        "listening": false,
+        "port": 4180,
+        "proto": "tcp"
+      },
+      "evidence": "ss"
+    },
+    {
+      "kind": "listener",
+      "subject": "listener/443/tcp",
+      "attrs": {
+        "listening": true,
+        "owner": "caddy",
+        "owner_kind": "process",
+        "port": 443,
+        "proto": "tcp"
+      },
+      "evidence": "ss"
+    },
+    {
+      "kind": "listener",
+      "subject": "listener/443/udp",
+      "attrs": {
+        "listening": true,
+        "owner": "caddy",
+        "owner_kind": "process",
+        "port": 443,
+        "proto": "udp"
+      },
+      "evidence": "ss"
+    },
+    {
+      "kind": "listener",
+      "subject": "listener/50443/tcp",
+      "attrs": {
+        "listening": false,
+        "port": 50443,
+        "proto": "tcp"
+      },
+      "evidence": "ss"
+    },
+    {
+      "kind": "listener",
+      "subject": "listener/80/tcp",
+      "attrs": {
+        "listening": true,
+        "owner": "caddy",
+        "owner_kind": "process",
+        "port": 80,
+        "proto": "tcp"
+      },
+      "evidence": "ss"
+    },
+    {
+      "kind": "listener",
+      "subject": "listener/8080/tcp",
+      "attrs": {
+        "listening": true,
+        "owner": "other-web",
+        "owner_kind": "container",
+        "port": 8080,
+        "proto": "tcp"
+      },
+      "evidence": "ss"
+    },
+    {
+      "kind": "listener",
+      "subject": "listener/9090/tcp",
+      "attrs": {
+        "listening": false,
+        "port": 9090,
+        "proto": "tcp"
+      },
+      "evidence": "ss"
+    },
+    {
+      "kind": "listener",
+      "subject": "listener/9443/tcp",
+      "attrs": {
+        "listening": false,
+        "port": 9443,
+        "proto": "tcp"
+      },
+      "evidence": "ss"
+    },
+    {
+      "kind": "other",
+      "subject": "other/dnsmasq",
+      "attrs": {
+        "unit": "dnsmasq",
+        "unit_state": "active"
+      },
+      "evidence": "unit"
+    },
+    {
+      "kind": "other",
+      "subject": "other/headplane",
+      "attrs": {
+        "config_dir_present": true,
+        "container": "",
+        "container_state": "",
+        "image": "",
+        "unit": "",
+        "unit_state": ""
+      },
+      "evidence": "unit, container, directory"
+    },
+    {
+      "kind": "other",
+      "subject": "other/nftables",
+      "attrs": {
+        "config_present": true,
+        "unit": "nftables",
+        "unit_state": "active"
+      },
+      "evidence": "unit, file existence"
+    },
+    {
+      "kind": "reverse_proxy",
+      "subject": "reverse_proxy/443",
+      "attrs": {
+        "owner_kind": "process",
+        "port": 443,
+        "product": "caddy",
+        "version": "2.8.4"
+      },
+      "evidence": "ss + version"
+    },
+    {
+      "kind": "reverse_proxy",
+      "subject": "reverse_proxy/80",
+      "attrs": {
+        "owner_kind": "process",
+        "port": 80,
+        "product": "caddy",
+        "version": "2.8.4"
+      },
+      "evidence": "ss + version"
+    },
+    {
+      "kind": "tailscale",
+      "subject": "tailscale/systemd",
+      "attrs": {
+        "backend_state": "Running",
+        "container": "",
+        "container_state": "",
+        "control_url": "https://hs.example.com",
+        "image": "",
+        "ips": [
+          "100.64.0.1",
+          "fd7a:115c:a1e0::1"
+        ],
+        "tags": [
+          "tag:server"
+        ],
+        "unit": "tailscaled",
+        "unit_state": "active",
+        "version": "1.78.1"
+      },
+      "evidence": "unit/container, tailscale status --json"
+    },
+    {
+      "kind": "wireguard",
+      "subject": "wireguard/host",
+      "attrs": {
+        "config_files": [
+          "wg0.conf",
+          "wg1.conf"
+        ],
+        "interfaces": [
+          "wg0"
+        ],
+        "peer_counts": [
+          "wg0=2"
+        ],
+        "quick_units": [
+          "wg-quick@wg0"
+        ],
+        "ui_present": false
+      },
+      "evidence": "wg show interfaces, directory listing"
+    }
+  ]
+}
