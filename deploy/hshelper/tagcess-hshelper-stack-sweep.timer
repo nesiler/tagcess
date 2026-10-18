@@ -1,0 +1,10 @@
+[Unit]
+Description=Delete stale tagcess handoff files every five minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+Unit=tagcess-hshelper-stack-sweep.service
+
+[Install]
+WantedBy=timers.target
