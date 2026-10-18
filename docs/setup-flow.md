@@ -452,10 +452,16 @@ box (architecture.md §10.1) lists the remaining items, as it does today.
   another component's service block or config file that would change refuses the request (`settings_conflict`). The
   candidate is checked with `docker compose config --quiet` in `private/` before anything outside it is written.
 - `stack.upgrade` here only rewrites that component's image in `compose.yaml` and restarts it; the automatic return
-  to the previous digest for stateless services (§5.6) belongs to I-22. `discover` needs the scanner of I-3.
+  to the previous digest for stateless services (§5.6) belongs to I-22. `discover` runs the scanner of I-3 (`internal/discover`, wired as `StackConfig.Discover`).
 - Handoff files `handoff/in/<request_id>.<kind>` are owner/size-checked on the open fd; every file that is not a
   listed kind of the running request is deleted unread. Cleanup runs at the end of a request, at boot, in
   `finalize` and by `stack-sweep` (older than 15 minutes).
+
+**Implementation (I-3, `internal/discover`):** `discover.Run` scans through a small `Host` interface (files, directory
+names, existence, commands, loopback GET) so fixtures replace the host in tests. Findings carry only fields copied one by
+one (typed decoders for `config.yaml` and `tailscale status --json`; `docker ps` is asked for five fields only); every
+value is sanitized and bounded, URLs lose user info and query. The report has no timestamps (tagcess adds `observed_at`)
+and is byte-identical for an unchanged host. `result` is `partial` when systemd units or listeners cannot be read.
 
 #### 5.3.1 Configurable settings and fixed boundaries
 **[Decided]** everything is chosen in the UI, including addresses, CIDRs and paths (product-decisions §11). The helper
