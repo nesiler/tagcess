@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nesiler/tagcess/internal/dns"
 	"github.com/nesiler/tagcess/internal/site"
 )
 
@@ -49,8 +50,8 @@ func caddyForbiddenPage(signOut string) string {
 
 // caddySnippetAuthFlow is the shared role-control flow of the vpn_site
 // snippets (oauth2-proxy forward_auth, fixed text).
-func caddySnippetAuthFlow(signOut, gate string) string {
-	return "\t@tailnet remote_ip 100.64.0.0/10\n" +
+func caddySnippetAuthFlow(signOut, gate, tailnet string) string {
+	return "\t@tailnet remote_ip " + tailnet + "\n" +
 		"\thandle @tailnet {\n" +
 		"\t\thandle /oauth2/* {\n" +
 		"\t\t\treverse_proxy " + gate + "\n" +
@@ -82,8 +83,8 @@ const caddySnippetTLS = "\ttls /etc/letsencrypt/live/{args[0]}/fullchain.pem /et
 // missing certificate never blocks the record and Caddy never provisions a
 // path that does not exist. Unused snippets produce no adapt JSON, so the
 // first-import parity is unaffected.
-func caddySnippets(s06open, noTLS bool, signOut, upstream, gate string) string {
-	authFlow := caddySnippetAuthFlow(signOut, gate)
+func caddySnippets(s06open, noTLS bool, signOut, upstream, gate, tailnet string) string {
+	authFlow := caddySnippetAuthFlow(signOut, gate, tailnet)
 	tail := caddyTailOpen
 	if !s06open {
 		tail = caddyTailClosed
@@ -164,6 +165,19 @@ type CaddyConfig struct {
 	// GateUpstream is the oauth2-proxy address (host:port) every gate reverse_proxy and forward_auth
 	// uses. Empty means the default GateUpstream.
 	GateUpstream string
+	// TailnetCIDR is the IPv4 tailnet prefix every site matcher admits (tailnet.cidr). Empty means
+	// dns.DefaultTailnetCIDR. A value that fails dns.ParseTailnetCIDR fails the render.
+	TailnetCIDR string
+}
+
+// tailnetCIDR is the checked, canonical tailnet prefix; a bad value is refused, never repaired
+// (it decides which source addresses reach the sites).
+func (c CaddyConfig) tailnetCIDR() (string, error) {
+	p, err := dns.ParseTailnetCIDR(c.TailnetCIDR)
+	if err != nil {
+		return "", err
+	}
+	return p.String(), nil
 }
 
 // gateUpstream is the checked gate address: a plain host:port only, anything else is refused, never
@@ -230,6 +244,11 @@ func RenderCaddyfile(sites []site.Site, cfg CaddyConfig) (string, error) {
 		return "", fmt.Errorf("caddy render: %w", err)
 	}
 
+	tailnet, err := cfg.tailnetCIDR()
+	if err != nil {
+		return "", fmt.Errorf("caddy render: %w", err)
+	}
+
 	blocks := make([]string, 0, len(sites))
 	systemBlocks := make(map[string]string)
 	seenHosts := make(map[string]bool)
@@ -275,7 +294,7 @@ func RenderCaddyfile(sites []site.Site, cfg CaddyConfig) (string, error) {
 	out.WriteString(caddyMarker)
 	out.WriteString("{\n\temail " + email + "\n}\n")
 	out.WriteString("\n")
-	out.WriteString(caddySnippets(cfg.S06Open, noTLS, signOut, upstream, gate))
+	out.WriteString(caddySnippets(cfg.S06Open, noTLS, signOut, upstream, gate, tailnet))
 	for _, block := range blocks {
 		out.WriteString("\n")
 		out.WriteString(block)
@@ -304,6 +323,10 @@ func renderCaddySite(s site.Site, cfg CaddyConfig) (string, error) {
 		return "", err
 	}
 	cert, err := caddyCert(s.Cert, hosts, cfg.Certs)
+	if err != nil {
+		return "", err
+	}
+	tailnet, err := cfg.tailnetCIDR()
 	if err != nil {
 		return "", err
 	}
@@ -347,7 +370,7 @@ func renderCaddySite(s site.Site, cfg CaddyConfig) (string, error) {
 				// A bare redir is ordered before the snippet's 403 catch-all
 				// and would answer a non-tailnet source with a redirect; the
 				// tailnet-restricted form keeps the source rule (ADR 0010 m.5).
-				b.WriteString(r.tailnet(i))
+				b.WriteString(r.tailnet(i, tailnet))
 			}
 		}
 		b.WriteString(api)
@@ -387,7 +410,7 @@ func renderCaddySite(s site.Site, cfg CaddyConfig) (string, error) {
 		} else {
 			// Only the tailnet source may take a redirect; a bare redir would
 			// precede the 403 branch and answer a non-tailnet source with it.
-			b.WriteString("\t@tailnet remote_ip 100.64.0.0/10\n")
+			b.WriteString("\t@tailnet remote_ip " + tailnet + "\n")
 			b.WriteString("\thandle @tailnet {\n")
 			for _, r := range redirects {
 				b.WriteString(indentLines(r.line(), 1))
@@ -665,10 +688,10 @@ func (r caddyRedirect) line() string {
 // catch-all, so it would answer a non-tailnet source with a redirect; the
 // combined remote_ip+path matcher keeps every outside source at 403. The
 // matcher name is unique per site (i is the redirect index).
-func (r caddyRedirect) tailnet(i int) string {
+func (r caddyRedirect) tailnet(i int, cidr string) string {
 	name := "@redir" + strconv.Itoa(i)
 	return "\t" + name + " {\n" +
-		"\t\tremote_ip 100.64.0.0/10\n" +
+		"\t\tremote_ip " + cidr + "\n" +
 		"\t\tpath " + r.source + "\n" +
 		"\t}\n" +
 		"\tredir " + name + " " + r.target + " " + strconv.Itoa(r.code) + "\n"

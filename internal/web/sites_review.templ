@@ -3,7 +3,6 @@ package web
 import (
 	"strconv"
 
-	"github.com/nesiler/tagcess/internal/dns"
 	"github.com/nesiler/tagcess/internal/web/ui"
 )
 
@@ -222,8 +221,8 @@ templ SiteFirstImportPage(v SiteFirstImportView, csrfToken string, preview bool)
 								<td>{ r.Type }</td>
 								<td>
 									<code>{ r.Value }</code>
-									if dns.PrivateOutsideTailnet(r.Value) {
-										@offTailnetWarning(r.Value)
+									if offTailnet(r.Value, v.TailnetCIDR) {
+										@offTailnetWarning(r.Value, tailnetLabel(v.TailnetCIDR))
 									}
 								</td>
 							</tr>

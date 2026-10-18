@@ -251,3 +251,27 @@ func TestConfigRole_PingURLFollowsAuthProxyAddress(t *testing.T) {
 		}
 	}
 }
+
+// Issue #6: a custom headscale_prefix_v4 flows into the tagcess config as tailnet.cidr; the default
+// writes no tailnet section (the goldens above stay unchanged).
+func TestAppRole_TailnetCIDR(t *testing.T) {
+	t.Parallel()
+	vars := appVarSets(t)["lab"]
+	vars["headscale_prefix_v4"] = "10.200.0.0/16"
+	res, out := renderApp(t, vars)
+	if res.ExitCode != 0 {
+		t.Fatalf("render:\n%s", res.Output)
+	}
+	raw, err := os.ReadFile(filepath.Join(out, "config.yaml")) // #nosec G304 -- test temp dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Tailnet struct {
+			CIDR string `yaml:"cidr"`
+		} `yaml:"tailnet"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil || doc.Tailnet.CIDR != "10.200.0.0/16" {
+		t.Fatalf("tailnet.cidr = %q (%v), want 10.200.0.0/16\n%s", doc.Tailnet.CIDR, err, raw)
+	}
+}

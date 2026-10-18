@@ -438,7 +438,9 @@ type SiteFirstImportView struct {
 	// cannot be kept (unreadable file, invalid record, collision with a site host) and blocks it.
 	ManualDNS    []dns.Record
 	ManualDNSErr string
-	Version      string
+	// TailnetCIDR is the configured tailnet prefix (empty: the default) the off-tailnet warning uses.
+	TailnetCIDR string
+	Version     string
 }
 
 // buildFirstImportView reads the seed and runs the parity comparison read-only (S-03.2/G-01): the
@@ -500,6 +502,7 @@ func (h *SiteReviewHandler) buildFirstImportView(ctx context.Context) SiteFirstI
 		v.ParityErr = err.Error()
 	}
 	v.ManualDNS, v.ManualDNSErr = h.manualDNS(ctx, sites, settings.DNS)
+	v.TailnetCIDR = settings.Caddy.TailnetCIDR
 	v.Version = firstImportVersion(seed, v.ParityDiff, manualDNSKey(v), v.Pending)
 	return v
 }

@@ -20,6 +20,8 @@ import (
 	"unicode"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/nesiler/tagcess/internal/dns"
 )
 
 const (
@@ -46,6 +48,14 @@ type Config struct {
 	Sites      Sites     `yaml:"sites"`
 	HostApply  HostApply `yaml:"hostapply"`
 	Gate       Gate      `yaml:"gate"`
+	Tailnet    Tailnet   `yaml:"tailnet"`
+}
+
+// Tailnet describes the VPN's address range. CIDR is Headscale's prefixes.v4 and is the only source
+// range the generated site matchers admit. Optional: unset is 100.64.0.0/10. IPv4 only, not wider
+// than /8 (dns.ParseTailnetCIDR).
+type Tailnet struct {
+	CIDR string `yaml:"cidr"`
 }
 
 // Gate describes the oauth2-proxy gate to the sign-out links (J1). ClientID is the public client id of
@@ -326,6 +336,9 @@ func (c *Config) validate() error {
 	}
 	if up := c.Gate.Upstream; up != "" && !validHostPort(up) {
 		invalid = append(invalid, "gate.upstream: must be host:port")
+	}
+	if _, err := dns.ParseTailnetCIDR(c.Tailnet.CIDR); err != nil {
+		invalid = append(invalid, "tailnet.cidr: "+err.Error())
 	}
 	if c.Sync.Interval <= 0 {
 		invalid = append(invalid, "sync.interval: must be positive")

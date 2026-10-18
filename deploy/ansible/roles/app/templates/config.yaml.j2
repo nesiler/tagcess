@@ -51,3 +51,8 @@ gate:
   upstream: "{{ gate_upstream }}"
 {% endif %}
 {% endif %}
+{% set tailnet_cidr = headscale_prefix_v4 | default('100.64.0.0/10') %}
+{% if tailnet_cidr != '100.64.0.0/10' %}
+tailnet:
+  cidr: "{{ tailnet_cidr }}"
+{% endif %}

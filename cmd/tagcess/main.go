@@ -911,6 +911,7 @@ func siteSettingsReader(q *db.Queries, sites *site.Store, cfg *config.Config) fu
 				// The (k8s) upstream the first-import parity was checked with is the one every apply writes.
 				K8sUpstream:  cfg.Sites.K8sUpstream,
 				GateUpstream: cfg.Gate.Upstream,
+				TailnetCIDR:  cfg.Tailnet.CIDR,
 				AdminGroup:   locked.AdminGroup(),
 			},
 			DNS:       render.DNSConfig{AValue: cfg.Sites.VPNAddress},

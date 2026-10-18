@@ -58,6 +58,11 @@ gate:
   # must match oauth2-proxy's http_address. Optional: unset is 127.0.0.1:4180.
   # upstream: 127.0.0.1:4181
 
+# Tailnet range: Headscale's prefixes.v4. The only source range the generated site matchers admit.
+# Optional: unset is 100.64.0.0/10. IPv4 only, canonical form, not wider than /8.
+# tailnet:
+#   cidr: 100.64.0.0/10
+
 # Caddy admin API and the file a restart reads (ADR 0005).
 caddy:
   admin_url: http://127.0.0.1:2019

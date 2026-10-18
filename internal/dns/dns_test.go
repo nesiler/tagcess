@@ -7,6 +7,7 @@ package dns_test
 import (
 	"encoding/binary"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -505,8 +506,37 @@ func TestPrivateOutsideTailnet(t *testing.T) {
 		"::ffff:100.64.0.1": false,
 		"fe80::1":           true,
 	} {
-		if got := dns.PrivateOutsideTailnet(value); got != want {
-			t.Errorf("dns.PrivateOutsideTailnet(%q) = %v, want %v", value, got, want)
+		if got := dns.PrivateOutsideTailnet(value, netip.Prefix{}); got != want {
+			t.Errorf("dns.PrivateOutsideTailnet(%q, default) = %v, want %v", value, got, want)
+		}
+	}
+}
+
+// AC4: the warning follows the configured prefix, not the fixed CGNAT range.
+func TestPrivateOutsideTailnet_ConfiguredPrefix(t *testing.T) {
+	p := netip.MustParsePrefix("10.200.0.0/16")
+	for value, want := range map[string]bool{
+		"10.200.3.4":  false, // inside the configured tailnet
+		"10.201.0.1":  true,  // private, outside it
+		"100.64.0.1":  false, // CGNAT is not an RFC 1918 address, so it is not flagged either
+		"203.0.113.9": false,
+	} {
+		if got := dns.PrivateOutsideTailnet(value, p); got != want {
+			t.Errorf("PrivateOutsideTailnet(%q, %s) = %v, want %v", value, p, got, want)
+		}
+	}
+}
+
+// AC3 (shared validator): invalid, IPv6, non-canonical and too wide prefixes fail.
+func TestParseTailnetCIDR(t *testing.T) {
+	for s, ok := range map[string]bool{
+		"": true, "100.64.0.0/10": true, "10.0.0.0/8": true, "10.200.0.0/16": true, "192.0.2.0/24": true,
+		"0.0.0.0/0": false, "10.0.0.0/7": false, "64.0.0.0/2": false, "fd7a:115c:a1e0::/48": false,
+		"100.64.0.1/10": false, "nope": false, "100.64.0.0": false, "100.64.0.0/33": false,
+	} {
+		_, err := dns.ParseTailnetCIDR(s)
+		if (err == nil) != ok {
+			t.Errorf("ParseTailnetCIDR(%q) err = %v, want ok=%v", s, err, ok)
 		}
 	}
 }

@@ -449,3 +449,26 @@ func TestConfig_GateUpstream(t *testing.T) {
 		}
 	}
 }
+
+// TestConfig_TailnetCIDR is AC3 of issue #6: tailnet.cidr is optional and must be a canonical IPv4
+// prefix no wider than /8.
+func TestConfig_TailnetCIDR(t *testing.T) {
+	line := "sync:\n"
+	with := func(v string) string {
+		return strings.Replace(validYAML, line, "tailnet:\n  cidr: \""+v+"\"\n"+line, 1)
+	}
+	if c, err := parse(t, validYAML); err != nil || c.Tailnet.CIDR != "" {
+		t.Fatalf("default: %v %+v", err, c)
+	}
+	for _, ok := range []string{"100.64.0.0/10", "10.0.0.0/8", "10.200.0.0/16", "192.0.2.0/24"} {
+		c, err := parse(t, with(ok))
+		if err != nil || c.Tailnet.CIDR != ok {
+			t.Errorf("%q: %v %+v", ok, err, c)
+		}
+	}
+	for _, bad := range []string{"nope", "100.64.0.0", "100.64.0.1/10", "10.0.0.0/7", "0.0.0.0/0", "fd7a:115c:a1e0::/48", "100.64.0.0/33", " "} {
+		if _, err := parse(t, with(bad)); err == nil || !strings.Contains(err.Error(), "tailnet.cidr") {
+			t.Errorf("%q accepted or wrong error: %v", bad, err)
+		}
+	}
+}

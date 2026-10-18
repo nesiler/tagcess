@@ -130,11 +130,11 @@ const (
 )
 
 // offTailnetWarning explains a manual record that points to a private address outside the tailnet.
-templ offTailnetWarning(value string) {
+templ offTailnetWarning(value, cidr string) {
 	<div data-off-tailnet="true">
 		@ui.Callout(ui.N{Tone: ui.Warn}) {
 			<code>{ value }</code> tailnet dışı özel bir adres. Yalnız bu ağa route
-			alan cihazlar ulaşabilir; diğer kullanıcılar bağlanamaz. Tailnet adresi (100.64.0.0/10)
+			alan cihazlar ulaşabilir; diğer kullanıcılar bağlanamaz. Tailnet adresi ({ cidr })
 			kullanmak genellikle doğrudur.
 		}
 	</div>
@@ -166,7 +166,7 @@ templ DNSPreviewPage(v dnsPreviewView, csrfToken string) {
 		}
 	} else {
 		if v.OffTailnet != "" {
-			@offTailnetWarning(v.OffTailnet)
+			@offTailnetWarning(v.OffTailnet, v.TailnetCIDR)
 		}
 		<p>Yalnız MagicDNS dosyası değişir; Caddy ve Zitadel artifact'leri aynı kalır. Apply edilecek fark:</p>
 		@ui.Diff("DNS", v.Diff.DNS)
