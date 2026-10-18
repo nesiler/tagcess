@@ -1171,3 +1171,41 @@ func TestStackApply_OtherApplyWhileHeadscaleFailedRefused(t *testing.T) {
 		t.Errorf("settings recorded that config.yaml lacks: %+v", r)
 	}
 }
+
+// A Headscale service is not installed until its health check passes: a restart that does not become healthy
+// leaves it Failed, so it can still be repaired with new settings and removed.
+func TestStackApply_RestartWithoutHealthKeepsFailed(t *testing.T) {
+	e := newStackEnv(t)
+	e.docker.fail["up"] = errors.New("no oidc")
+	if r := e.apply(idA, stack.Headscale); r.ErrorCode != StackStartFailed {
+		t.Fatalf("first install: %+v", r)
+	}
+	// docker compose restart succeeds, the health-gated start still fails.
+	e.publish(StackRequest{Version: 1, RequestID: idB, Op: OpServiceRestart, BaseRev: e.rev(), Component: stack.Headscale})
+	e.run()
+	if r := e.result(); r.ErrorCode != StackStartFailed {
+		t.Fatalf("restart without health: %+v", r)
+	}
+	// Repair with a corrected issuer.
+	e.docker.fail = map[string]error{}
+	req := e.applyReq(idC, stack.Headscale)
+	req.Settings.IssuerURL = "https://idp.example.net"
+	e.publish(req)
+	e.run()
+	succeeded(t, e.result())
+	if !bytes.Contains(e.readStack("headscale/config.yaml"), []byte("idp.example.net")) {
+		t.Error("repair did not render the corrected issuer")
+	}
+}
+
+func TestStackApply_RestartWithoutHealthStillRemovable(t *testing.T) {
+	e := newStackEnv(t)
+	e.docker.fail["up"] = errors.New("no oidc")
+	e.apply(idA, stack.Headscale)
+	e.publish(StackRequest{Version: 1, RequestID: idB, Op: OpServiceRestart, BaseRev: e.rev(), Component: stack.Headscale})
+	e.run()
+	e.result()
+	e.publish(StackRequest{Version: 1, RequestID: idC, Op: OpStackRemove, BaseRev: e.rev(), Component: stack.Headscale})
+	e.run()
+	succeeded(t, e.result())
+}

@@ -560,7 +560,14 @@ func (a *stackApplier) restart() (Outcome, error) {
 		return a.fail(StackPhaseStart, StackStartFailed)
 	}
 	if st.failed(a.req.Component) {
-		// The service came back, so the install is no longer unverified: its config is protected from now on.
+		// A restart alone does not wait for health. Only a passing health check verifies the install; until then
+		// it stays Failed, so it can be repaired or removed.
+		if err := a.dockerStep(a.cfg.stepTimeout(), func(ctx context.Context) error {
+			return a.cfg.Docker.Up(ctx, a.composeFile(), a.req.Component)
+		}); err != nil {
+			return a.fail(StackPhaseStart, StackStartFailed)
+		}
+		// The service is healthy, so the install is verified: its config is protected from now on.
 		st.Failed = slices.DeleteFunc(slices.Clone(st.Failed), func(x stack.Component) bool { return x == a.req.Component })
 		if err := writeStackState(a.cfg.priv(), st); err != nil {
 			return a.fail(StackPhaseWrite, StackWriteFailed)
