@@ -2,13 +2,18 @@ package discover
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files")
@@ -361,5 +366,69 @@ func TestRun_RealHostProducesAValidDocument(t *testing.T) {
 	var r Report
 	if err := json.Unmarshal(b, &r); err != nil || r.Version != Version || len(r.Findings) == 0 {
 		t.Fatalf("bad document: %v %+v", err, r)
+	}
+}
+
+func TestScan_PolicyPathToASecretIsNotHashed(t *testing.T) {
+	h := fullHost()
+	h.files["/etc/headscale/config.yaml"] = strings.Replace(h.files["/etc/headscale/config.yaml"],
+		"path: /etc/headscale/policy.hujson", "path: /etc/headscale/oidc_secret", 1)
+	out := scanJSON(t, h)
+	if slices.Contains(h.reads, "/etc/headscale/oidc_secret") {
+		t.Error("the scanner read a policy path that is not a policy file")
+	}
+	if bytes.Contains(out, []byte(sha256Hex(canary))) {
+		t.Error("the hash of a secret file is in the report")
+	}
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+func TestScan_OSReleaseFallsBackToUsrLib(t *testing.T) {
+	h := fullHost()
+	h.files["/usr/lib/os-release"] = h.files["/etc/os-release"]
+	delete(h.files, "/etc/os-release")
+	if !bytes.Contains(scanJSON(t, h), []byte(`"os_id": "debian"`)) && !bytes.Contains(scanJSON(t, h), []byte(`"os_id":"debian"`)) {
+		t.Error("os_id is empty when /etc/os-release is a link")
+	}
+}
+
+func TestOSHost_RunKeepsStderrOut(t *testing.T) {
+	out, err := runCmd("sh", "-c", "echo out; echo warn >&2")
+	if err != nil || out != "out\n" {
+		t.Errorf("out = %q, err = %v; want stdout only", out, err)
+	}
+}
+
+func TestOSHost_ReadFileRefusesLinksAndFIFOs(t *testing.T) {
+	dir := t.TempDir()
+	reg := filepath.Join(dir, "reg")
+	if err := os.WriteFile(reg, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	fifo := filepath.Join(dir, "fifo")
+	if err := os.Symlink(reg, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := (OSHost{}).ReadFile(reg); err != nil || string(b) != "x" {
+		t.Errorf("regular file: %q, %v", b, err)
+	}
+	for _, p := range []string{link, fifo} {
+		if _, err := (OSHost{}).ReadFile(p); err == nil {
+			t.Errorf("%s was read", p)
+		}
+	}
+}
+
+func TestCleanString_DropsFormatCharacters(t *testing.T) {
+	if got := cleanString("a" + string(rune(0x202e)) + "b" + string(rune(0x200b)) + "c"); got != "abc" {
+		t.Errorf("got %q", got)
 	}
 }

@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -24,19 +26,22 @@ const (
 // OSHost is the real host. Commands run with a fixed C locale and a time limit, output is capped.
 type OSHost struct{}
 
+// ReadFile opens without following a link or blocking (a FIFO would hang the root helper), then checks
+// the opened fd: only a regular file of bounded size is read.
 func (OSHost) ReadFile(p string) ([]byte, error) {
-	st, err := os.Lstat(p)
+	fd, err := unix.Open(p, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
 	}
-	if !st.Mode().IsRegular() {
+	f := os.NewFile(uintptr(fd), "discover")
+	defer func() { _ = f.Close() }()
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return nil, err
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFREG {
 		return nil, errors.New("not a regular file")
 	}
-	f, err := os.Open(p) //nolint:gosec // callers pass allow-listed paths only
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = f.Close() }()
 	b, err := io.ReadAll(io.LimitReader(f, maxFileBytes+1))
 	if err == nil && len(b) > maxFileBytes {
 		return nil, errors.New("file too large")
@@ -90,7 +95,7 @@ func runCmd(name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // fixed names and arguments from this package
 	cmd.Env = []string{"LC_ALL=C", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
 	var w capWriter
-	cmd.Stdout, cmd.Stderr = &w, &w
+	cmd.Stdout = &w // stderr is dropped: tools log warnings there that must not mix into parsed output
 	err := cmd.Run()
 	return w.buf.String(), err
 }

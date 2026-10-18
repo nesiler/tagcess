@@ -31,7 +31,11 @@ func cleanURL(raw string) string {
 func (s *scan) scanHost() {
 	a := Attrs{"systemd": s.h.Exists("/run/systemd/system")}
 	osr := map[string]string{}
-	if b, err := s.h.ReadFile("/etc/os-release"); err == nil {
+	b, err := s.h.ReadFile("/etc/os-release")
+	if err != nil { // Debian and Ubuntu link /etc/os-release to /usr/lib/os-release, which ReadFile refuses to follow
+		b, err = s.h.ReadFile("/usr/lib/os-release")
+	}
+	if err == nil {
 		sc := bufio.NewScanner(bytes.NewReader(b))
 		for sc.Scan() {
 			k, v, ok := strings.Cut(sc.Text(), "=")
@@ -190,6 +194,7 @@ func (s *scan) scanDocker() {
 	format := `{{.Names}}` + "\t" + `{{.Image}}` + "\t" + `{{.State}}` + "\t" + `{{.Ports}}` + "\t" + `{{.Label "com.docker.compose.project"}}`
 	out, err := s.h.Run("docker", "ps", "-a", "--no-trunc", "--format", format)
 	if err != nil {
+		s.partial = true
 		return
 	}
 	for _, l := range strings.Split(out, "\n") {

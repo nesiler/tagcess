@@ -147,6 +147,9 @@ func safePolicyPath(p string) bool {
 	if p == "" || path.Clean(p) != p {
 		return false
 	}
+	if ext := path.Ext(p); ext != ".hujson" && ext != ".json" {
+		return false
+	}
 	for _, r := range policyRoots {
 		if strings.HasPrefix(p, r) {
 			return true
@@ -179,7 +182,7 @@ func (s *scan) scanHeadscale() {
 		}
 		if binErr == nil {
 			a["configtest"] = okOrFailed(s.h.RunAs("headscale", "headscale", "-c", headscaleConfig, "configtest"))
-			if safePolicyPath(c.Policy.Path) {
+			if c.Policy.Mode == "file" && safePolicyPath(c.Policy.Path) {
 				if pb, err := s.h.ReadFile(c.Policy.Path); err == nil && len(pb) <= maxPolicyFileSize {
 					sum := sha256.Sum256(pb)
 					a["policy_sha256"] = hex.EncodeToString(sum[:])

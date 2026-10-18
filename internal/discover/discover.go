@@ -161,7 +161,7 @@ func sanitize(a Attrs) Attrs {
 
 func cleanString(s string) string {
 	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || r == utf8.RuneError {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == utf8.RuneError {
 			return -1
 		}
 		return r
