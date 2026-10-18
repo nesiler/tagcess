@@ -34,11 +34,13 @@ var validAdminGroup = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 // brace. With them it is byte-identical to deploy/caddy/tagcess.caddy (the F1 reference snippet); TestSystemSite_TagcessGolden
 // compares the two. Only devops reaches the UI, only from the tailnet, and the client's own
 // identity headers are stripped before forward_auth (security.md §3.1, S-05.2).
-func caddyTagcessBody(adminGroup, gate string) string {
-	return caddyTagcessHead1 + gate + caddyTagcessHead2 + gate + caddyTagcessHead3 + adminGroup + caddyTagcessTail
+func caddyTagcessBody(adminGroup, gate, tailnet string) string {
+	return caddyTagcessHead1 + tailnet + caddyTagcessHead1b + gate + caddyTagcessHead2 + gate + caddyTagcessHead3 + adminGroup + caddyTagcessTail
 }
 
-const caddyTagcessHead1 = "\t@tailnet remote_ip 100.64.0.0/10\n" +
+const caddyTagcessHead1 = "\t@tailnet remote_ip "
+
+const caddyTagcessHead1b = "\n" +
 	"\thandle @tailnet {\n" +
 	"\t\t# oauth2-proxy's login endpoints (start/callback) must reach oauth2-proxy itself.\n" +
 	"\t\thandle /oauth2/* {\n" +
@@ -132,7 +134,11 @@ func renderCaddySystemSite(s site.Site, cfg CaddyConfig) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		b.WriteString(caddyTagcessBody(admin, gate))
+		tailnet, err := cfg.tailnetCIDR()
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(caddyTagcessBody(admin, gate, tailnet))
 		b.WriteString("}\n")
 
 	case site.TemplateHeadscale:
@@ -166,7 +172,11 @@ func renderCaddySystemSite(s site.Site, cfg CaddyConfig) (string, error) {
 		// the record's internal sources. The parity gate compares the adapted JSON, which tells
 		// one matcher from two handles. An empty list drops the second handle (only the tailnet
 		// passes). The store already validated both lists (site.ParseSystemConfig).
-		b.WriteString("\t@tailnet remote_ip 100.64.0.0/10\n")
+		tailnet, err := cfg.tailnetCIDR()
+		if err != nil {
+			return "", err
+		}
+		b.WriteString("\t@tailnet remote_ip " + tailnet + "\n")
 		if len(settings.InternalSources) > 0 {
 			b.WriteString("\t@serbest remote_ip " + strings.Join(settings.InternalSources, " ") + "\n")
 		}

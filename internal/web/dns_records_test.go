@@ -44,6 +44,12 @@ var (
 
 func newDNSRecordsHarness(t *testing.T) *dnsRecordsHarness {
 	t.Helper()
+	return newDNSRecordsHarnessCIDR(t, "")
+}
+
+// newDNSRecordsHarnessCIDR is the harness with a configured tailnet.cidr.
+func newDNSRecordsHarnessCIDR(t *testing.T, cidr string) *dnsRecordsHarness {
+	t.Helper()
 	h := &dnsRecordsHarness{
 		reviewer: &fakeSiteReviewer{},
 		auditor:  &fakeSiteAuditor{},
@@ -56,7 +62,8 @@ func newDNSRecordsHarness(t *testing.T) *dnsRecordsHarness {
 		Lister:   fakeReviewLister{sites: []site.Site{roleSiteStored()}},
 		Manual:   h.manual,
 		Settings: fakeReviewSettings{settings: change.SiteSettings{
-			DNS: caddyrender.DNSConfig{AValue: "100.64.0.4"},
+			DNS:   caddyrender.DNSConfig{AValue: "100.64.0.4"},
+			Caddy: caddyrender.CaddyConfig{TailnetCIDR: cidr},
 		}},
 		Changes: h.changes,
 		Auditor: h.auditor,
@@ -412,5 +419,24 @@ func TestFirstImportPreview_FlagsOffTailnetManualRecord(t *testing.T) {
 	body := render(t, SiteFirstImportPage(v, "token", true))
 	if n := strings.Count(body, `data-off-tailnet="true"`); n != 1 {
 		t.Fatalf("off-tailnet warnings in the first-import preview = %d, want 1:\n%s", n, body)
+	}
+}
+
+// Issue #6 AC4: the off-tailnet warning follows the configured prefix and names it.
+func TestDNSPage_OffTailnetWarningUsesConfiguredPrefix(t *testing.T) {
+	h := newDNSRecordsHarnessCIDR(t, "10.200.0.0/16")
+	h.manual.recs = []dns.Record{
+		{Name: "in.example.com", Type: dns.TypeA, Value: "10.200.1.1"},  // inside the configured tailnet
+		{Name: "out.example.com", Type: dns.TypeA, Value: "10.201.1.1"}, // private, outside it
+	}
+	body := h.get(t, "/headscale/dns").Body.String()
+	if n := strings.Count(body, `data-off-tailnet="true"`); n != 1 {
+		t.Errorf("off-tailnet warnings = %d, want 1 (only 10.201.1.1)\n%s", n, body)
+	}
+
+	h.reviewer.previewPlans = []change.SitePlan{{Op: change.SiteManualDNS, Diff: change.SiteDiff{DNS: "+x"}}}
+	warn := h.post(t, "/headscale/dns/preview", url.Values{"action": {"add"}, "name": {"x.example.com"}, "value": {"10.201.5.5"}}).Body.String()
+	if !strings.Contains(warn, "10.200.0.0/16") || strings.Contains(warn, "100.64.0.0/10") {
+		t.Errorf("the preview warning does not name the configured prefix:\n%s", warn)
 	}
 }

@@ -253,6 +253,13 @@ The operator configures oauth2-proxy; tagcess neither produces nor reads this fi
 role check, in the snippets and the tagcess block) at `gate.upstream` (host:port). Unset keeps `127.0.0.1:4180`, and the
 output is byte-identical to before. An invalid value fails config validation and the render. The installer writes
 `oauth2_proxy_http_address` into `gate.upstream` when it differs from the default.
+
+**Tailnet range.** Every site matcher (`@tailnet remote_ip`, the redirect matchers, the tagcess and Zitadel blocks) admits
+the source range `tailnet.cidr` (a config-file key; Headscale's `prefixes.v4`). Unset keeps `100.64.0.0/10`, and the output
+is byte-identical to before. The value must be a canonical IPv4 prefix no wider than /8; anything else fails config
+validation and the render (it decides which sources reach the sites). The DNS records warning for private addresses
+outside the tailnet uses the same prefix. The installer writes `headscale_prefix_v4` into `tailnet.cidr` when it differs
+from the default. IPv6 prefixes are not configurable yet, and reading the prefix from Headscale is for the setup wizard.
 `deploy/oauth2-proxy.example.cfg`:
 - **Single cookie:** `cookie_domains` = the parent domain of the `sites.allowed_domains` entries (with a leading dot, for example `.example.com`).
   When the browser signs in on one site, it passes on all sites.

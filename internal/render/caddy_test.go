@@ -856,3 +856,59 @@ func TestCaddyRender_GateUpstream(t *testing.T) {
 		}
 	})
 }
+
+// TestCaddyRender_TailnetCIDR is AC1 and AC2 of issue #6: tailnet.cidr replaces every source-range
+// matcher (snippets, redirects, the tagcess and zitadel blocks); unset or the default keeps the
+// existing output; an invalid value fails the render.
+func TestCaddyRender_TailnetCIDR(t *testing.T) {
+	const def, custom = "100.64.0.0/10", "10.200.0.0/16"
+	sites := func() []site.Site { return append(goldSiteSet(), systemSites()...) }
+	render := func(t *testing.T, s06open bool, cidr string) string {
+		t.Helper()
+		cfg := systemCfg(s06open)
+		cfg.TailnetCIDR = cidr
+		out, err := RenderCaddyfile(sites(), cfg)
+		if err != nil {
+			t.Fatalf("RenderCaddyfile(%q): %v", cidr, err)
+		}
+		return out
+	}
+	for _, open := range []bool{true, false} {
+		base := render(t, open, "")
+		if n := strings.Count(base, def); n < 4 {
+			t.Fatalf("s06open=%v: default output names %s %d times, want at least 4", open, def, n)
+		}
+		if got := render(t, open, def); got != base {
+			t.Errorf("s06open=%v: explicit default differs from the unset output", open)
+		}
+		got := render(t, open, custom)
+		if strings.Contains(got, def) {
+			t.Errorf("s06open=%v: output still names %s", open, def)
+		}
+		if want := strings.ReplaceAll(base, def, custom); got != want {
+			t.Errorf("s06open=%v: output differs from the default with the prefix swapped", open)
+		}
+		if !open {
+			golden := filepath.Join("testdata", "caddy-tailnet-cidr.golden")
+			if *updateGoldens {
+				if err := os.WriteFile(golden, []byte(got), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want, err := os.ReadFile(golden)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != string(want) {
+				t.Errorf("custom-prefix output does not match %s", golden)
+			}
+		}
+	}
+	for _, bad := range []string{"nope", "100.64.0.1/10", "10.0.0.0/7", "0.0.0.0/0", "fd7a:115c:a1e0::/48", "10.0.0.0/8\nrespond 200"} {
+		cfg := systemCfg(true)
+		cfg.TailnetCIDR = bad
+		if _, err := RenderCaddyfile(sites(), cfg); err == nil {
+			t.Errorf("TailnetCIDR %q accepted", bad)
+		}
+	}
+}

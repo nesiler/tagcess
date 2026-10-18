@@ -122,27 +122,52 @@ func Unmarshal(data []byte) ([]Record, error) {
 	return recs, nil
 }
 
-// tailnetPrefixes are the address ranges every tailnet node can reach: the Tailscale CGNAT range
-// and the Tailscale IPv6 ULA.
-var tailnetPrefixes = []netip.Prefix{
-	netip.MustParsePrefix("100.64.0.0/10"),
-	netip.MustParsePrefix("fd7a:115c:a1e0::/48"),
+// DefaultTailnetCIDR is the IPv4 tailnet range while tailnet.cidr is unset (Headscale's default,
+// the Tailscale CGNAT range).
+const DefaultTailnetCIDR = "100.64.0.0/10"
+
+// tailnetV6 is the Tailscale IPv6 ULA every tailnet node can reach (IPv6 prefixes are not configurable yet).
+var tailnetV6 = netip.MustParsePrefix("fd7a:115c:a1e0::/48")
+
+// ParseTailnetCIDR checks a tailnet.cidr value: an IPv4 prefix in canonical form (host bits zero), not
+// wider than /8, because a wide prefix would let far more source addresses through the site matchers.
+// An empty value is the default, DefaultTailnetCIDR. The returned string is the canonical text.
+func ParseTailnetCIDR(s string) (netip.Prefix, error) {
+	if s == "" {
+		s = DefaultTailnetCIDR
+	}
+	p, err := netip.ParsePrefix(s)
+	if err != nil {
+		return netip.Prefix{}, fmt.Errorf("tailnet cidr %q: not a CIDR prefix", s)
+	}
+	if !p.Addr().Is4() {
+		return netip.Prefix{}, fmt.Errorf("tailnet cidr %q: only IPv4 prefixes are supported", s)
+	}
+	if p.Bits() < 8 {
+		return netip.Prefix{}, fmt.Errorf("tailnet cidr %q: prefixes wider than /8 are refused", s)
+	}
+	if p != p.Masked() {
+		return netip.Prefix{}, fmt.Errorf("tailnet cidr %q: host bits are set (want %s)", s, p.Masked())
+	}
+	return p, nil
 }
 
 // PrivateOutsideTailnet reports whether value is a private, loopback or link-local address that is
-// not a tailnet address (F5 I11). A MagicDNS record with such a value hands every client an address
+// not a tailnet address (F5 I11). tailnetV4 is the configured IPv4 tailnet prefix; the zero value
+// means DefaultTailnetCIDR. A MagicDNS record with such a value hands every client an address
 // only some of them can route to, so the user gets a connection that silently fails. Public
 // addresses and non-IP values are not flagged.
-func PrivateOutsideTailnet(value string) bool {
+func PrivateOutsideTailnet(value string, tailnetV4 netip.Prefix) bool {
+	if !tailnetV4.IsValid() {
+		tailnetV4 = netip.MustParsePrefix(DefaultTailnetCIDR)
+	}
 	addr, err := netip.ParseAddr(value)
 	if err != nil {
 		return false
 	}
 	addr = addr.Unmap()
-	for _, p := range tailnetPrefixes {
-		if p.Contains(addr) {
-			return false
-		}
+	if tailnetV4.Contains(addr) || tailnetV6.Contains(addr) {
+		return false
 	}
 	return addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast()
 }

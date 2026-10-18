@@ -106,6 +106,26 @@ type dnsPreviewView struct {
 	Blocked string
 	// OffTailnet is the new record's value when it is a private address outside the tailnet.
 	OffTailnet string
+	// TailnetCIDR is the configured tailnet prefix the warning names.
+	TailnetCIDR string
+}
+
+// tailnetPrefix is the configured prefix; an unset or unparsable value (config validation already
+// refused those) falls back to the default so a view never fails on it.
+func tailnetPrefix(cidr string) netip.Prefix {
+	p, err := dns.ParseTailnetCIDR(cidr)
+	if err != nil {
+		p = netip.MustParsePrefix(dns.DefaultTailnetCIDR)
+	}
+	return p
+}
+
+// tailnetLabel is the canonical prefix text shown in the warnings.
+func tailnetLabel(cidr string) string { return tailnetPrefix(cidr).String() }
+
+// offTailnet reports whether value is a private address outside the configured tailnet (F5 I11).
+func offTailnet(value, cidr string) bool {
+	return dns.PrivateOutsideTailnet(value, tailnetPrefix(cidr))
 }
 
 // page renders the records screen.
@@ -135,7 +155,7 @@ func (h *DNSRecordsHandler) page(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "dry-run durumu okunamadı", http.StatusInternalServerError)
 		return
 	}
-	v := buildDNSRecordsView(sites, manual, settings.DNS.AValue)
+	v := buildDNSRecordsView(sites, manual, settings.DNS.AValue, settings.Caddy.TailnetCIDR)
 	v.DryRun = dryRun
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = Layout(actor, h.cfg.CSRF.Token(), "headscale", "MagicDNS kayıtları",
@@ -145,7 +165,7 @@ func (h *DNSRecordsHandler) page(w http.ResponseWriter, r *http.Request) {
 // buildDNSRecordsView splits the records by source: the site-derived set (the same rule the
 // renderer applies: every host of a MagicDNS site as an A record at the VPN address) and the
 // stored manual set.
-func buildDNSRecordsView(sites []site.Site, manual []dns.Record, vpnAddr string) dnsRecordsView {
+func buildDNSRecordsView(sites []site.Site, manual []dns.Record, vpnAddr, tailnetCIDR string) dnsRecordsView {
 	var v dnsRecordsView
 	for _, s := range sites {
 		if !s.MagicDNS {
@@ -158,7 +178,7 @@ func buildDNSRecordsView(sites []site.Site, manual []dns.Record, vpnAddr string)
 		}
 	}
 	for _, r := range manual {
-		v.ManualRows = append(v.ManualRows, dnsRecordRow{Name: r.Name, Type: r.Type, Value: r.Value, OffTailnet: dns.PrivateOutsideTailnet(r.Value)})
+		v.ManualRows = append(v.ManualRows, dnsRecordRow{Name: r.Name, Type: r.Type, Value: r.Value, OffTailnet: offTailnet(r.Value, tailnetCIDR)})
 	}
 	return v
 }
@@ -234,13 +254,19 @@ func (h *DNSRecordsHandler) preview(w http.ResponseWriter, r *http.Request) {
 		h.renderPage(w, r, dnsRecordsView{FormError: err.Error()})
 		return
 	}
+	settings, err := h.cfg.Settings.Settings(r.Context())
+	if err != nil {
+		http.Error(w, "ayarlar okunamadı", http.StatusInternalServerError)
+		return
+	}
 	encoded, err := encodeSiteRequest(req)
 	if err != nil {
 		http.Error(w, "istek hazırlanamadı", http.StatusInternalServerError)
 		return
 	}
 	pv := dnsPreviewView{Diff: pl.Diff, Version: SitePlanVersion(pl), Request: encoded}
-	if hasRec && dns.PrivateOutsideTailnet(rec.Value) {
+	pv.TailnetCIDR = tailnetLabel(settings.Caddy.TailnetCIDR)
+	if hasRec && offTailnet(rec.Value, settings.Caddy.TailnetCIDR) {
 		pv.OffTailnet = rec.Value
 	}
 	h.renderPreview(w, r, pv)

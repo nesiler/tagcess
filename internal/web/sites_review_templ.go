@@ -11,7 +11,6 @@ import templruntime "github.com/a-h/templ/runtime"
 import (
 	"strconv"
 
-	"github.com/nesiler/tagcess/internal/dns"
 	"github.com/nesiler/tagcess/internal/web/ui"
 )
 
@@ -53,7 +52,7 @@ func SiteReviewPage(v SiteReviewView, csrfToken string) templ.Component {
 		var templ_7745c5c3_Var2 string
 		templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.ResolveAttributeValue(v.Op)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 19, Col: 22}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 18, Col: 22}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var2)
 		if templ_7745c5c3_Err != nil {
@@ -101,7 +100,7 @@ func SiteReviewPage(v SiteReviewView, csrfToken string) templ.Component {
 				var templ_7745c5c3_Var4 string
 				templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(v.Blocked)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 28, Col: 25}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 27, Col: 25}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 				if templ_7745c5c3_Err != nil {
@@ -165,7 +164,7 @@ func SiteReviewPage(v SiteReviewView, csrfToken string) templ.Component {
 						var templ_7745c5c3_Var7 string
 						templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(w)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 38, Col: 13}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 37, Col: 13}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 						if templ_7745c5c3_Err != nil {
@@ -216,7 +215,7 @@ func SiteReviewPage(v SiteReviewView, csrfToken string) templ.Component {
 						var templ_7745c5c3_Var9 string
 						templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(f)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 47, Col: 19}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 46, Col: 19}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 						if templ_7745c5c3_Err != nil {
@@ -271,7 +270,7 @@ func SiteReviewPage(v SiteReviewView, csrfToken string) templ.Component {
 						var templ_7745c5c3_Var11 string
 						templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(v.Target.Before)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 57, Col: 30}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 56, Col: 30}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 						if templ_7745c5c3_Err != nil {
@@ -299,7 +298,7 @@ func SiteReviewPage(v SiteReviewView, csrfToken string) templ.Component {
 						var templ_7745c5c3_Var12 string
 						templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs(v.Target.After)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 63, Col: 29}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 62, Col: 29}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 						if templ_7745c5c3_Err != nil {
@@ -327,7 +326,7 @@ func SiteReviewPage(v SiteReviewView, csrfToken string) templ.Component {
 					var templ_7745c5c3_Var13 string
 					templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(v.Target.After)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 69, Col: 50}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 68, Col: 50}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 					if templ_7745c5c3_Err != nil {
@@ -448,7 +447,7 @@ func SiteResultPage(v SiteResultView) templ.Component {
 			var templ_7745c5c3_Var17 string
 			templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.ResolveAttributeValue(v.Status)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 94, Col: 29}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 93, Col: 29}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var17)
 			if templ_7745c5c3_Err != nil {
@@ -479,7 +478,7 @@ func SiteResultPage(v SiteResultView) templ.Component {
 						var templ_7745c5c3_Var19 string
 						templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinStringErrs(v.Reason)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 99, Col: 27}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 98, Col: 27}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
 						if templ_7745c5c3_Err != nil {
@@ -497,7 +496,7 @@ func SiteResultPage(v SiteResultView) templ.Component {
 						var templ_7745c5c3_Var20 string
 						templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.JoinStringErrs(v.Reason)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 101, Col: 19}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 100, Col: 19}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var20))
 						if templ_7745c5c3_Err != nil {
@@ -539,7 +538,7 @@ func SiteResultPage(v SiteResultView) templ.Component {
 				var templ_7745c5c3_Var22 string
 				templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.JoinStringErrs(v.Reason)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 108, Col: 24}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 107, Col: 24}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var22))
 				if templ_7745c5c3_Err != nil {
@@ -572,7 +571,7 @@ func SiteResultPage(v SiteResultView) templ.Component {
 				var templ_7745c5c3_Var24 string
 				templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.JoinStringErrs(v.Note)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 113, Col: 11}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 112, Col: 11}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var24))
 				if templ_7745c5c3_Err != nil {
@@ -662,7 +661,7 @@ func SiteResultPage(v SiteResultView) templ.Component {
 					var templ_7745c5c3_Var28 string
 					templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.JoinStringErrs(h)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 133, Col: 18}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 132, Col: 18}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var28))
 					if templ_7745c5c3_Err != nil {
@@ -699,7 +698,7 @@ func SiteResultPage(v SiteResultView) templ.Component {
 			var templ_7745c5c3_Var30 string
 			templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.JoinStringErrs(v.back().Label)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 139, Col: 18}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 138, Col: 18}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var30))
 			if templ_7745c5c3_Err != nil {
@@ -765,7 +764,7 @@ func SiteFirstImportPage(v SiteFirstImportView, csrfToken string, preview bool) 
 				var templ_7745c5c3_Var33 string
 				templ_7745c5c3_Var33, templ_7745c5c3_Err = templ.JoinStringErrs(v.SeedErr)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 153, Col: 14}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 152, Col: 14}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var33))
 				if templ_7745c5c3_Err != nil {
@@ -819,7 +818,7 @@ func SiteFirstImportPage(v SiteFirstImportView, csrfToken string, preview bool) 
 				var templ_7745c5c3_Var36 string
 				templ_7745c5c3_Var36, templ_7745c5c3_Err = templ.JoinStringErrs(v.GateErr)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 160, Col: 38}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 159, Col: 38}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var36))
 				if templ_7745c5c3_Err != nil {
@@ -999,7 +998,7 @@ func SiteFirstImportPage(v SiteFirstImportView, csrfToken string, preview bool) 
 						var templ_7745c5c3_Var44 string
 						templ_7745c5c3_Var44, templ_7745c5c3_Err = templ.JoinStringErrs(v.ParityErr)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 196, Col: 29}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 195, Col: 29}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var44))
 						if templ_7745c5c3_Err != nil {
@@ -1100,7 +1099,7 @@ func SiteFirstImportPage(v SiteFirstImportView, csrfToken string, preview bool) 
 						var templ_7745c5c3_Var49 string
 						templ_7745c5c3_Var49, templ_7745c5c3_Err = templ.JoinStringErrs(v.ManualDNSErr)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 211, Col: 32}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 210, Col: 32}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var49))
 						if templ_7745c5c3_Err != nil {
@@ -1146,7 +1145,7 @@ func SiteFirstImportPage(v SiteFirstImportView, csrfToken string, preview bool) 
 							var templ_7745c5c3_Var51 string
 							templ_7745c5c3_Var51, templ_7745c5c3_Err = templ.JoinStringErrs(r.Name)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 221, Col: 26}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 220, Col: 26}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var51))
 							if templ_7745c5c3_Err != nil {
@@ -1159,7 +1158,7 @@ func SiteFirstImportPage(v SiteFirstImportView, csrfToken string, preview bool) 
 							var templ_7745c5c3_Var52 string
 							templ_7745c5c3_Var52, templ_7745c5c3_Err = templ.JoinStringErrs(r.Type)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 222, Col: 20}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 221, Col: 20}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var52))
 							if templ_7745c5c3_Err != nil {
@@ -1172,7 +1171,7 @@ func SiteFirstImportPage(v SiteFirstImportView, csrfToken string, preview bool) 
 							var templ_7745c5c3_Var53 string
 							templ_7745c5c3_Var53, templ_7745c5c3_Err = templ.JoinStringErrs(r.Value)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 224, Col: 24}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/sites_review.templ`, Line: 223, Col: 24}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var53))
 							if templ_7745c5c3_Err != nil {
@@ -1182,8 +1181,8 @@ func SiteFirstImportPage(v SiteFirstImportView, csrfToken string, preview bool) 
 							if templ_7745c5c3_Err != nil {
 								return templ_7745c5c3_Err
 							}
-							if dns.PrivateOutsideTailnet(r.Value) {
-								templ_7745c5c3_Err = offTailnetWarning(r.Value).Render(ctx, templ_7745c5c3_Buffer)
+							if offTailnet(r.Value, v.TailnetCIDR) {
+								templ_7745c5c3_Err = offTailnetWarning(r.Value, tailnetLabel(v.TailnetCIDR)).Render(ctx, templ_7745c5c3_Buffer)
 								if templ_7745c5c3_Err != nil {
 									return templ_7745c5c3_Err
 								}
